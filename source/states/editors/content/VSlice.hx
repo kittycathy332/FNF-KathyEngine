@@ -186,7 +186,6 @@ class VSlice
 
 		var baseSections:Array<SwagSection> = [];
 		var sectionTimes:Array<Float> = [];
-		var sectionStepCrochets:Array<Float> = [];
 		var bpm:Float = songBpm;
 		var lastBpm:Float = songBpm;
 		var time:Float = 0;
@@ -203,7 +202,6 @@ class VSlice
 			}
 			sectionTime = Conductor.calculateCrochet(bpm) * 4;
 			sectionTimes.push(time);
-			sectionStepCrochets.push(Conductor.calculateCrochet(bpm) / 4); // ms per step
 			time += sectionTime;
 
 			var sec:SwagSection = emptySection();
@@ -238,18 +236,13 @@ class VSlice
 			}
 
 			var noteSec:Int = 0;
+			var time:Float = 0;
 			for (note in notes)
 			{
 				while(noteSec + 1 < sectionTimes.length && sectionTimes[noteSec + 1] <= note.t)
 					noteSec++;
 
-				// VSlice timeFormat='ms'：note.t / note.l 是毫秒；psych_v1 需要 section 内 step。
-				// 每 section = 4 拍 = 16 steps；stepCrochet = calculateCrochet(bpm)/4 毫秒/step。
-				var sc:Float = (noteSec < sectionStepCrochets.length) ? sectionStepCrochets[noteSec] : Conductor.calculateCrochet(bpm) / 4;
-				var stepInSection:Float = (note.t - sectionTimes[noteSec]) / sc;
-				var holdSteps:Float = (note.l != null ? note.l : 0) / sc;
-
-				var psychNote:Array<Dynamic> = [Math.round(stepInSection), note.d, Math.round(holdSteps)];
+				var psychNote:Array<Dynamic> = [note.t, note.d, (note.l != null ? note.l : 0)];
 				if(note.k != null && note.k.length > 0 && note.k != 'normal') psychNote.push(note.k);
 
 				if(sectionData[noteSec] != null)

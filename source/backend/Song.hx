@@ -4,7 +4,6 @@ import haxe.Json;
 import lime.utils.Assets;
 
 import objects.Note;
-import states.editors.content.VSlice;
 
 typedef SwagSong =
 {
@@ -323,200 +322,20 @@ class Song
 		catch(e:Dynamic)
 		{
 			trace('Error loading chart file: $e');
-		}
-
-		// ── Leather mod 路径回退：标准 data/songs/ 找不到时，试 data/song data/ ──
-		if(rawData == null || rawData.trim() == '')
-		{
-			var leatherPath:String = findLeatherChartPath(folder);
-			if(leatherPath != null)
-			{
-				_lastPath = leatherPath;
-				try
-				{
-					rawData = File.getContent(leatherPath);
-				}
-				catch(e:Dynamic) { trace('Error loading Leather chart: $e'); }
-			}
-		}
-
-		if(rawData == null) return null;
-
-		// ── 自动检测：VSlice / Leather LTS 新格式 ──
-		// 顶层无 .song 包裹、notes 是对象（按难度分组）、有 scrollSpeed → VSlice chart
-		var probe:Dynamic = Json.parse(rawData);
-		if(probe != null && probe.song == null && probe.notes != null
-			&& Type.typeof(probe.notes) == TObject && probe.scrollSpeed != null)
-		{
-			return loadVSliceChart(probe, folder);
-		}
-
-		return parseJSON(rawData, jsonInput);
-	}
-
-	/**
-	 * 在 Leather mod 的 data/song data/ 目录下查找谱面文件。
-	 * 依次尝试：{folder}.json（Official 经典）、{folder}-chart.json（LTS 默认）、
-	 * {folder}-chart-{diff}.json（LTS 难度变体）、{folder}-{diff}.json（旧版 Leather 0.4.x 命名）。
-	 * 最后兜底：扫描目录内以 {folder} 开头、非 metadata 的 .json 文件。
-	 */
-	static function findLeatherChartPath(folder:String):String
-	{
-		var fmtFolder:String = Paths.formatToSongPath(folder);
-		var candidates:Array<String> = [
-			'data/song data/' + fmtFolder + '/' + fmtFolder + '.json',
-			'data/song data/' + fmtFolder + '/' + fmtFolder + '-chart.json'
-		];
-		// 难度变体（erect 等）
-		for(diff in Difficulty.list)
-		{
-			var d:String = Paths.formatToSongPath(diff);
-			if(d.length > 0)
-			{
-				candidates.push('data/song data/' + fmtFolder + '/' + fmtFolder + '-chart-' + d + '.json');
-				candidates.push('data/song data/' + fmtFolder + '/' + fmtFolder + '-' + d + '.json'); // 旧版 Leather
-			}
-		}
-		for(c in candidates)
-		{
-#if MODS_ALLOWED
-			var p:String = Paths.modFolders(c);
-			if(FileSystem.exists(p)) return p;
-#end
-		}
-
-		// 兜底：扫描目录内以 {folder} 开头的 .json（排除 metadata 与 chart 编辑器杂项）
-#if MODS_ALLOWED
-		var dir:String = Paths.modFolders('data/song data/' + fmtFolder);
-		if(FileSystem.exists(dir) && FileSystem.isDirectory(dir))
-		{
-			try
-			{
-				var files:Array<String> = FileSystem.readDirectory(dir);
-				var curDiff:String = Paths.formatToSongPath(Difficulty.getString(false));
-				// 优先匹配当前难度后缀
-				for(f in files)
-				{
-					var lower:String = f.toLowerCase();
-					if(lower.startsWith(fmtFolder) && lower.endsWith('.json')
-						&& lower.indexOf('-metadata') < 0
-						&& curDiff.length > 0 && lower.indexOf('-' + curDiff) >= 0)
-						return dir + '/' + f;
-				}
-				// 否则取第一个符合条件的
-				for(f in files)
-				{
-					var lower:String = f.toLowerCase();
-					if(lower.startsWith(fmtFolder) && lower.endsWith('.json')
-						&& lower.indexOf('-metadata') < 0)
-						return dir + '/' + f;
-				}
-			}
-			catch(e:Dynamic) { /* 目录不可读时忽略 */ }
-		}
-#end
-		return null;
-	}
-
-	/**
-	 * VSlice / Leather LTS 谱面自动加载：
-	 * chart 文件（全难度）+ 同目录 metadata 文件 → 转换为当前难度的 psych_v1 SwagSong。
-	 * metadata 路径跟随 Leather 命名：data/{folder}/{folder}-metadata.json。
-	 */
-	static function loadVSliceChart(chart:VSliceChart, folder:String):SwagSong
-	{
-		var fmtFolder:String = Paths.formatToSongPath(folder);
-		var metaData:String = null;
-		var metaPath:String = null;
-
-		// 先试标准路径，再试 Leather mod 的 data/song data/ 路径
-		var stdMeta:String = Paths.json('${fmtFolder}/${fmtFolder}-metadata');
-		if(chartFileExists(stdMeta))
-		{
-			metaPath = stdMeta;
-			metaData = Assets.getText(stdMeta);
-		}
-		else
-		{
-			// Leather LTS: data/song data/{folder}/{folder}-metadata.json
-			var leatherCandidates:Array<String> = [
-				'data/song data/' + fmtFolder + '/' + fmtFolder + '-metadata.json'
-			];
-			for(diff in Difficulty.list)
-			{
-				var d:String = Paths.formatToSongPath(diff);
-				if(d.length > 0)
-					leatherCandidates.push('data/song data/' + fmtFolder + '/' + fmtFolder + '-metadata-' + d + '.json');
-			}
-			for(c in leatherCandidates)
-			{
-#if MODS_ALLOWED
-				var p:String = Paths.modFolders(c);
-				if(FileSystem.exists(p))
-				{
-					metaPath = p;
-					metaData = File.getContent(p);
-					break;
-				}
-#end
-			}
-		}
-
-		if(metaData == null || metaData.trim() == '')
-		{
-			trace('VSlice chart detected but metadata not found (folder=$fmtFolder)');
 			return null;
 		}
 
-		var metadata:VSliceMetadata = cast Json.parse(metaData);
-		var pack:PsychPackage = VSlice.convertToPsych(chart, metadata);
-		if(pack == null || pack.difficulties == null)
-		{
-			trace('VSlice convert produced no difficulties');
-			return null;
-		}
-
-		// 取当前难度，找不到回退第一个
-		var wantDiff:String = Paths.formatToSongPath(Difficulty.getDefault());
-		var song:SwagSong = null;
-		if(pack.difficulties.exists(wantDiff))
-			song = pack.difficulties.get(wantDiff);
-		else
-		{
-			for(d in pack.difficulties.keys())
-			{
-				song = pack.difficulties.get(d);
-				break;
-			}
-		}
-
-		if(song != null)
-		{
-			song.format = 'LEATHER LTS';
-			if(song.events == null) song.events = [];
-			if(song.notes == null) song.notes = [];
-			if(song.mania == null) song.mania = 3;
-		}
-		return song;
+		return rawData != null ? parseJSON(rawData, jsonInput) : null;
 	}
 
 	public static function parseJSON(rawData:String, ?nameForError:String = null, ?convertTo:String = 'psych_v1'):SwagSong
 	{
-		var root:Dynamic = Json.parse(rawData);
-
-		// ── 自动检测：是否为经典包裹格式（{"song": {...}}）──
-		// psych_v1 原生谱面顶层就是 SwagSong 本身（不包裹）；
-		// Leather Official / 旧 Psych 谱面顶层是 {"song": {...}} 包裹。
-		var hadLegacyWrapper:Bool = false;
-		var songJson:SwagSong = cast root;
-		if(Reflect.hasField(root, 'song'))
+		var songJson:SwagSong = cast Json.parse(rawData);
+		if(Reflect.hasField(songJson, 'song'))
 		{
-			var subSong:Dynamic = Reflect.field(root, 'song');
+			var subSong:SwagSong = Reflect.field(songJson, 'song');
 			if(subSong != null && Type.typeof(subSong) == TObject)
-			{
-				songJson = cast subSong;
-				hadLegacyWrapper = true;
-			}
+				songJson = subSong;
 		}
 
 		if(convertTo != null && convertTo.length > 0)
@@ -530,12 +349,7 @@ class Song
 					if(!fmt.startsWith('psych_v1')) //Convert to Psych 1.0 format
 					{
 						trace('converting chart $nameForError with format $fmt to psych_v1 format...');
-						// 经典包裹格式且子对象自身没写 psych_v1 format → 判定为外部谱面（Leather Official / 旧 Psych），
-						// 显示成 LEATHER 而非笼统的 psych_v1_convert。
-						if(hadLegacyWrapper && !Reflect.hasField(root.song, 'format'))
-							songJson.format = 'LEATHER';
-						else
-							songJson.format = 'psych_v1_convert';
+						songJson.format = 'psych_v1_convert';
 						convert(songJson);
 					}
 			}

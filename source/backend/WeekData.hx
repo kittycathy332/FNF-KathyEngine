@@ -175,107 +175,10 @@ class WeekData {
 		}
 		#end
 
-		// ── 扫描 Leather mod 的 data/song data/ 目录，自动加入虚拟 week ──
 		#if MODS_ALLOWED
-		scanLeatherSongs(isStoryMode);
 		_lastReloadKey = cacheKey;
 		#end
 	}
-
-	#if MODS_ALLOWED
-	/// 扫描每个启用 mod 的 data/song data/ 目录，把 Leather 谱面自动加入虚拟 week "Leather Mods"。
-	private static function scanLeatherSongs(isStoryMode:Null<Bool>):Void
-	{
-		var leatherWeekName:String = 'leather_mods';
-		var leatherSongs:Array<Dynamic> = [];
-		var seenSongs:Map<String, Bool> = new Map();
-
-		// 收集所有启用 mod 的 Leather 歌曲
-		for(mod in Mods.parseList().enabled)
-		{
-			var songDataDir:String = Paths.mods(mod + '/data/song data');
-			if(!FileSystem.exists(songDataDir) || !FileSystem.isDirectory(songDataDir)) continue;
-
-			try
-			{
-				for(folder in FileSystem.readDirectory(songDataDir))
-				{
-					var fullDir:String = songDataDir + '/' + folder;
-					if(!FileSystem.isDirectory(fullDir)) continue;
-
-					// 检查是否有谱面文件（Official / LTS / 旧版 Leather 0.4.x）
-					var hasChart:Bool = false;
-					try
-					{
-						for(f in FileSystem.readDirectory(fullDir))
-						{
-							var lower:String = f.toLowerCase();
-							// 旧版 Leather：{folder}-{diff}.json（如 zavodila-erect.json）
-							if(lower.endsWith('.json') && lower.startsWith(folder.toLowerCase())
-								&& lower.indexOf('-metadata') < 0)
-							{
-								hasChart = true;
-								break;
-							}
-						}
-					}
-					catch(e:Dynamic) { }
-
-					if(!hasChart) continue;
-
-					var songKey:String = mod + '/' + folder;
-					if(seenSongs.exists(songKey)) continue;
-					seenSongs.set(songKey, true);
-
-					// [songName, icon, color, modFolder]
-					leatherSongs.push([folder, 'face', [180, 120, 220], mod]);
-				}
-			}
-			catch(e:Dynamic) { trace('[Leather] 扫描 $mod/song data 失败: $e'); }
-		}
-
-		if(leatherSongs.length == 0) return;
-
-		// 构建/合并虚拟 week
-		var shouldAdd:Bool = (isStoryMode == null || (isStoryMode == false)); // Freeplay 显示
-		if(!shouldAdd) return;
-
-		if(weeksLoaded.exists(leatherWeekName))
-		{
-			// 合并去重
-			var existing:WeekData = weeksLoaded.get(leatherWeekName);
-			for(song in leatherSongs)
-			{
-				var already:Bool = false;
-				for(existingSong in existing.songs)
-				{
-					if(existingSong[0] == song[0] && existingSong.length > 3 && existingSong[3] == song[3])
-					{ already = true; break; }
-				}
-				if(!already) existing.songs.push(song);
-			}
-		}
-		else
-		{
-			var weekFile:WeekFile = {
-				songs: leatherSongs,
-				weekCharacters: ['bf', 'gf', 'dad'],
-				weekBackground: 'stage',
-				weekBefore: '',
-				storyName: 'Leather Mods',
-				weekName: 'Leather Mods',
-				startUnlocked: true,
-				hiddenUntilUnlocked: false,
-				hideStoryMode: true,
-				hideFreeplay: false,
-				difficulties: ''
-			};
-			var weekData:WeekData = new WeekData(weekFile, leatherWeekName);
-			weeksLoaded.set(leatherWeekName, weekData);
-			weeksList.push(leatherWeekName);
-		}
-	}
-#end
 
 	#if MODS_ALLOWED
 	/// 构建 reloadWeekFiles 的缓存 key：enabled mod 列表（Mods.globalMods） + isStoryMode。
