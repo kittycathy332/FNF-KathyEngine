@@ -12,7 +12,6 @@ import haxe.Json;
 
 import backend.Song;
 import backend.ClientPrefs;
-import backend.Mods;
 import states.stages.objects.TankmenBG;
 
 typedef CharacterFile = {
@@ -190,52 +189,29 @@ class Character extends FlxSprite
 		{
 			var characterPath:String = 'characters/$character.json';
 			var path:String = Paths.getPath(characterPath, TEXT);
-			var found:Bool = false;
 			#if MODS_ALLOWED
-			found = FileSystem.exists(path);
+			if (!FileSystem.exists(path))
 			#else
-			found = Assets.exists(path);
+			if (!Assets.exists(path))
 			#end
-			if (found)
 			{
-				try
-				{
-					#if MODS_ALLOWED
-					json = Json.parse(File.getContent(path));
-					#else
-					json = Json.parse(Assets.getText(path));
-					#end
-				}
-				catch(e:Dynamic)
-				{
-					trace('Error loading character file of "$character": $e');
-				}
+				path = Paths.getSharedPath('characters/' + DEFAULT_CHARACTER + '.json'); //If a character couldn't be found, change him to BF just to prevent a crash
+				missingCharacter = true;
+				missingText = new FlxText(0, 0, 300, 'ERROR:\n$character.json', 16);
+				missingText.alignment = CENTER;
 			}
-			else
-			{
-				// Leather 角色 config 兜底：data/character data/{name}/config.json（默认走 Psych 逻辑，
-				// 仅 Psych 角色 json 缺失时才尝试 LE 布局，避免影响 Psych 谱面角色）
-				json = loadLeatherCharacterConfig(character);
-				if (json == null)
-				{
-					path = Paths.getSharedPath('characters/' + DEFAULT_CHARACTER + '.json'); //If a character couldn't be found, change him to BF just to prevent a crash
-					missingCharacter = true;
-					missingText = new FlxText(0, 0, 300, 'ERROR:\n$character.json', 16);
-					missingText.alignment = CENTER;
 
-					try
-					{
-						#if MODS_ALLOWED
-						json = Json.parse(File.getContent(path));
-						#else
-						json = Json.parse(Assets.getText(path));
-						#end
-					}
-					catch(e:Dynamic)
-					{
-						trace('Error loading character file of "$character": $e');
-					}
-				}
+			try
+			{
+				#if MODS_ALLOWED
+				json = Json.parse(File.getContent(path));
+				#else
+				json = Json.parse(Assets.getText(path));
+				#end
+			}
+			catch(e:Dynamic)
+			{
+				trace('Error loading character file of "$character": $e');
 			}
 		}
 
@@ -246,131 +222,6 @@ class Character extends FlxSprite
 		hasMissAnimations = hasAnimation('singLEFTmiss') || hasAnimation('singDOWNmiss') || hasAnimation('singUPmiss') || hasAnimation('singRIGHTmiss');
 		recalculateDanceIdle();
 		dance();
-	}
-
-	/**
-	 * Leather 角色 config 加载：data/character data/{name}/config.json → Psych CharacterFile 结构。
-	 * 仅在标准 Psych 角色 json（characters/{name}.json）缺失时被 changeCharacter 调用。
-	 * 图集位于 shared/images/characters/{imagePath}.png(.xml)，library='shared' 交给 loadCharacterFile
-	 * 的 Paths.getAtlas(json.image, library) 命中 mods/{mod}/shared/images/characters/。
-	 */
-	static function loadLeatherCharacterConfig(name:String):Dynamic
-	{
-		#if MODS_ALLOWED
-		var configPath:String = findLeatherCharacterFile(name, 'config.json');
-		if (configPath == null || !FileSystem.exists(configPath)) return null;
-		try
-		{
-			var raw:Dynamic = Json.parse(File.getContent(configPath));
-			if (raw == null) return null;
-
-			// Leather 多角色组合（config.characters 数组）：Kathy 无组合角色机制，
-			// 以第一个子角色作为主显示（含其 positionOffset 叠加），其余子角色暂忽略。
-			if (raw.characters != null && raw.characters.length > 1)
-			{
-				var primary:Dynamic = raw.characters[0];
-				var primaryJson:Dynamic = loadLeatherCharacterConfig(Std.string(primary.name));
-				if (primaryJson == null) return null;
-				if (raw.positionOffset != null) primaryJson.position = raw.positionOffset;
-				else if (primary.positionOffset != null) primaryJson.position = primary.positionOffset;
-				if (raw.cameraOffset != null) primaryJson.camera_position = raw.cameraOffset;
-				if (raw.barColor != null && raw.barColor.length > 2) primaryJson.healthbar_colors = raw.barColor;
-				// 组合角色图标：Leather 惯例 images/icons/{name}-icons.png（如 shaggymatt-icons.png）
-				primaryJson.healthicon = (raw.healthIcon != null) ? Std.string(raw.healthIcon) : name + '-icons';
-				return primaryJson;
-			}
-
-			var imagePath:String = (raw.imagePath != null) ? Std.string(raw.imagePath) : name;
-			var graphicSize:Float = 1.0;
-			if (raw.graphicSize != null) graphicSize = Std.parseFloat(Std.string(raw.graphicSize));
-			else if (raw.graphicsSize != null) graphicSize = Std.parseFloat(Std.string(raw.graphicsSize));
-
-			var out:Dynamic = {
-				image: 'characters/' + imagePath,
-				library: 'shared',
-				scale: graphicSize,
-				position: (raw.positionOffset != null) ? raw.positionOffset : [0, 0],
-				camera_position: (raw.cameraOffset != null) ? raw.cameraOffset : [0, 0],
-				// Leather 图标惯例：images/icons/{name}-icons.png（如 regruv-icons.png）
-				healthicon: (raw.healthIcon != null) ? Std.string(raw.healthIcon) : name + '-icons',
-				sing_duration: (raw.sing_duration != null) ? Std.parseFloat(Std.string(raw.sing_duration)) : 4.0,
-				flip_x: (raw.defaultFlipX == true),
-				healthbar_colors: (raw.barColor != null && raw.barColor.length > 2) ? raw.barColor : [161, 161, 161],
-				no_antialiasing: (raw.antialiased == false),
-				animations: []
-			};
-
-			var anims:Array<Dynamic> = [];
-			if (raw.animations != null)
-			{
-				for (a in (cast raw.animations:Array<Dynamic>))
-				{
-					anims.push({
-						anim: Std.string(a.name),
-						name: Std.string(a.animation_name),
-						fps: (a.fps != null) ? Std.parseInt(Std.string(a.fps)) : 24,
-						loop: (a.looped == true),
-						indices: (a.indices != null) ? cast a.indices : [],
-						offsets: [0, 0]
-					});
-				}
-			}
-			out.animations = anims;
-
-			// offsets.txt：data/character data/{name}/offsets，每行 "animName x y"
-			var offsetsPath:String = findLeatherCharacterFile(name, 'offsets');
-			if (offsetsPath != null && FileSystem.exists(offsetsPath))
-			{
-				try
-				{
-					var lines:Array<String> = File.getContent(offsetsPath).split('\n');
-					for (line in lines)
-					{
-						line = StringTools.trim(line);
-						if (line.length < 3 || line.startsWith('//') || line.startsWith('#')) continue;
-						var parts:Array<String> = line.split(' ');
-						if (parts.length >= 3)
-						{
-							var ox:Float = Std.parseFloat(parts[1]);
-							var oy:Float = Std.parseFloat(parts[2]);
-							for (anim in anims)
-							{
-								if (anim.anim == parts[0]) { anim.offsets = [ox, oy]; break; }
-							}
-						}
-					}
-				}
-				catch(e:Dynamic)
-				{
-					trace('Error loading Leather offsets of "$name": $e');
-				}
-			}
-			return out;
-		}
-		catch(e:Dynamic)
-		{
-			trace('Error loading Leather character config of "$name": $e');
-		}
-		#end
-		return null;
-	}
-
-	/** 在启用 mod 的 data/character data/{name}/{subfile} 下查找 LE 角色资源 */
-	static function findLeatherCharacterFile(name:String, subfile:String):String
-	{
-		#if MODS_ALLOWED
-		if (Mods.currentModDirectory != null && Mods.currentModDirectory.length > 0)
-		{
-			var p:String = Paths.mods(Mods.currentModDirectory + '/data/character data/$name/$subfile');
-			if (FileSystem.exists(p)) return p;
-		}
-		for (mod in Mods.getModDirectories())
-		{
-			var p:String = Paths.mods('$mod/data/character data/$name/$subfile');
-			if (FileSystem.exists(p)) return p;
-		}
-		#end
-		return null;
 	}
 
 	public function loadCharacterFile(json:Dynamic)
@@ -388,13 +239,7 @@ class Character extends FlxSprite
 
 		if(!isAnimateAtlas)
 		{
-			// Leather 角色图集位于 mods/{mod}/shared/images/characters/（library='shared'），
-			// 用 Paths.getAtlas(key, library) 携带 parentFolder 前缀查找；普通 Psych 角色走原多图集逻辑。
-			var lib:String = Reflect.getProperty(json, 'library');
-			if (lib != null && lib.length > 0)
-				frames = Paths.getAtlas(json.image, lib);
-			else
-				frames = Paths.getMultiAtlas(json.image.split(','));
+			frames = Paths.getMultiAtlas(json.image.split(','));
 		}
 		#if flxanimate
 		else

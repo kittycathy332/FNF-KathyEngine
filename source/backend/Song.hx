@@ -2,8 +2,6 @@ package backend;
 
 import haxe.Json;
 import lime.utils.Assets;
-import sys.io.File;
-import sys.io.FileOutput;
 
 import objects.Note;
 import states.editors.content.VSlice;
@@ -300,18 +298,11 @@ class Song
 		#if windows
 		if(chartPath != null) chartPath = chartPath.replace('/', '\\');
 		#end
-		// Freeplay 缓存命中路径：getChart 不会再次执行，这里恢复 _lastPath 并重跑 LE 音频后缀
-		// 探测，否则 Song.leatherSongFolder 会残留上一首歌曲的值，导致 LE 谱面音频路径错误。
-		if (path != null) _lastPath = path;
-		applyLeatherAudioSuffix(songJson);
 		StageData.loadDirectory(songJson);
 		return songJson;
 	}
 
 	static var _lastPath:String;
-	// 当前谱面所属 mod 是否为 Leather Engine 模组（getChart 里按 mod 根目录结构判定，
-	// parseJSON 据此区分"经典包裹+无format"谱面是 LE（LEATHER）还是旧版 Psych（psych_v1_convert）。
-	static var _lastIsLeatherMod:Bool = false;
 	public static function getChart(jsonInput:String, ?folder:String):SwagSong
 	{
 		if(folder == null) folder = jsonInput;
@@ -351,196 +342,23 @@ class Song
 
 		if(rawData == null) return null;
 
-		// ── 判定当前 mod 是否为 Leather 模组 ──
-		// LE 与旧版 Psych 的经典谱面结构相同（{"song":{...}} 包裹、子对象无 format），
-		// 单看谱面无法区分，必须按 mod 根目录特征判定（LE 特有 data/song data 等目录 / 旧 polymod 元数据）。
-		var leatherModDir:String = extractLeatherModDir(_lastPath);
-		_lastIsLeatherMod = (leatherModDir != null) && isLeatherMod(leatherModDir);
-
 		// ── 自动检测：VSlice / Leather LTS 新格式 ──
 		// 顶层无 .song 包裹、notes 是对象（按难度分组）、有 scrollSpeed → VSlice chart
 		var probe:Dynamic = Json.parse(rawData);
-		var song:SwagSong = null;
 		if(probe != null && probe.song == null && probe.notes != null
 			&& Type.typeof(probe.notes) == TObject && probe.scrollSpeed != null)
 		{
-			song = loadVSliceChart(probe, folder);
-		}
-		else
-		{
-			song = parseJSON(rawData, jsonInput);
+			return loadVSliceChart(probe, folder);
 		}
 
-		// LE 谱面：从实际加载路径解析 mod 目录与难度后缀，设置 specialInst/specialVocal。
-		// Leather 命名：songs/{folder}/Inst-{Diff}.ogg、Voices-{Diff}.ogg（如 Inst-Erect.ogg）。
-		// 仅在对应后缀音频确实存在时设置，避免破坏只有无后缀 Inst.ogg 的普通谱面。
-		applyLeatherAudioSuffix(song);
-		return song;
-	}
-
-	/**
-	 * 判断某 mod 目录是否为 Leather Engine 模组。
-	 * 判定信号（命中任一即判定为 LE）：
-	 *  1. LE 特有目录结构（带空格，区别于 Psych 的 data/songs、data/characters、data/stages）：
-	 *     data/song data、data/character data、data/stage data、data/modcharts
-	 *  2. polymod 旧版元数据：根目录有 _polymod_meta.json 且没有 pack.json
-	 *     （LE 0.4.x 用旧版 polymod 的 _polymod_meta.json；Psych 0.7+ 用 pack.json）
-	 * 注意：Paths.mods() 返回值无尾斜杠，拼接子路径必须手动补 '/'。
-	 */
-	static function isLeatherMod(modDir:String):Bool
-	{
-		if(modDir == null || modDir.length == 0) return false;
-		#if MODS_ALLOWED
-		var base:String = Paths.mods(modDir);
-		if(FileSystem.exists(base + '/data/song data')
-			|| FileSystem.exists(base + '/data/character data')
-			|| FileSystem.exists(base + '/data/stage data')
-			|| FileSystem.exists(base + '/data/modcharts'))
-			return true;
-		if(FileSystem.exists(base + '/_polymod_meta.json') && !FileSystem.exists(base + '/pack.json'))
-			return true;
-		#end
-		return false;
-	}
-
-	/**
-	 * 检测谱面是否来自 Leather（LEATHER / LEATHER LTS），若来自 LE 且带难度后缀，
-	 * 且该 mod 里存在对应后缀音频，则把后缀写入 specialInst/specialVocal，
-	 * 供 PlayState 的音频探测/加载链使用（modHasSong 检查 Inst-{si}、tryVoices 追加 -{sv}）。
-	 */
-	static function applyLeatherAudioSuffix(song:SwagSong):Void
-	{
-		leatherDebugLog('applyLeatherAudioSuffix called: _lastPath=$_lastPath format=${(song != null) ? song.format : 'null'}');
-		if(song == null || _lastPath == null || song.format == null) return;
-		if(song.format != 'LEATHER' && song.format != 'LEATHER LTS') return;
-
-		#if MODS_ALLOWED
-		var mod:String = extractLeatherModDir(_lastPath);
-		if(mod == null) return;
-
-		// Leather 的歌曲音频目录名 = 谱面文件所在 data/song data/{Folder} 的目录名（原始名，
-		// 可含空格与原始大小写，如 "Final Destination"），与 json 内 song 字段不一定一致
-		// （zavodila 谱面 song 字段为 "Zavodila" 但音频目录为小写 zavodila）。
-		var songFolder:String = extractLeatherSongFolder(_lastPath);
-		if(songFolder == null) songFolder = Paths.formatToSongPath(song.song);
-		leatherSongFolder = songFolder;
-
-		var fileName:String = haxe.io.Path.withoutDirectory(_lastPath);
-		// 后缀提取基于文件名与“谱面所在目录名”比对（Leather 惯例 {Folder}-{diff}.json）
-		var suffix:String = extractLeatherDiffSuffix(fileName, songFolder);
-		if(suffix == null) return;
-
-		// 难度后缀大小写不统一（谱面文件小写 erect，音频常为 Erect），两个候选都试
-		var candidates:Array<String> = [suffix, suffix.charAt(0).toUpperCase() + suffix.substr(1)];
-		var foundInst:String = null;
-		var foundVocal:String = null;
-		for(c in candidates)
-		{
-			var instPath:String = Paths.mods(mod + '/songs/' + songFolder + '/Inst-' + c + '.ogg');
-			var vocalPath:String = Paths.mods(mod + '/songs/' + songFolder + '/Voices-' + c + '.ogg');
-			leatherDebugLog('  probe mod=$mod folder=$songFolder suffix=$suffix cand=$c instExists=${FileSystem.exists(instPath)} ($instPath) vocalExists=${FileSystem.exists(vocalPath)}');
-			if(foundInst == null && FileSystem.exists(instPath))
-				foundInst = c;
-			if(foundVocal == null && FileSystem.exists(vocalPath))
-				foundVocal = c;
-		}
-		if(foundInst != null) song.specialInst = foundInst;
-		if(foundVocal != null) song.specialVocal = foundVocal;
-		leatherDebugLog('  result: specialInst=${song.specialInst} specialVocal=${song.specialVocal} leatherSongFolder=$leatherSongFolder');
-		#end
-	}
-
-	static function leatherDebugLog(msg:String):Void
-	{
-		#if MODS_ALLOWED
-		try
-		{
-			var path:String = Sys.getCwd() + 'leather_audio_debug.txt';
-			var f:FileOutput = File.append(path, false);
-			f.writeString(Date.now().toString() + ' | ' + msg + '\n');
-			f.close();
-		}
-		catch(e:Dynamic) {}
-		#end
-	}
-
-/**
- * LE 谱面的歌曲音频目录名（原始名，含空格/原始大小写）。
- * 供 PlayState.generateSong 的音频探测/加载链直接使用（跳过 formatToSongPath）。
- * 仅 LE 谱面加载后被设置。
- */
-public static var leatherSongFolder:String = null;
-
-	/** 从 LE 谱面路径（.../mods/{mod}/data/song data/...）提取 mod 目录名（兼容 Windows 反斜杠路径） */
-	static function extractLeatherModDir(path:String):String
-	{
-		path = path.replace('\\', '/');
-		var marker:String = '/mods/';
-		var idx:Int = path.indexOf(marker);
-		if(idx < 0) { marker = 'mods/'; idx = path.indexOf(marker); }
-		if(idx < 0) return null;
-		var rest:String = path.substring(idx + marker.length);
-		var slash:Int = rest.indexOf('/');
-		if(slash > 0) rest = rest.substring(0, slash);
-		return rest.length > 0 ? rest : null;
-	}
-
-	/**
-	 * 从 LE 谱面路径提取歌曲音频目录名：data/song data/{Folder}/{file}.json 中的 {Folder}
-	 * （Leather 官方/Old 布局，Folder 为原始目录名，可含空格与原始大小写）。
-	 * 找不到（如 LTS 的 data/charts 布局）返回 null，由调用方回退 formatToSongPath。
-	 */
-	static function extractLeatherSongFolder(path:String):String
-	{
-		if(path == null) return null;
-		path = path.replace('\\', '/');
-		var marker:String = '/data/song data/';
-		var idx:Int = path.indexOf(marker);
-		if(idx < 0) return null;
-		var rest:String = path.substring(idx + marker.length);
-		var slash:Int = rest.indexOf('/');
-		if(slash < 0) return null;
-		rest = rest.substring(0, slash);
-		return rest.length > 0 ? rest : null;
-	}
-
-	/**
-	 * 从谱面文件名（{folder}.json / {folder}-{diff}.json / {folder}-chart-{diff}.json）提取难度后缀。
-	 * 注意 Leather 命名松散：目录名 "Final Destination"（大写）与谱面文件名 "final destination-erect.json"
-	 * （小写）可能大小写不一致，匹配一律忽略大小写（长度相同，偏移量不变）。
-	 */
-	static function extractLeatherDiffSuffix(fileName:String, fmtFolder:String):String
-	{
-		if(fileName == null || !fileName.endsWith('.json')) return null;
-		var base:String = fileName.substring(0, fileName.length - 5);
-		var baseLower:String = base.toLowerCase();
-		var folderLower:String = fmtFolder.toLowerCase();
-		if(baseLower == folderLower) return null;
-		if(baseLower.startsWith(folderLower + '-chart-'))
-			return base.substring(folderLower.length + 7);
-		if(baseLower.startsWith(folderLower + '-'))
-			return base.substring(folderLower.length + 1);
-		return null;
-	}
-
-	/**
-	 * 归一化曲目名/目录名用于比对：
-	 * Leather 的 data/song data/{Folder}/ 目录名与谱面文件名命名松散
-	 * （"Final Destination"、"super saiyan" 等可含空格/大写/连字符混用），
-	 * 统一去掉空格、连字符并转小写后再比较。
-	 */
-	static function normalizeChartKey(s:String):String
-	{
-		if(s == null) return '';
-		return s.toLowerCase().replace(' ', '').replace('-', '');
+		return parseJSON(rawData, jsonInput);
 	}
 
 	/**
 	 * 在 Leather mod 的 data/song data/ 目录下查找谱面文件。
-	 * 第一优先：常规拼法（{folder}.json / {folder}-chart.json / {folder}-{diff}.json，folder 经 formatToSongPath）
-	 *  —— 覆盖目录名为纯小写无空格的情况（如 zavodila）。
-	 * 第二优先：扫描 data/song data/ 下所有子目录，目录名与谱面文件名均做归一化匹配
-	 *  —— 覆盖目录名带空格/大写（REC 的 "Final Destination"、"super saiyan" 等）。
+	 * 依次尝试：{folder}.json（Official 经典）、{folder}-chart.json（LTS 默认）、
+	 * {folder}-chart-{diff}.json（LTS 难度变体）、{folder}-{diff}.json（旧版 Leather 0.4.x 命名）。
+	 * 最后兜底：扫描目录内以 {folder} 开头、非 metadata 的 .json 文件。
 	 */
 	static function findLeatherChartPath(folder:String):String
 	{
@@ -567,52 +385,31 @@ public static var leatherSongFolder:String = null;
 #end
 		}
 
+		// 兜底：扫描目录内以 {folder} 开头的 .json（排除 metadata 与 chart 编辑器杂项）
 #if MODS_ALLOWED
-		// ── 兜底：扫描 data/song data/ 全部子目录，归一化匹配 ──
-		var normFolder:String = normalizeChartKey(folder);
-		if(normFolder.length == 0) return null;
-		var modDirs:Array<String> = [Mods.currentModDirectory];
-		for(g in Mods.getGlobalMods())
-			if(g != null && g.length > 0 && !modDirs.contains(g))
-				modDirs.push(g);
-		var curDiff:String = Paths.formatToSongPath(Difficulty.getString(false));
-		for(mod in modDirs)
+		var dir:String = Paths.modFolders('data/song data/' + fmtFolder);
+		if(FileSystem.exists(dir) && FileSystem.isDirectory(dir))
 		{
-			var baseDir:String = Paths.mods(mod + '/data/song data');
-			if(!FileSystem.exists(baseDir) || !FileSystem.isDirectory(baseDir)) continue;
 			try
 			{
-				for(sub in FileSystem.readDirectory(baseDir))
+				var files:Array<String> = FileSystem.readDirectory(dir);
+				var curDiff:String = Paths.formatToSongPath(Difficulty.getString(false));
+				// 优先匹配当前难度后缀
+				for(f in files)
 				{
-					var fullDir:String = baseDir + '/' + sub;
-					if(!FileSystem.isDirectory(fullDir)) continue;
-					if(normalizeChartKey(sub) != normFolder) continue;
-
-					var matchedCur:String = null;  // 当前难度变体（如 -erect）
-					var matchedBase:String = null;  // 无难度后缀（如 {folder}.json）
-					var matchedOther:String = null; // 其他难度变体
-					for(f in FileSystem.readDirectory(fullDir))
-					{
-						var lower:String = f.toLowerCase();
-						if(!lower.endsWith('.json') || lower.indexOf('-metadata') >= 0) continue;
-						var base:String = f.substring(0, f.length - 5);
-						var normBase:String = normalizeChartKey(base);
-						if(normBase == normFolder) { if(matchedBase == null) matchedBase = fullDir + '/' + f; continue; }
-						for(diff in Difficulty.list)
-						{
-							var dNorm:String = Paths.formatToSongPath(diff);
-							if(dNorm.length == 0) continue;
-							if(normBase == normalizeChartKey(folder + '-' + dNorm) || normBase == normalizeChartKey(folder + '-chart-' + dNorm))
-							{
-								if(dNorm == curDiff) { if(matchedCur == null) matchedCur = fullDir + '/' + f; }
-								else if(matchedOther == null) matchedOther = fullDir + '/' + f;
-								break;
-							}
-						}
-					}
-					if(matchedCur != null) return matchedCur;
-					if(matchedBase != null) return matchedBase;
-					if(matchedOther != null) return matchedOther;
+					var lower:String = f.toLowerCase();
+					if(lower.startsWith(fmtFolder) && lower.endsWith('.json')
+						&& lower.indexOf('-metadata') < 0
+						&& curDiff.length > 0 && lower.indexOf('-' + curDiff) >= 0)
+						return dir + '/' + f;
+				}
+				// 否则取第一个符合条件的
+				for(f in files)
+				{
+					var lower:String = f.toLowerCase();
+					if(lower.startsWith(fmtFolder) && lower.endsWith('.json')
+						&& lower.indexOf('-metadata') < 0)
+						return dir + '/' + f;
 				}
 			}
 			catch(e:Dynamic) { /* 目录不可读时忽略 */ }
@@ -725,9 +522,6 @@ public static var leatherSongFolder:String = null;
 		if(convertTo != null && convertTo.length > 0)
 		{
 			var fmt:String = songJson.format;
-			// 记录子对象【原本】是否自带 format 字段：必须在写入 'unknown' 兜底值之前检查，
-			// 否则 Reflect.hasField 永远为 true，Leather 谱面的 LEATHER 检测会失效。
-			var hadFormatField:Bool = Reflect.hasField(songJson, 'format');
 			if(fmt == null) fmt = songJson.format = 'unknown';
 
 			switch(convertTo)
@@ -736,12 +530,9 @@ public static var leatherSongFolder:String = null;
 					if(!fmt.startsWith('psych_v1')) //Convert to Psych 1.0 format
 					{
 						trace('converting chart $nameForError with format $fmt to psych_v1 format...');
-						// 经典包裹格式且子对象自身没写 psych_v1 format：
-						//  -> 若当前 mod 是 Leather 模组，判为 LEATHER（LE 谱面）
-						//  -> 否则是旧版 Psych 谱面（psych_v1_convert，结构与 LE 相同但引擎不同）
-						// 注意：必须用 hadFormatField（写入 'unknown' 之前记录的原始状态），
-						// 否则 Reflect.hasField 永远为 true，LEATHER 检测会失效。
-						if(hadLegacyWrapper && !hadFormatField && _lastIsLeatherMod)
+						// 经典包裹格式且子对象自身没写 psych_v1 format → 判定为外部谱面（Leather Official / 旧 Psych），
+						// 显示成 LEATHER 而非笼统的 psych_v1_convert。
+						if(hadLegacyWrapper && !Reflect.hasField(root.song, 'format'))
 							songJson.format = 'LEATHER';
 						else
 							songJson.format = 'psych_v1_convert';

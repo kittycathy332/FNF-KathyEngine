@@ -114,17 +114,6 @@ class Paths
 		#end
 	}
 
-	// Leather 兼容：目录名不做 formatToSongPath（歌曲音频目录可能是原始名 "Final Destination"）。
-	public static function songAudioExistsRaw(songFolder:String, fileBase:String, ?modDir:String = ''):Bool
-	{
-		var path:String = getSongAudioPathRaw(songFolder, fileBase, modDir);
-		#if sys
-		return FileSystem.exists(path);
-		#else
-		return OpenFlAssets.exists(path, SOUND);
-		#end
-	}
-
 	@:access(flixel.system.frontEnds.BitmapFrontEnd._cache)
 	public static function clearStoredMemory()
 	{
@@ -563,23 +552,6 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 		return (modDir != null && modDir.length > 0)
 			? mods('$modDir/songs/$key')
 			: getFolderPath(key, 'songs');
-	}
-
-	// Leather 兼容：歌曲音频目录名直接用原始名（如 "Final Destination"），不做 formatToSongPath
-	// 归一化。Leather 谱面的 songs/{Folder} 目录名与 json 内 song 字段可能不同（可含空格/原始大小写），
-	// 且与 formatToSongPath 的结果不一定一致，故单独提供 raw 版本供 LE 谱面使用。
-	inline public static function getSongAudioPathRaw(songFolder:String, fileBase:String, ?modDir:String = ''):String
-	{
-		var key:String = '$songFolder/$fileBase.${SOUND_EXT}';
-		return (modDir != null && modDir.length > 0)
-			? mods('$modDir/songs/$key')
-			: getFolderPath(key, 'songs');
-	}
-
-	// 与 loadSongAudio 相同语义，但目录名不做 formatToSongPath（供 Leather 谱面使用）。
-	static public function loadSongAudioRaw(songFolder:String, fileBase:String, ?modDir:String = ''):Sound
-	{
-		return loadSoundAtPath(getSongAudioPathRaw(songFolder, fileBase, modDir));
 	}
 
 	// 从 currentTrackedSounds 中移除指定音频缓存，并尽力释放其底层 asset 与解码数据，

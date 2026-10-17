@@ -1179,15 +1179,8 @@ class FreeplayState extends MusicBeatState
 			// 与 PlayState 一致；Inst 与人声统一从 audioModDir 用 loadSongAudio 加载（不回退 funkin）。
 			// 存在性探测只查文件系统，绝不 loadSongAudio —— 原实现会把整段 Inst/Voices 解码进
 			// currentTrackedSounds 且不登记释放，浏览期间音频缓存只增不减。
-			// Leather 谱面：音频目录用原始名（Song.leatherSongFolder），探测/加载走 Raw 版路径（不做 formatToSongPath）。
-			var isLeatherChart:Bool = PlayState.SONG.format != null
-				&& (PlayState.SONG.format == 'LEATHER' || PlayState.SONG.format == 'LEATHER LTS');
-			var leatherFolder:String = isLeatherChart ? Song.leatherSongFolder : null;
-
 			function modHasAudio(mod:String, song:String, fileBase:String):Bool
 			{
-				if (leatherFolder != null && leatherFolder.length > 0)
-					return Paths.songAudioExistsRaw(leatherFolder, fileBase, mod);
 				return Paths.songAudioExists(song, fileBase, mod);
 			}
 
@@ -1238,12 +1231,6 @@ class FreeplayState extends MusicBeatState
 					// 优先 Voices-{角色}-SpecialVocal > Voices-Player/Opponent-SpecialVocal > Voices-SpecialVocal，命中即止（任一存在即可）。
 					if (PlayState.SONG.specialVocal != null && PlayState.SONG.specialVocal.length > 0)
 						fileBase += '-' + PlayState.SONG.specialVocal;
-					if (leatherFolder != null && leatherFolder.length > 0)
-					{
-						var fpR:String = Paths.getSongAudioPathRaw(leatherFolder, fileBase, audioModDir);
-						trackPreviewSound(fpR);
-						return Paths.loadSongAudioRaw(leatherFolder, fileBase, audioModDir);
-					}
 					var fp:String = Paths.getSongAudioPath(PlayState.SONG.song, fileBase, audioModDir);
 					trackPreviewSound(fp);
 					return Paths.loadSongAudio(PlayState.SONG.song, fileBase, audioModDir);
@@ -1309,16 +1296,8 @@ class FreeplayState extends MusicBeatState
 				}
 
 				var instFileBase:String = (PlayState.SONG.specialInst != null && PlayState.SONG.specialInst.length > 0) ? 'Inst-${PlayState.SONG.specialInst}' : 'Inst';
-				if (leatherFolder != null && leatherFolder.length > 0)
-				{
-					trackPreviewSound(Paths.getSongAudioPathRaw(leatherFolder, instFileBase, audioModDir));
-					FlxG.sound.playMusic(Paths.loadSongAudioRaw(leatherFolder, instFileBase, audioModDir), 0.8);
-				}
-				else
-				{
-					trackPreviewSound(Paths.getSongAudioPath(PlayState.SONG.song, instFileBase, audioModDir));
-					FlxG.sound.playMusic(Paths.loadSongAudio(PlayState.SONG.song, instFileBase, audioModDir), 0.8);
-				}
+				trackPreviewSound(Paths.getSongAudioPath(PlayState.SONG.song, instFileBase, audioModDir));
+				FlxG.sound.playMusic(Paths.loadSongAudio(PlayState.SONG.song, instFileBase, audioModDir), 0.8);
 				FlxG.sound.music.pause();
 				instPlaying = curSelected;
 

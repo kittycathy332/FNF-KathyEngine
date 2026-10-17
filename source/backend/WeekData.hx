@@ -3,7 +3,6 @@ package backend;
 import lime.utils.Assets;
 import openfl.utils.Assets as OpenFlAssets;
 import haxe.Json;
-import StringTools;
 
 typedef WeekFile =
 {
@@ -189,7 +188,6 @@ class WeekData {
 	{
 		var leatherWeekName:String = 'leather_mods';
 		var leatherSongs:Array<Dynamic> = [];
-		var leatherDiffs:Array<String> = [];
 		var seenSongs:Map<String, Bool> = new Map();
 
 		// 收集所有启用 mod 的 Leather 歌曲
@@ -205,12 +203,8 @@ class WeekData {
 					var fullDir:String = songDataDir + '/' + folder;
 					if(!FileSystem.isDirectory(fullDir)) continue;
 
-					// 检查是否有谱面文件（Official / LTS / 旧版 Leather 0.4.x），并收集实际难度后缀
+					// 检查是否有谱面文件（Official / LTS / 旧版 Leather 0.4.x）
 					var hasChart:Bool = false;
-					var folderDiffs:Array<String> = [];
-					// Freeplay 歌曲图标：从谱面 player2（对手角色）推导 {角色}-icons.png，
-					// 找不到时用默认 'face'（REC 等 LE mod 的图标目录为 images/icons/{角色}-icons.png）
-					var chartIcon:String = 'face';
 					try
 					{
 						for(f in FileSystem.readDirectory(fullDir))
@@ -221,28 +215,7 @@ class WeekData {
 								&& lower.indexOf('-metadata') < 0)
 							{
 								hasChart = true;
-								// 提取难度后缀：{folder}-{diff}.json 或 {folder}-chart-{diff}.json
-								var base:String = f.substring(0, f.length - 5);
-								if(base.length > folder.length && base.charAt(folder.length) == '-')
-								{
-									var rest:String = base.substring(folder.length + 1);
-									if(rest.startsWith('chart-')) rest = rest.substring(6);
-									if(rest.length > 0 && !folderDiffs.contains(rest))
-										folderDiffs.push(rest);
-								}
-								// 从谱面 json 读取对手角色（仅读一次）
-								if(chartIcon == 'face')
-								{
-									try
-									{
-										var parsed:Dynamic = Json.parse(File.getContent(fullDir + '/' + f));
-										var p2:Dynamic = Reflect.field(parsed, 'song') != null
-											? Reflect.field(Reflect.field(parsed, 'song'), 'player2') : null;
-										if(p2 != null && Std.string(p2).length > 0)
-											chartIcon = Std.string(p2) + '-icons';
-									}
-									catch(e:Dynamic) { }
-								}
+								break;
 							}
 						}
 					}
@@ -255,10 +228,7 @@ class WeekData {
 					seenSongs.set(songKey, true);
 
 					// [songName, icon, color, modFolder]
-					leatherSongs.push([folder, chartIcon, [180, 120, 220], mod]);
-					// 合并全 week 难度：某歌缺失某难度时 Freeplay 的难度回退链会落到实际存在的谱面
-					for(d in folderDiffs)
-						if(!leatherDiffs.contains(d)) leatherDiffs.push(d);
+					leatherSongs.push([folder, 'face', [180, 120, 220], mod]);
 				}
 			}
 			catch(e:Dynamic) { trace('[Leather] 扫描 $mod/song data 失败: $e'); }
@@ -284,16 +254,6 @@ class WeekData {
 				}
 				if(!already) existing.songs.push(song);
 			}
-			// 合并难度列表（Difficulty.loadFromWeek 读取 week.difficulties）
-			if(existing.difficulties != null && existing.difficulties.length > 0)
-			{
-				for(d in existing.difficulties.split(','))
-				{
-					d = StringTools.trim(d);
-					if(d.length > 0 && !leatherDiffs.contains(d)) leatherDiffs.push(d);
-				}
-			}
-			existing.difficulties = leatherDiffs.join(',');
 		}
 		else
 		{
@@ -308,7 +268,7 @@ class WeekData {
 				hiddenUntilUnlocked: false,
 				hideStoryMode: true,
 				hideFreeplay: false,
-				difficulties: leatherDiffs.join(',')
+				difficulties: ''
 			};
 			var weekData:WeekData = new WeekData(weekFile, leatherWeekName);
 			weeksLoaded.set(leatherWeekName, weekData);

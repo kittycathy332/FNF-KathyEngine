@@ -2700,24 +2700,11 @@ tempScore += '${lblScore}: ${songScore}';
 		// loadTopMod 重置，这里直接在所有“真实存在的模组目录”中搜索实际包含该歌曲音频的模组。
 		var prevModDir:String = Mods.currentModDirectory;
 
-		// Leather 谱面：歌曲音频目录名用原始名（如 "Final Destination"），跳过 formatToSongPath
-		var leatherFolder:String = isLeatherChartFormat() ? Song.leatherSongFolder : null;
-		#if MODS_ALLOWED
-		try
-		{
-			var dbgF:sys.io.FileOutput = sys.io.File.append(Sys.getCwd() + 'leather_audio_debug.txt', false);
-			dbgF.writeString(Date.now().toString() + ' | generateSong: song=${songData.song} format=${SONG.format} leatherFolder=$leatherFolder specialInst=${songData.specialInst} specialVocal=${songData.specialVocal} curMod=$prevModDir\n');
-			dbgF.close();
-		}
-		catch(e:Dynamic) {}
-		#end
 
 		// 用 loadSongAudio（不回退 funkin）判定该模组是否真有这首曲子的音频，避免被原生同名资源误导。
 		function modHasAudio(mod:String, song:String, fileBase:String):Bool
 		{
 			// mod 为空 => 内置 base_game，绝不被原生同名资源误导（loadSongAudio 空 modDir 即查 assets/songs）。
-			if (leatherFolder != null && leatherFolder.length > 0)
-				return Paths.loadSongAudioRaw(leatherFolder, fileBase, mod) != null;
 			return Paths.loadSongAudio(song, fileBase, mod) != null;
 		}
 
@@ -2756,15 +2743,6 @@ tempScore += '${lblScore}: ${songScore}';
 			if (audioModDir == null) audioModDir = '';
 			if (PlayState._songAudioModCache == null) PlayState._songAudioModCache = new Map();
 			PlayState._songAudioModCache.set(songData.song, audioModDir);
-			#if MODS_ALLOWED
-			try
-			{
-				var dbgF:sys.io.FileOutput = sys.io.File.append(Sys.getCwd() + 'leather_audio_debug.txt', false);
-				dbgF.writeString(Date.now().toString() + ' | generateSong: audioModDir=$audioModDir (cache hit=${PlayState._songAudioModCache != null && PlayState._songAudioModCache.exists(songData.song)})\n');
-				dbgF.close();
-			}
-			catch(e:Dynamic) {}
-			#end
 		}
 
 		Mods.currentModDirectory = audioModDir;
@@ -2782,8 +2760,6 @@ tempScore += '${lblScore}: ${songScore}';
 					// 优先 Voices-{角色}-SpecialVocal > Voices-Player/Opponent-SpecialVocal > Voices-SpecialVocal，命中即止（任一存在即可）。
 					if (songData.specialVocal != null && songData.specialVocal.length > 0)
 						fileBase += '-' + songData.specialVocal;
-					if (leatherFolder != null && leatherFolder.length > 0)
-						return Paths.loadSongAudioRaw(leatherFolder, fileBase, audioModDir);
 					return Paths.loadSongAudio(songData.song, fileBase, audioModDir);
 				}
 
@@ -2813,9 +2789,7 @@ tempScore += '${lblScore}: ${songScore}';
 		try
 		{
 			var instFileBase:String = (songData.specialInst != null && songData.specialInst.length > 0) ? 'Inst-${songData.specialInst}' : 'Inst';
-			inst.loadEmbedded((leatherFolder != null && leatherFolder.length > 0)
-				? Paths.loadSongAudioRaw(leatherFolder, instFileBase, audioModDir)
-				: Paths.loadSongAudio(songData.song, instFileBase, audioModDir));
+			inst.loadEmbedded(Paths.loadSongAudio(songData.song, instFileBase, audioModDir));
 		}
 		catch (e:Dynamic) {}
 		FlxG.sound.list.add(inst);
