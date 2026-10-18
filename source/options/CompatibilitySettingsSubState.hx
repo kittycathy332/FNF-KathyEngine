@@ -48,9 +48,9 @@ class CompatibilitySettingsSubState extends BaseOptionsMenu
 			psychlua.LuaCompatRouter.VERSIONS.copy());
 		addOption(option);
 
-		// Leather Engine 脚本 API 兼容模式（LE mod 的 scripts/*.lua 加载器）
-		option = new Option('Leather Engine 脚本兼容',
-			'启用后，LE 谱面（format=LEATHER/LEATHER LTS）的 scripts/*.lua 走 LE API 运行时；off=不加载',
+		// Leather Engine 脚本 API 兼容模式（所有模组的 scripts/*.lua 加载器）
+		option = new Option(Language.get('leather_script_compat'),
+			Language.get("leather_script_compat_desc"),
 			'leatherScriptCompat',
 			STRING,
 			psychlua.leather.LeatherScriptRouter.MODES.copy());

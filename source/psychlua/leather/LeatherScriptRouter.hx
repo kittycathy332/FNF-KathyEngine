@@ -43,19 +43,72 @@ class LeatherScriptRouter
 		return v;
 	}
 
+	/** 脚本内容检测：LE 特有 API 签名（Psych 无同名，高区分度）。 */
+	static final LE_SIGNATURES:Array<String> = [
+		'makeSprite(', 'makeAnimatedSprite(', 'makeSpriteCopy(', 'setActor', 'getActor',
+		'playCharAnim(', 'setStrumline', 'addActorAnimation', 'addActorTrail(',
+		'createCustomShader(', 'setCamZoom(', 'getCamZoom(', 'setHudZoom(', 'getHudZoom(',
+		'addPlayfield(', 'addStage(', 'changeBoyfriendCharacter(', 'changeDadCharacter(',
+		'setNoteCameras(', 'setObjectCameras(', 'setHudPosition(', 'setHudAngle(',
+		'makeText(', 'setActorText(', 'setActorFont(', 'anyNotes(', 'charFromEvent(',
+		'getCharFromEvent(', 'getBaseScrollSpeed(', 'easeModifier(', 'actorScreenCenter(',
+	];
+
+	/** 脚本内容检测：Psych 特有 API 签名（LE 无同名，高区分度；避开两套同名函数）。 */
+	static final PSYCH_SIGNATURES:Array<String> = [
+		'makeLuaSprite(', 'makeAnimatedLuaSprite(', 'addLuaSprite(', 'setProperty(', 'getProperty(',
+		'runHaxeCode(', 'doTweenX(', 'doTweenY(', 'doTweenAlpha(', 'doTweenAngle(', 'doTweenColor(',
+		'doTweenZoom(', 'noteTweenX(', 'noteTweenY(', 'noteTweenAlpha(', 'noteTweenAngle(',
+		'noteTweenDirection(', 'noteTweenColor(', 'noteTweenZoom(', 'addAnimationByPrefix(',
+		'addAnimationByIndices(', 'addAnimation(', 'addHScript(', 'addLuaScript(', 'loadSong(',
+		'cameraFlash(', 'cameraFade(', 'cameraShake(', 'cameraSetTarget(', 'characterDance(',
+		'getVar(', 'setVar(', 'getLuaCompatVersion(', 'initAnalyzer(', 'mouseClicked(', 'mousePressed(',
+		'mouseReleased(', 'addCameraFollowPoint(', 'addCharacterToList(', 'addScore(', 'getScore(',
+		'addMisses(', 'getMisses(', 'addHits(', 'getHits(', 'getObjectOrder(', 'setObjectOrder(',
+		'luaSpriteExists(', 'luaSoundExists(', 'luaTextExists(', 'getRunningScripts(', 'callScript(',
+		'isRunning(', 'getAudioLevels(', 'getPixelColor(', 'loadGraphic(', 'loadFrames(',
+		'loadMultipleFrames(', 'getMidpointX(', 'getMidpointY(', 'getGraphicMidpointX(',
+		'getGraphicMidpointY(', 'getScreenPositionX(', 'getScreenPositionY(', 'getMouseX(', 'getMouseY(',
+		'getCameraFollowX(', 'getCameraFollowY(', 'cancelTween(', 'cancelTimer(', 'startTween(',
+		'getSoundPitch(', 'setSoundPitch(', 'getColorFromHex(', 'getColorFromName(', 'getColorFromString(',
+		'exitSong(', 'isPlayerNote(', 'addOffset(', 'getCharacterX(', 'getCharacterY(', 'debugPrint(',
+		'getLuaObject(', 'setVarFromClass(', 'getVarFromClass(',
+	];
+
 	/**
-	 * 当前谱面是否应启用 LE 脚本层。
-	 * @param chartFormat  当前谱面的 format 字段（Song.format，可能为 null/Psych 空串）
+	 * 脚本级自动分流：按脚本文件内容检测它写的是哪套 API。
+	 * @return 'leather' | 'psych'。均未命中时按谱面 format 回退（LE 谱面→leather，否则→psych）。
+	 */
+	public static function detectScriptRuntime(path:String, chartFormat:String):String
+	{
+		var content:String = null;
+		#if sys
+		try { content = sys.io.File.getContent(path); } catch (e:Dynamic) { content = null; }
+		#end
+		if (content == null || content.length == 0)
+			return isLeatherChart(chartFormat) ? MODE_OFFICIAL : 'psych';
+
+		for (sig in LE_SIGNATURES)
+			if (content.indexOf(sig) != -1) return 'leather';
+		for (sig in PSYCH_SIGNATURES)
+			if (content.indexOf(sig) != -1) return 'psych';
+
+		return isLeatherChart(chartFormat) ? 'leather' : 'psych';
+	}
+
+	/**
+	 * 当前是否应启用 LE 脚本层。
+	 * 不区分谱面来源：只要设置不是 off，任何模组（LE / Psych / 其他）的 scripts/*.lua
+	 * 都走 LeatherLuaScript（LE API；auto=按谱面定版本，official/lts=强制指定版本）。
+	 * @param chartFormat  当前谱面的 format 字段（Song.format，可能为 null/Psych 空串，仅 auto 定版本时参考）
 	 */
 	public static function isActive(chartFormat:String):Bool
 	{
 		var m:String = rawMode();
 		if (m == MODE_OFF)
 			return false;
-		if (m == MODE_OFFICIAL || m == MODE_LTS)
-			return true; // 强制启用：非 off 即加载（强制模式下即使谱面是 Psych 也尝试？保守：仍要求是 LE 谱面）
-		// auto：仅当谱面确实是 LE 谱面时启用
-		return isLeatherChart(chartFormat);
+		// auto / official / lts：全部启用（auto=按谱面定版本；official/lts=强制指定版本）
+		return true;
 	}
 
 	/** 谱面 format 是否为 LE 系（Official 或 LTS）。 */

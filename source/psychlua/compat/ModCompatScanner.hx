@@ -157,10 +157,13 @@ class ModCompatScanner
 		var files:Array<String> = [];
 		collectScriptFiles(root, files, 0);
 
+		// 每个脚本走哪个运行时（LE API / Psych API）：与 PlayState 的加载路由一致
+		var fileRoute:Map<String, String> = new Map();
 		for (abs in files)
 		{
 			var rel:String = abs.substr(root.length);
 			if (rel.startsWith('/') || rel.startsWith('\\')) rel = rel.substr(1);
+			fileRoute.set(rel, psychlua.leather.LeatherScriptRouter.detectScriptRuntime(abs, ''));
 
 			var content:String = null;
 			try
@@ -208,7 +211,7 @@ class ModCompatScanner
 
 		for (n in funcs.keys())
 		{
-			var f = classifyFunc(n);
+			var f = classifyFunc(n, routeOf(n, funcs, fileRoute));
 			if (f != null)
 			{
 				f.files = funcs.get(n);
@@ -235,7 +238,7 @@ class ModCompatScanner
 
 	// ---------------------------------------------------------------- 版本分类
 
-	public static function classifyFunc(name:String):CompatFinding
+	public static function classifyFunc(name:String, ?leRoute:String = null):CompatFinding
 	{
 		var versions:Array<String> = CompatData.versionsOfFunction(name);
 		if (versions.length == 0)
@@ -250,6 +253,21 @@ class ModCompatScanner
 		var hasKathy:Bool = versions.indexOf('kathy') >= 0;
 		var has104:Bool = versions.indexOf('1.0.4') >= 0;
 		var hasLegacy:Bool = versions.indexOf('0.7.3') >= 0 || versions.indexOf('0.6.3') >= 0;
+		var hasLe:Bool = versions.indexOf('le') >= 0;
+
+		// LE 独占：Kathy 经 LE API 运行时提供，Psych 1.0/0.7/0.6 均无。
+		// 脚本走（或部分走）LE 运行时即可用；仅走 Psych 运行时则不可用。
+		if (hasKathy && hasLe && !has104 && !hasLegacy)
+		{
+			if (leRoute == null || leRoute == 'le' || leRoute == 'mixed')
+				return null;
+			return mk(name, false, SEV_WARN, versions, '该函数仅 LE API 运行时提供；当前脚本按 Psych API 运行时加载，会报「函数不存在」。可把 leatherScriptCompat 设为 official/lts，或改用 Psych 对应 API');
+		}
+
+		// Psych 独占：LE API 运行时无此函数。脚本会走 LE 运行时（或混合）时报告。
+		if (hasKathy && !hasLe && (has104 || hasLegacy) && (leRoute == 'le' || leRoute == 'mixed'))
+			return mk(name, false, (leRoute == 'le' ? SEV_ERROR : SEV_WARN), versions,
+				'该 Psych 函数在 LE API 运行时下不可用；当前脚本会走 LE 运行时。可把 leatherScriptCompat 设为 off，或改用 LE 对应 API');
 
 		if (!has104 && hasLegacy)
 			return mk(name, false, SEV_WARN, versions, 'Psych 1.0 未提供（仅旧版 PE / Kathy 兼容层有）；Kathy 上需把 luaCompatVersion 设为 0.7.3/0.6.3');
@@ -275,6 +293,11 @@ class ModCompatScanner
 		var hasKathy:Bool = versions.indexOf('kathy') >= 0;
 		var has104:Bool = versions.indexOf('1.0.4') >= 0;
 		var hasLegacy:Bool = versions.indexOf('0.7.3') >= 0 || versions.indexOf('0.6.3') >= 0;
+		var hasLe:Bool = versions.indexOf('le') >= 0;
+
+		// LE 钩子：Kathy 的 LE 运行时实际广播该事件（update/popUpScore/playerOneSing…）→ 通过
+		if (hasLe)
+			return null;
 
 		if (!has104 && hasLegacy)
 			return mk(name, true, SEV_WARN, versions, 'Psych 1.0 不会调用该回调（仅旧版 PE 有）');
@@ -282,6 +305,25 @@ class ModCompatScanner
 			return mk(name, true, SEV_ERROR, versions, 'Kathy 独有回调：Psych 1.0 / Legacy 下永远不会被触发');
 		if (!hasKathy && has104)
 			return mk(name, true, SEV_ERROR, versions, '当前 Kathy 引擎不会调用该回调');
+		return null;
+	}
+
+	/** 汇总某名字出现过的脚本的路由：'le' / 'psych' / 'mixed' / null(无记录) */
+	static function routeOf(name:String, map:Map<String, Array<String>>, fileRoute:Map<String, String>):String
+	{
+		var files:Array<String> = map.get(name);
+		if (files == null || files.length == 0) return null;
+		var hasLe:Bool = false;
+		var hasPsych:Bool = false;
+		for (f in files)
+		{
+			var r:String = fileRoute.get(f);
+			if (r == 'le') hasLe = true;
+			else if (r == 'psych') hasPsych = true;
+		}
+		if (hasLe && hasPsych) return 'mixed';
+		if (hasLe) return 'le';
+		if (hasPsych) return 'psych';
 		return null;
 	}
 

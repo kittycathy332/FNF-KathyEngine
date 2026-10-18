@@ -720,5 +720,7 @@
     "charting_event_search_notfound": "未找到匹配事件",
     "charting_search_box_title": "搜索",
     "charting_find_event_tab2": "  搜索事件",
-    "charting_event_note_count": "（含 {0} 个事件的 Note）"
+    "charting_event_note_count": "（含 {0} 个事件的 Note）",
+    "leather_script_compat": "Leather Engine 脚本兼容",
+    "leather_script_compat_desc": "非 off 时启用 LE API 运行时并可与 Psych API 共存：auto=按脚本内容自动分流（LE 脚本走 LE API、Psych 脚本走 Psych API，同一模组可并存），official/lts=强制全部走 LE API；off=全部按 Psych API"
 }

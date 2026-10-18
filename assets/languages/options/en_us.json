@@ -719,5 +719,13 @@
     "charting_event_next_note": "Next",
     "charting_event_note_count": "(in Note with {0} events)",
     "charting_event_prev_result": "Prev",
-    "charting_event_next_result": "Next"
+    "charting_event_next_result": "Next",
+    "leather_script_compat": "Leather Engine Script Compat",
+    "leather_script_compat_desc": "When not off, enables the LE API runtime and coexists with Psych API: auto = auto-route each script by content (LE-API scripts run LE, Psych-API scripts run Psych; both can coexist in one mod), official/lts = force all scripts to LE API; off = all Psych API",
+    "charting_unlockeve_tab2": "  Unlock Events",
+    "modsimport_detected": "Detected an importable mod package. Import it into the mods folder?",
+    "modsimport_zipname": "Archive file: ",
+    "modsimport_progress": "Importing: ",
+    "modsimport_done": "Import done: ",
+    "modsimport_success": "Import complete!"
 }

@@ -169,19 +169,40 @@ class ModCompatCheckerSubState extends MusicBeatSubstate
 			+ OptionsLanguage.get('mod_compat_warning', 'Warning') + ': ' + sevWarn
 			+ '   API: ' + report.knownNames;
 
-		// Leather Engine 识别行：是 LE 模组时显示类型 + 当前脚本 API 运行时
+		// LE / 脚本运行时识别行：显示模组类型 + 当前 leatherScriptCompat 下的脚本路由
 		var lt:Int = ModCompatScanner.detectLeather(report.mod);
-		if (lt != ModCompatScanner.LE_NONE)
+		var compat:String = backend.ClientPrefs.data.leatherScriptCompat;
+		if (compat == null || compat.length == 0) compat = 'auto';
+		var prefix:String = (lt != ModCompatScanner.LE_NONE)
+			? 'Leather Engine mod [' + ModCompatScanner.leatherTypeName(lt) + ']  ->  '
+			: 'Psych-family mod  ->  ';
+		if (compat == 'off')
 		{
-			var compat:String = backend.ClientPrefs.data.leatherScriptCompat;
-			leInfoText.text = 'Leather Engine mod [' + ModCompatScanner.leatherTypeName(lt)
-				+ ']  ->  scripts run on LE API runtime (leatherScriptCompat = ' + compat + ')';
-			leInfoText.y = summaryText.y + summaryText.textField.textHeight + 4 + summaryText.borderSize * 2 + 2;
+			// 全部走 Psych API：LE 模组也值得提示（其脚本可能依赖 LE API）
+			if (lt != ModCompatScanner.LE_NONE)
+			{
+				leInfoText.text = prefix + 'leatherScriptCompat = off：全部脚本按 Psych API 加载，LE API 写法将报「函数不存在」';
+				leInfoText.color = 0xFFFFD166;
+				leInfoText.visible = true;
+			}
+			else
+				leInfoText.visible = false;
+		}
+		else if (compat == 'official' || compat == 'lts')
+		{
+			leInfoText.text = prefix + 'leatherScriptCompat = ' + compat + '：全部脚本强制走 LE API 运行时';
+			leInfoText.color = 0xFF67E8F9;
 			leInfoText.visible = true;
 		}
 		else
 		{
-			leInfoText.visible = false;
+			leInfoText.text = prefix + 'leatherScriptCompat = auto：按脚本内容自动分流（LE API 脚本 → LE 运行时，Psych API 脚本 → Psych 运行时，同一模组可并存）';
+			leInfoText.color = 0xFF67E8F9;
+			leInfoText.visible = true;
+		}
+		if (leInfoText.visible)
+		{
+			leInfoText.y = summaryText.y + summaryText.textField.textHeight + 4 + summaryText.borderSize * 2 + 2;
 		}
 
 		if (report.findings.length == 0)

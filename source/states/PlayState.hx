@@ -979,12 +979,11 @@ isReplaying = false;
 		
 		#if (LUA_ALLOWED || HSCRIPT_ALLOWED)
 		// "SCRIPTS FOLDER" SCRIPTS
-		// Leather Engine 兼容：当前谱面是 LE 系（format=LEATHER/LEATHER LTS）且脚本层启用时，
-		// scripts/*.lua 走 LeatherLuaScript（LE API），否则走 FunkinLua（Psych API）。
-		var leatherScriptActive:Bool = isLeatherChartFormat()
-			&& psychlua.leather.LeatherScriptRouter.isActive(SONG.format);
-		var leatherApiVer:String = leatherScriptActive
-			? psychlua.leather.LeatherScriptRouter.resolveVersion(SONG.format) : 'official';
+		// Leather Engine API 兼容：设置非 off 时启用 LE API 运行时，并支持与 Psych API 共存——
+		// auto 模式下按脚本内容自动分流（LE API 脚本走 LeatherLuaScript，Psych API 脚本走 FunkinLua，
+		// 同一模组可两种脚本并存）；official/lts 强制全部走 LE；off 则全部按 Psych API。
+		var leatherScriptActive:Bool = psychlua.leather.LeatherScriptRouter.isActive(SONG.format);
+		var leatherApiVer:String = psychlua.leather.LeatherScriptRouter.resolveVersion(SONG.format);
 		for (folder in Mods.directoriesWithFile(Paths.getSharedPath(), 'scripts/'))
 			#if linux
 			for (file in CoolUtil.sortAlphabetically(Paths.readDirectory(folder)))
@@ -996,7 +995,13 @@ isReplaying = false;
 				if(file.toLowerCase().endsWith('.lua'))
 				{
 					if (leatherScriptActive)
-						leatherLuaArray.push(new psychlua.leather.LeatherLuaScript(folder + file, leatherApiVer, Mods.currentModDirectory));
+					{
+						// 脚本级自动分流：内容检测命中 Psych API → Psych 运行时，否则走 LE 运行时
+						if (psychlua.leather.LeatherScriptRouter.detectScriptRuntime(folder + file, SONG.format) == 'psych')
+							new FunkinLua(folder + file);
+						else
+							leatherLuaArray.push(new psychlua.leather.LeatherLuaScript(folder + file, leatherApiVer, Mods.currentModDirectory));
+					}
 					else
 						new FunkinLua(folder + file);
 				}

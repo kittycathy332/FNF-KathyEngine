@@ -26,8 +26,11 @@ using StringTools;
 
 class CompatDbGen
 {
-	// 版本下标顺序固定为: 0=kathy, 1=1.0.4, 2=0.7.3, 3=0.6.3（与 CompatData.VERSIONS 一致）
-	static inline var V_COUNT:Int = 4;
+	// 版本下标顺序固定为: 0=kathy, 1=1.0.4, 2=0.7.3, 3=0.6.3, 4=le（LE API 运行时）
+	// （与 CompatData.VERSIONS 一致；le = LeatherLuaScript 提供的 LE API，官方/LTS 合并）
+	static inline var V_COUNT:Int = 5;
+	// 需要独立目录扫描的版本数（LE 数据从 kathy 源码的 LeatherLuaScript.hx / PlayState.hx 提取，见 extract()）
+	static inline var SCAN_DIRS:Int = 4;
 
 	// 各版本的函数 / 钩子集合
 	static var funcFound:Array<Map<String, Bool>>;
@@ -63,7 +66,7 @@ class CompatDbGen
 		funcFound = [for (_ in 0...V_COUNT) new Map<String, Bool>()];
 		hookFound = [for (_ in 0...V_COUNT) new Map<String, Bool>()];
 
-		for (i in 0...V_COUNT)
+		for (i in 0...SCAN_DIRS)
 		{
 			if (!FileSystem.exists(dirs[i]))
 			{
@@ -94,13 +97,13 @@ class CompatDbGen
 			else if (e.endsWith('.hx'))
 			{
 				fileCount++;
-				extract(File.getContent(full), version);
+				extract(File.getContent(full), version, full);
 			}
 		}
 	}
 
 	/** 从单个文件内容里提取函数名与钩子名 */
-	static function extract(src:String, version:Int):Void
+	static function extract(src:String, version:Int, path:String = ''):Void
 	{
 		// Lua_helper.add_callback(lua, "name", ...) —— 名字是第 2 个参数（前面有逗号）
 		collectFromCalls(src, 'add_callback', true, funcFound[version]);
@@ -114,6 +117,25 @@ class CompatDbGen
 		collectFromCalls(src, 'call', false, hookFound[version], isHookName);
 		// 变量派发：xxx ? 'goodNoteHit' : 'opponentNoteHit'
 		collectTernaries(src, hookFound[version], isHookName);
+
+		// ---- LE API 运行时（下标 4）：Kathy 移植版的两个关键文件 ----
+		if (version == 0)
+		{
+			// LeatherLuaScript.hx 的 setFunction('name', ...) 注册 → LE 全局函数。
+			// Kathy 自带 LE 运行时，故同时写 kathy 位（下标 0）与 le 位（下标 4）。
+			if (path.indexOf('psychlua/leather/LeatherLuaScript.hx') >= 0)
+			{
+				collectFromCalls(src, 'setFunction', false, funcFound[4]);
+				collectFromCalls(src, 'setFunction', false, funcFound[0]);
+			}
+			// PlayState.hx 的 callOnLeatherScripts('name', ...) 广播 → LE 回调钩子
+			// （LE 钩子名不全是 onXxx（update/popUpScore/playerOneSing…），不过滤）
+			if (path.indexOf('states/PlayState.hx') >= 0)
+			{
+				collectFromCalls(src, 'callOnLeatherScripts', false, hookFound[4]);
+				collectFromCalls(src, 'callOnLeatherScripts', false, hookFound[0]);
+			}
+		}
 	}
 
 	/** 合法钩子名的判定：on + 大写字母开头，或在 HOOK_EXTRA 白名单内 */
@@ -231,11 +253,11 @@ class CompatDbGen
 		sb.add(' * 生成器: tools/CompatDbGen.hx\n');
 		sb.add(' * 生成命令: haxe -cp tools --run CompatDbGen <kathySrc> <pe104Src> <pe073Src> <pe063Src> <outFile>\n');
 		sb.add(' *\n');
-		sb.add(' * 掩码顺序: kathy, 1.0.4, 0.7.3, 0.6.3 （\'1\'=该版本提供，\'0\'=不提供）\n');
+		sb.add(' * 掩码顺序: kathy, 1.0.4, 0.7.3, 0.6.3, le （\'1\'=该版本提供，\'0\'=不提供；le=LE API 运行时）\n');
 		sb.add(' */\n');
 		sb.add('package psychlua.compat;\n\n');
 		sb.add('class CompatData\n{\n');
-		sb.add('\tpublic static final VERSIONS:Array<String> = [\'kathy\', \'1.0.4\', \'0.7.3\', \'0.6.3\'];\n\n');
+		sb.add('\tpublic static final VERSIONS:Array<String> = [\'kathy\', \'1.0.4\', \'0.7.3\', \'0.6.3\', \'le\'];\n\n');
 
 		emitMask(sb, 'Lua 全局函数名 => 提供该函数的版本掩码', funcFound, 'FUNC_MASK');
 		emitMask(sb, '回调钩子名 => 会分发该钩子的版本掩码', hookFound, 'HOOK_MASK');
