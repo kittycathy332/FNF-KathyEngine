@@ -167,7 +167,7 @@ class NoteHoldCover extends FlxSprite
 	/** 根据列 RGB 颜色配置 shader（仅 RGB 皮肤调用） */
 	public function applyRGB(data:Int):Void
 	{
-		var idx:Int = Note.styleIndex(data);
+		var idx:Int = getCoverStyleIndex(data);
 		rgbShader = new RGBShaderReference(this, Note.initializeGlobalRGBShader(idx));
 		var arr:Array<FlxColor> = (idx > -1 && idx < ClientPrefs.data.arrowRGB.length) ? ClientPrefs.data.arrowRGB[idx] : null;
 		if (PlayState.isPixelStage && idx > -1 && idx < ClientPrefs.data.arrowRGBPixel.length) arr = ClientPrefs.data.arrowRGBPixel[idx];
@@ -193,12 +193,25 @@ class NoteHoldCover extends FlxSprite
 		if (this.config != null && this.config.disableRGB) rgbShader.enabled = false;
 	}
 
-	public static function getColorForData(data:Int):String
+	// LE LTS 双侧：本 hold cover 生效的样式索引。
+	// 对手侧 strum 的覆盖层按对手键数档位（keyCount-1）取色，非双侧/玩家侧=玩家档 styleIndex。
+	function getCoverStyleIndex(data:Int):Int
+	{
+		if (targetStrum != null && PlayState.instance != null && PlayState.instance.isLeDualChart && !targetStrum.isPlayerSide())
+		{
+			var oppMania:Int = (PlayState.SONG != null && PlayState.SONG.keyCount != null) ? Std.int(PlayState.SONG.keyCount) - 1 : 3;
+			if (ExtraKeysHandler.instance != null) return ExtraKeysHandler.instance.globalIndex(oppMania, data);
+			return data % 4;
+		}
+		return Note.styleIndex(data);
+	}
+
+	public function getColorForData(data:Int):String
 	{
 		// Extra Keys：多键按 EK 样式方向映射素材色（与箭头/飞溅配色一致），
 		// 使 HSV 素材（仅 4 色）尽量贴近列色（如 6k 列4 青→Blue、列5 蓝→Blue）；映射不到回退 4 色周期
 		try {
-			var style:Int = Note.styleIndex(data);
+			var style:Int = getCoverStyleIndex(data);
 			if (ExtraKeysHandler.instance != null && ExtraKeysHandler.instance.data != null
 				&& ExtraKeysHandler.instance.data.animations != null
 				&& style > -1 && style < ExtraKeysHandler.instance.data.animations.length)
@@ -487,7 +500,8 @@ class NoteHoldCover extends FlxSprite
 			refreshScale();
 
 			// 位置由 JSON 偏移决定（以 strum 左上角为锚点）：全局 offsets + 各段自身偏移，不做自动居中
-			var k:Float = PlayState.strumScale;
+			// LE LTS 双侧：按所属 strum 侧取缩放（玩家=playerStrumScale、对手=opponentStrumScale；非双侧=全局）
+			var k:Float = PlayState.getNoteSideScale(targetStrum.isPlayerSide());
 			var curOff:Array<Float> = getCurrentOffset();
 			x = targetStrum.x + (curOff[0] + animOffset[0]) * k;
 			y = targetStrum.y + (curOff[1] + animOffset[1]) * k;

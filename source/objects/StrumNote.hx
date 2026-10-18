@@ -36,6 +36,12 @@ class StrumNote extends FlxSprite
 	public var sustainReduce:Bool = true;
 	private var player:Int;
 
+	// 所属侧（LE LTS 双侧：供 NoteHoldCover 等按侧取 strum 缩放；1=玩家、0=对手）
+	public function isPlayerSide():Bool
+	{
+		return player == 1;
+	}
+
 	private function set_direction(value:Float):Float {
 		if (direction != value) {
 			direction = value;

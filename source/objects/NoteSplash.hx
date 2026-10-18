@@ -263,7 +263,8 @@ class NoteSplash extends FlxSprite
 		// 多键：飞溅 scale/offset 随 strumScale 缩放（4k=1 原样）。
 		// 定位基准保持 Psych 原版固定值（不乘 strumScale）：渲染中心 = x_pos - offset + origin，
 		// origin 是贴图原始半宽（固定不随缩放变），若定位也缩放会把贴图中心推向一侧造成错位。
-		var splashScale:Float = PlayState.strumScale;
+		// LE LTS 双侧：按命中音符所属侧取缩放（玩家=playerStrumScale、对手=opponentStrumScale；非双侧=全局）
+		var splashScale:Float = (note != null) ? PlayState.getNoteSideScale(note.mustPress) : PlayState.strumScale;
 		if (babyArrow != null)
 			setPosition(babyArrow.x - Note.swagWidth * 0.95, babyArrow.y - Note.swagWidth); // To prevent it from being misplaced for one game tick
 
@@ -278,7 +279,8 @@ class NoteSplash extends FlxSprite
 
 		// Legacy HSV path: apply the note's HSV splash shift via ColorSwap and skip the RGB setup.
 		if(ClientPrefs.data.arrowColorMode == 'HSV') {
-			var nd:Int = Note.styleIndex(noteData); // 多键：按全局样式索引取 arrowHSV
+			// LE LTS 双侧：按命中音符所属侧取样式索引（对手侧用对手键数档位）
+			var nd:Int = (note != null) ? note.getStyleIndex() : Note.styleIndex(noteData); // 多键：按全局样式索引取 arrowHSV
 			var hue:Float = 0;
 			var sat:Float = 0;
 			var brt:Float = 0;
@@ -300,7 +302,8 @@ class NoteSplash extends FlxSprite
 			this.shader = colorSwap.shader;
 		} else {
 			var tempShader:RGBPalette = null;
-			var splashStyle:Int = Note.styleIndex(noteData); // 多键：列号→全局样式索引（取色用）
+			// LE LTS 双侧：按命中音符所属侧取样式索引（对手侧用对手键数档位）
+			var splashStyle:Int = (note != null) ? note.getStyleIndex() : Note.styleIndex(noteData); // 多键：列号→全局样式索引（取色用）
 			if (config.allowRGB)
 			{
 				Note.initializeGlobalRGBShader(splashStyle);
