@@ -182,14 +182,19 @@ class ChartingState extends MusicBeatState implements PsychUIEventHandler.PsychU
 
 	// —— LE LTS 双侧：不对称网格列数 ——
 	// 双侧模式下玩家/对手网格各自独立列数（网格布局/轨道色块/静态箭头/鼠标映射全部按各自列数渲染）；
-	// 非双侧 = 两侧同值（GRID_COLUMNS_PER_PLAYER，即 mania+1）。
+	// 非双侧 = 实时读 SONG.mania+1（不能用静态 GRID_COLUMNS_PER_PLAYER——那是上次重建的缓存值，
+	// 键数修改后若不重读 mania 会导致 applySectionColumns 的重建条件恒 false，轨道无变化）。
 	public static function playerGridCols():Int
 	{
-		return isDualChart() ? dualPlayerKeyCount() : GRID_COLUMNS_PER_PLAYER;
+		if (isDualChart()) return dualPlayerKeyCount();
+		if (PlayState.SONG != null && PlayState.SONG.mania != null) return Std.int(PlayState.SONG.mania) + 1;
+		return GRID_COLUMNS_PER_PLAYER;
 	}
 	public static function opponentGridCols():Int
 	{
-		return isDualChart() ? dualOpponentKeyCount() : GRID_COLUMNS_PER_PLAYER;
+		if (isDualChart()) return dualOpponentKeyCount();
+		if (PlayState.SONG != null && PlayState.SONG.mania != null) return Std.int(PlayState.SONG.mania) + 1;
+		return GRID_COLUMNS_PER_PLAYER;
 	}
 
 	// 上次网格重建时的两侧列数（用于检测键数变化触发重建；双侧下编辑侧切换不触发）
@@ -1390,7 +1395,8 @@ if(_shouldReset) Conductor.songPosition = 0;
 		Conductor.offset = audioOffsetStepper.value;
 
 		if (maniaStepper != null)
-			maniaStepper.value = (PlayState.SONG.mania != null) ? PlayState.SONG.mania : 3;
+			maniaStepper.value = (PlayState.SONG.playerKeyCount != null) ? Std.int(PlayState.SONG.playerKeyCount)
+				: ((PlayState.SONG.mania != null) ? Std.int(PlayState.SONG.mania) + 1 : 4);
 		if (opponentKeyStepper != null)
 			opponentKeyStepper.value = (PlayState.SONG.keyCount != null && PlayState.SONG.keyCount >= 1) ? Std.int(PlayState.SONG.keyCount) : 4;
 		// 两个键数设置项始终显示（Psych/EK 谱面两侧默认同值）；双侧模式显示编辑侧切换按钮
@@ -3640,6 +3646,10 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 	{
 		var cols = getSectionColumns(secNum);
 		var mania = getSectionMania(secNum);
+		// LE LTS 双侧：双侧下 colArray 按"当前编辑侧"的键数档位取（玩家侧=playerKeyCount-1、对手侧=keyCount-1），
+		// 而非全局 SONG.mania（双侧谱面通常无 mania 字段，回退 4 键档会导致分侧编辑时轨道颜色错误）。
+		if (isDualChart())
+			mania = (editorSide == 0) ? (dualPlayerKeyCount() - 1) : (dualOpponentKeyCount() - 1);
 
 		// Extra Keys：按 mania 档位从 extrakeys.json 填充每列的颜色前缀与 sing 动画名。
 		// 4 键档位结果与原生硬编码完全一致（purple/blue/green/red + singLEFT/DOWN/UP/RIGHT）。
@@ -6493,13 +6503,19 @@ for (i in 0...GRID_PLAYERS)
 
 		// Extra Keys：键数档位（0=1键 ... 17=18键；4 键 = 3）。改键数会重建网格列数与轨道色块。
 		// 位置：BPM 所在行的下一行（objY+40）第一列（objX）；对手键数在第二列（objX+110）。
-		// LE LTS 双侧（分侧编辑，两个独立设置项）：此 stepper = 玩家侧键数档（playerKeyCount），始终显示；
+		// LE LTS 双侧（分侧编辑，两个独立设置项）：此 stepper = 玩家侧键数（playerKeyCount，1..18），始终显示；
 		// 对手侧键数（keyCount）由 opponentKeyStepper 独立控制。两者相等时保存为 EK/Psych 格式（mania），不等时保存为 LE 格式。
-		maniaStepper = new PsychUINumericStepper(objX, objY + 40, 1, 3, 0, 17, 0, 80);
+		// 注意：此处 value 为"键数"（1..18），与对手 stepper 同单位；内部换算档位 = 键数-1。
+		maniaStepper = new PsychUINumericStepper(objX, objY + 40, 1, 4, 1, 18, 0, 80);
 		maniaStepper.onValueChange = function()
 		{
-			PlayState.SONG.mania = Std.int(maniaStepper.value);
-			PlayState.SONG.playerKeyCount = Std.int(maniaStepper.value) + 1; // 玩家侧始终独立记录
+			var newKeys:Int = Std.int(maniaStepper.value);
+			var wasDual:Bool = isDualChart(); // 修改前状态（playerKeyCount/keyCount 尚未变更）
+			PlayState.SONG.mania = newKeys - 1;
+			PlayState.SONG.playerKeyCount = newKeys;
+			// 原本相等（Psych/EK 语义）：改玩家键数时同步对手键数，保持两侧相等（立即整体生效、值显示一致）；
+			// 已双侧（LE 分侧语义）：只改玩家侧，对手保持独立。
+			if (!wasDual) PlayState.SONG.keyCount = newKeys;
 			refreshDualUI();
 			applySectionColumns(curSec);
 			updateJsonData();
@@ -6509,7 +6525,15 @@ for (i in 0...GRID_PLAYERS)
 		opponentKeyStepper = new PsychUINumericStepper(objX + 110, objY + 40, 1, 4, 1, 18, 0, 80);
 		opponentKeyStepper.onValueChange = function()
 		{
-			PlayState.SONG.keyCount = Std.int(opponentKeyStepper.value);
+			var newKeys:Int = Std.int(opponentKeyStepper.value);
+			var wasDual:Bool = isDualChart(); // 修改前状态
+			PlayState.SONG.keyCount = newKeys;
+			// 原本相等：改对手键数时同步玩家侧（playerKeyCount + mania），保持相等、立即整体生效。
+			if (!wasDual)
+			{
+				PlayState.SONG.playerKeyCount = newKeys;
+				PlayState.SONG.mania = newKeys - 1;
+			}
 			refreshDualUI();
 			applySectionColumns(curSec);
 			updateJsonData();
