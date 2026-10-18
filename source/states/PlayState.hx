@@ -2691,7 +2691,8 @@ tempScore += '${lblScore}: ${songScore}';
 	}
 
 	private var noteTypes:Array<String> = [];
-	private var totalColumns: Int = 4;
+	// LE LTS 双侧：玩家侧运行时键数（change keycount 改键后更新；StrumNote/Note 等按侧取档位需要公开访问）
+	public var totalColumns: Int = 4;
 	private var diagFrame:Int = 0; // 错位诊断计数
 
 	private function generateSong():Void
@@ -4045,6 +4046,12 @@ tempScore += '${lblScore}: ${songScore}';
 		generateStaticArrows(0, true);
 		generateStaticArrows(1, true);
 
+		// 新 strums 构造后无动画（resetAnim=0 → update 不会播 static → curAnim=null）：
+		// 渲染会停在图集首帧（全组显示同一帧左箭头），且按键判定处读 curAnim.name 会取到 null。
+		// 立即播 static 使每根 strum 有正确的本列静态帧与动画状态。
+		for (s in playerStrums) if (s != null) s.playAnim('static');
+		for (s in opponentStrums) if (s != null) s.playAnim('static');
+
 		// 改键后：场上音符折叠到新键数（取模重映射 noteData + 重排 x + 换新档配色动画 + 按新 scale 重缩），
 		// 与新建 strums 完全匹配；sustain 长条随 head 一起折叠（head 已重映射，tail 复制其新 noteData）。
 		remapNotesToNewKeyCount();
@@ -4092,9 +4099,15 @@ tempScore += '${lblScore}: ${songScore}';
 	{
 		if (PlayState.isPixelStage || n.genStrumScale <= 0) return;
 		var want:Float = PlayState.getNoteSideScale(n.mustPress);
-		if (Math.abs(want - n.genStrumScale) < 0.001) return;
-		// baseScale 为 loadNoteAnims 的 0.7 基准 × 生成时 scale；除以生成时 scale 还原基准再乘新 scale
-		n.scale.x = n.baseScaleX / n.genStrumScale * want;
+		// baseScale 为 0.7 基准 × 生成时 scale（等比例）：每次改键都从原始基准重算，
+		// 目标 = baseScale / 生成时scale × 新scale。与"当前 scale 是否已等于目标"比较，
+		// 避免第二次改键时因 want == 生成时scale 提前 return（滚动箭头停在第一次缩放的大小）。
+		var targetX:Float = n.baseScaleX / n.genStrumScale * want;
+		if (Math.abs(n.scale.x - targetX) < 0.001) return;
+		n.scale.x = targetX;
+		// head 音符 x/y 等比（避免高键→低键时只改宽导致箭头变扁）；
+		// sustain tail 的 scale.y 是长条长度（baseScale 后又经长条逻辑调整），只等比 x，不破坏长度。
+		if (!n.isSustainNote) n.scale.y = n.baseScaleY / n.genStrumScale * want;
 		n.updateHitbox();
 	}
 
@@ -4386,7 +4399,7 @@ tempScore += '${lblScore}: ${songScore}';
 
 							// 空按 - 播放pressed动画
 							var spr:StrumNote = playerSideStrums().members[replayAction.key];
-							if(spr != null && strumsBlocked[replayAction.key] != true && spr.animation.curAnim.name != 'confirm')
+							if(spr != null && strumsBlocked[replayAction.key] != true && (spr.animation.curAnim == null || spr.animation.curAnim.name != 'confirm'))
 							{
 								spr.playAnim('pressed');
 								spr.resetAnim = 0; // 不自动重置，由按键释放时重置
@@ -6913,7 +6926,7 @@ tempScore += '${lblScore}: ${songScore}';
 	if (preciseHit) Conductor.songPosition = lastTime;
 
 		var spr:StrumNote = playerSideStrums().members[key];
-		if(strumsBlocked[key] != true && spr != null && spr.animation.curAnim.name != 'confirm')
+		if(strumsBlocked[key] != true && spr != null && (spr.animation.curAnim == null || spr.animation.curAnim.name != 'confirm'))
 		{
 			spr.playAnim('pressed');
 			spr.resetAnim = 0; // 不自动重置，由按键释放时重置
