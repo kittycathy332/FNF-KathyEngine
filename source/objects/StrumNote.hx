@@ -124,10 +124,11 @@ class StrumNote extends FlxSprite
 		texture = skin; //Load texture and anims
 		scrollFactor.set();
 
-		// LE LTS 双侧：对手侧 strum 颜色按对手键数档位重算（构造时 player 已设置，覆盖 super 前按玩家档的默认值）
+		// LE LTS 双侧：对手侧 strum 颜色按对手档位重算（构造时 player 已设置，覆盖 super 前按玩家档的默认值）。
+		// 档位用运行时 oppMania（change keycount 改键后为新档），而非 SONG.keyCount（保持谱面原始值）。
 		if (PlayState.instance != null && PlayState.instance.isLeDualChart && player != 1)
 		{
-			var oppManiaC:Int = (PlayState.SONG != null && PlayState.SONG.keyCount != null) ? Std.int(PlayState.SONG.keyCount) - 1 : 3;
+			var oppManiaC:Int = PlayState.instance.oppMania;
 			var styleC:Int = (ExtraKeysHandler.instance != null) ? ExtraKeysHandler.instance.globalIndex(oppManiaC, noteData) : (noteData % 4);
 			var arrC:Array<FlxColor> = (styleC > -1 && styleC < ClientPrefs.data.arrowRGB.length) ? ClientPrefs.data.arrowRGB[styleC] : null;
 			if(PlayState.isPixelStage && styleC > -1 && styleC < ClientPrefs.data.arrowRGBPixel.length) arrC = ClientPrefs.data.arrowRGBPixel[styleC];
@@ -201,10 +202,10 @@ class StrumNote extends FlxSprite
 
 			// 多键：按当前 mania 档位查 extrakeys.json 取 strum 前缀（LEFT/DOWN/UP/RIGHT/ROMBUS/CIRCLE）。
 			// UI 态（颜色菜单等）由 Note.uiManiaOverride 接管，游戏内仍用 PlayState.SONG.mania。
-			// LE LTS 双侧：对手侧 strum 按对手键数档位（keyCount-1）取前缀，与玩家侧独立。
+			// LE LTS 双侧：对手侧 strum 按对手档位（运行时 oppMania）取前缀，与玩家侧独立。
 			var mania:Int = Note.uiManiaOverride >= 0 ? Note.uiManiaOverride : ((PlayState.SONG != null && PlayState.SONG.mania != null) ? PlayState.SONG.mania : 3);
 			if (PlayState.instance != null && PlayState.instance.isLeDualChart && player != 1)
-				mania = (PlayState.SONG != null && PlayState.SONG.keyCount != null) ? Std.int(PlayState.SONG.keyCount) - 1 : mania;
+				mania = PlayState.instance.oppMania;
 			var strumName:String = ExtraKeysHandler.instance.strumName(mania, noteData);
 			if (!hasFrame('arrow' + strumName)) strumName = 'UP';
 

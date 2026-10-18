@@ -175,6 +175,12 @@ class Note extends FlxSprite
 	// null = 用全局 colArray（玩家侧/Psych/EK 路径）；对手侧音符由 PlayState 设为 opponentColArray。
 	public var noteColArray:Array<String> = null;
 
+	// LE LTS 双侧：本音符生成时刻的 EK 档位（玩家/对手）。change keycount 改键后 PlayState 会
+	// 折叠重映射音符并把这三者更新为新档，使动画名（noteColArray）与着色（getStyleIndex）始终匹配。
+	public var genMania:Int = -1;      // 生成时玩家侧档位（-1=用全局 SONG.mania）
+	public var genOppMania:Int = -1;   // 生成时对手侧档位（-1=用运行时 oppMania）
+	public var genStrumScale:Float = 1; // 生成时 strum 缩放（loadNoteAnims 记录，供改键后按新 scale 重缩）
+
 	// LE LTS 双侧：取本音符生效的列配色数组中的第 data 项（取模防御越界）。
 	// noteColArray 未设置时回退全局 colArray，保证 Psych/EK 路径零影响。
 	inline function colAt(data:Int):String
@@ -234,12 +240,17 @@ class Note extends FlxSprite
 		return ExtraKeysHandler.instance.globalIndex(mania, noteData);
 	}
 
-	// LE LTS 双侧：本音符生效的样式索引（双侧下对手侧音符按对手键数档位查色表，非双侧=styleIndex）
+	// LE LTS 双侧：本音符生效的样式索引（双侧下对手侧音符按对手键数档位查色表，非双侧=styleIndex）。
+	// 优先用生成时刻记录的 genMania/genOppMania（change keycount 改键折叠后已更新为新档），
+	// 保证与 noteColArray（动画名）一致；缺失时回退运行时档位。
 	public function getStyleIndex():Int
 	{
 		var mania:Int = Note.uiManiaOverride >= 0 ? Note.uiManiaOverride : ((PlayState.SONG != null && PlayState.SONG.mania != null) ? PlayState.SONG.mania : 3);
-		if (PlayState.instance != null && PlayState.instance.isLeDualChart && !mustPress)
-			mania = (PlayState.SONG != null && PlayState.SONG.keyCount != null) ? Std.int(PlayState.SONG.keyCount) - 1 : mania;
+		if (PlayState.instance != null && PlayState.instance.isLeDualChart)
+		{
+			if (!mustPress) mania = (genOppMania >= 0) ? genOppMania : PlayState.instance.oppMania;
+			else if (genMania >= 0) mania = genMania;
+		}
 		if (ExtraKeysHandler.instance == null) return noteData % 4;
 		return ExtraKeysHandler.instance.globalIndex(mania, noteData);
 	}
@@ -1040,9 +1051,10 @@ class Note extends FlxSprite
 
 		setGraphicSize(Std.int(width * 0.7));
 		// LE LTS 双侧：滚动音符按侧缩放（构造时 mustPress 尚未赋值，用 PlayState.currentSideMustPress 判断生成侧；
-		// 非双侧=全局 strumScale）
+		// 非双侧=全局 strumScale）；记录生成时 scale 供 change keycount 改键后按新 scale 重缩
 		var genSide:Bool = (PlayState.instance != null) ? PlayState.instance.currentSideMustPress : true;
 		var noteSideScale:Float = PlayState.getNoteSideScale(genSide);
+		genStrumScale = noteSideScale;
 		if (!PlayState.isPixelStage && noteSideScale != 1) scale.scale(noteSideScale);
 		updateHitbox();
 		// 记录基准 scale（供对象池 prepareForReuse 复位，消除 sustain 改前驱累积）

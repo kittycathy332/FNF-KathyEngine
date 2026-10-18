@@ -3269,10 +3269,15 @@ tempScore += '${lblScore}: ${songScore}';
 				swagNote.gfNote = (section.gfSection && mustPress == sectionMustHit);
 				swagNote.animSuffix = isAlt ? "-alt" : "";
 				swagNote.mustPress = mustPress;
-				// LE LTS 双侧：对手侧音符绑定对手列配色/动画数组，并立即刷新为正确配色
-				if (!mustPress && PlayState.instance.isLeDualChart)
+				// LE LTS 双侧：两侧音符都绑定生成时刻的列配色/动画数组并立即刷新——
+				// 对手侧=opponentColArray、玩家侧=Note.colArray（当时全局引用）；同时记录生成时档位，
+				// 供 change keycount 改键折叠后更新。绑定的是数组引用：applyMania/applyOpponentMania
+				// 会新建数组，改键时 remapNote 会换成新档，未改键前保持区间档（LE 语义）。
+				if (PlayState.instance.isLeDualChart)
 				{
-					swagNote.noteColArray = PlayState.instance.opponentColArray;
+					swagNote.noteColArray = mustPress ? Note.colArray : PlayState.instance.opponentColArray;
+					swagNote.genMania = curPlr - 1;
+					swagNote.genOppMania = curOpp - 1;
 					swagNote.refreshNoteVisual();
 				}
 				swagNote.sustainLength = holdLength;
@@ -3316,10 +3321,12 @@ tempScore += '${lblScore}: ${songScore}';
 						sustainNote.noteType = swagNote.noteType;
 						sustainNote.noteColumnRaw = swagNote.noteColumnRaw;
 						sustainNote.noteData = swagNote.noteData;
-						// LE LTS 双侧：对手侧长条绑定对手列配色并刷新（含前驱 head 的 hold 动画）
-						if (!swagNote.mustPress && PlayState.instance.isLeDualChart)
+						// LE LTS 双侧：两侧长条都绑定生成时刻的列配色并刷新（玩家=Note.colArray、对手=opponentColArray，含前驱 head 的 hold 动画）
+						if (PlayState.instance.isLeDualChart)
 						{
-							sustainNote.noteColArray = PlayState.instance.opponentColArray;
+							sustainNote.noteColArray = swagNote.mustPress ? Note.colArray : PlayState.instance.opponentColArray;
+							sustainNote.genMania = swagNote.genMania;
+							sustainNote.genOppMania = swagNote.genOppMania;
 							sustainNote.refreshNoteVisual();
 						}
 						sustainNote.scrollFactor.set();
@@ -4019,18 +4026,17 @@ tempScore += '${lblScore}: ${songScore}';
 		if (oppKeyCount < 1 || oppKeyCount > 18) oppKeyCount = 4;
 
 		// 无变化则跳过（防事件重复触发导致无谓重建）
-		var curPlr:Int = (SONG.playerKeyCount != null) ? SONG.playerKeyCount : ((SONG.keyCount != null) ? SONG.keyCount : 4);
-		var curOpp:Int = (SONG.keyCount != null) ? SONG.keyCount : curPlr;
+		var curPlr:Int = totalColumns;
+		var curOpp:Int = opponentColumns;
 		if (curPlr == playerKeyCount && curOpp == oppKeyCount) return;
 
 		isLeDualChart = true; // 事件显式进入双侧模式
-		SONG.playerKeyCount = playerKeyCount;
-		SONG.keyCount = oppKeyCount;
-
+		// 注意：不写 SONG.playerKeyCount/keyCount——SONG 保持谱面原始键数，
+		// 供重玩（restartSong/重进）恢复初始配置；运行键数由 applyMania/applyOpponentMania 维护。
 		applyMania(playerKeyCount - 1);
 		applyOpponentMania(oppKeyCount - 1);
 		if (totalColumns > 4 || opponentColumns > 4) computeMultiKeyStrumScale();
-		else strumScale = 1;
+		else { playerStrumScale = 1; opponentStrumScale = 1; strumScale = 1; }
 
 		// 重建两侧 strums（不播渐入）
 		playerStrums.clear();
@@ -4039,10 +4045,57 @@ tempScore += '${lblScore}: ${songScore}';
 		generateStaticArrows(0, true);
 		generateStaticArrows(1, true);
 
-		// 重排已生成音符（按 mustPress 侧 + 新键数居中，与 generateSongLeDual 同公式）
-		relayoutNotes();
+		// 改键后：场上音符折叠到新键数（取模重映射 noteData + 重排 x + 换新档配色动画 + 按新 scale 重缩），
+		// 与新建 strums 完全匹配；sustain 长条随 head 一起折叠（head 已重映射，tail 复制其新 noteData）。
+		remapNotesToNewKeyCount();
+		// hold cover 绑定的 strum 已被 clear 重建，需重新创建（绑定新 strums、按新档着色）
+		createHoldCovers();
 
 		trace('[LE DUAL] changeKeyCounts -> player=${playerKeyCount}K opponent=${oppKeyCount}K');
+	}
+
+	// —— 改键后音符折叠重映射（与新建 strums 匹配） ——
+	public function remapNotesToNewKeyCount():Void
+	{
+		for (note in unspawnNotes)
+			if (note != null) remapNote(note);
+		for (note in notes)
+			if (note != null) remapNote(note);
+	}
+
+	private function remapNote(n:Note):Void
+	{
+		var sideCols:Int = n.mustPress ? totalColumns : opponentColumns;
+		// 1) noteData 折叠到新键数（超界列取模，避免命中时 strum 越界无 confirm / 动画错位）
+		if (n.noteData >= sideCols)
+		{
+			n.noteData = n.noteData % sideCols;
+			n.ID = n.noteData;
+			// 长条段（tail）跟随 head 折叠：此处直接改 head 与其 tail 的 noteData
+			if (n.tail != null) for (t in n.tail) if (t != null) { t.noteData = n.noteData; t.ID = n.noteData; }
+		}
+		// 2) 换新档配色/动画数组 + 档位记录，立即刷新动画与着色
+		if (PlayState.instance.isLeDualChart)
+		{
+			n.noteColArray = n.mustPress ? Note.colArray : PlayState.instance.opponentColArray;
+			n.genMania = totalColumns - 1;
+			n.genOppMania = opponentColumns - 1;
+			n.refreshNoteVisual();
+		}
+		// 3) x 按新键数 + 新侧 scale 重排
+		relayoutNoteX(n);
+		// 4) 按新侧 scale 重缩（宽度；sustain 的 y 为长条长度逻辑，不动）
+		rescaleNote(n);
+	}
+
+	private function rescaleNote(n:Note):Void
+	{
+		if (PlayState.isPixelStage || n.genStrumScale <= 0) return;
+		var want:Float = PlayState.getNoteSideScale(n.mustPress);
+		if (Math.abs(want - n.genStrumScale) < 0.001) return;
+		// baseScale 为 loadNoteAnims 的 0.7 基准 × 生成时 scale；除以生成时 scale 还原基准再乘新 scale
+		n.scale.x = n.baseScaleX / n.genStrumScale * want;
+		n.updateHitbox();
 	}
 
 	// 重排场上/待生成音符的 x 位置（change keycount 事件后调用）

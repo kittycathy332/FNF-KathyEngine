@@ -194,12 +194,12 @@ class NoteHoldCover extends FlxSprite
 	}
 
 	// LE LTS 双侧：本 hold cover 生效的样式索引。
-	// 对手侧 strum 的覆盖层按对手键数档位（keyCount-1）取色，非双侧/玩家侧=玩家档 styleIndex。
+	// 对手侧 strum 的覆盖层按对手档位（运行时 oppMania）取色，非双侧/玩家侧=玩家档 styleIndex。
 	function getCoverStyleIndex(data:Int):Int
 	{
 		if (targetStrum != null && PlayState.instance != null && PlayState.instance.isLeDualChart && !targetStrum.isPlayerSide())
 		{
-			var oppMania:Int = (PlayState.SONG != null && PlayState.SONG.keyCount != null) ? Std.int(PlayState.SONG.keyCount) - 1 : 3;
+			var oppMania:Int = PlayState.instance.oppMania;
 			if (ExtraKeysHandler.instance != null) return ExtraKeysHandler.instance.globalIndex(oppMania, data);
 			return data % 4;
 		}

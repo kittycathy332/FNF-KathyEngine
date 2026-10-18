@@ -126,8 +126,8 @@ class LeatherLuaScript
 		set('bpm', Conductor.bpm);
 		set('songBpm', PlayState.SONG.bpm);
 		set('keyCount', PlayState.SONG.keyCount);
-		// Kathy 的 SwagSong 暂无 playerKeyCount（LE 的玩家侧键数概念），先回落为 keyCount
-		set('playerKeyCount', PlayState.SONG.keyCount);
+		// LE 的玩家侧键数概念：Kathy 双侧谱面有 playerKeyCount（!= keyCount 时两侧独立），缺失时回落 keyCount
+		set('playerKeyCount', (PlayState.SONG.playerKeyCount != null) ? PlayState.SONG.playerKeyCount : PlayState.SONG.keyCount);
 		set('scrollspeed', PlayState.SONG.speed);   // LE 原版全小写
 		set('scrollSpeed', PlayState.SONG.speed);    // 兼容写法
 		set('stepCrochet', Conductor.stepCrochet);
