@@ -181,6 +181,11 @@ class Note extends FlxSprite
 	public var genOppMania:Int = -1;   // 生成时对手侧档位（-1=用运行时 oppMania）
 	public var genStrumScale:Float = 1; // 生成时 strum 缩放（loadNoteAnims 记录，供改键后按新 scale 重缩）
 
+	// change keycount 改键折叠前的原始列（-1=未折叠过）。
+	// 折叠（键数变小）时记录原始 noteData 并取模；键数恢复（>= 原列）时展开回原列，
+	// 避免 9k→6k→9k 后 7/8/9 列音符因取模不可逆而丢失。
+	public var origNoteData:Int = -1;
+
 	// LE LTS 双侧：取本音符生效的列配色数组中的第 data 项（取模防御越界）。
 	// noteColArray 未设置时回退全局 colArray，保证 Psych/EK 路径零影响。
 	inline function colAt(data:Int):String

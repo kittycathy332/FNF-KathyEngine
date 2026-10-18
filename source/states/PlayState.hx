@@ -4073,13 +4073,24 @@ tempScore += '${lblScore}: ${songScore}';
 	private function remapNote(n:Note):Void
 	{
 		var sideCols:Int = n.mustPress ? totalColumns : opponentColumns;
-		// 1) noteData 折叠到新键数（超界列取模，避免命中时 strum 越界无 confirm / 动画错位）
-		if (n.noteData >= sideCols)
+		// 1) noteData 折叠/展开（可逆）：改键变小取模折叠并记录原始列；键数恢复（能容纳原列）时展开回原列。
+		//    长条段（tail）跟随 head 同步折叠/展开，避免 9k→6k→9k 后高列音符丢失。
+		var newData:Int = n.noteData;
+		if (n.origNoteData >= 0)
 		{
-			n.noteData = n.noteData % sideCols;
-			n.ID = n.noteData;
-			// 长条段（tail）跟随 head 折叠：此处直接改 head 与其 tail 的 noteData
-			if (n.tail != null) for (t in n.tail) if (t != null) { t.noteData = n.noteData; t.ID = n.noteData; }
+			// 已折叠过：键数能容纳原列 → 展开恢复；否则按原列重新折叠
+			newData = (n.origNoteData < sideCols) ? n.origNoteData : (n.origNoteData % sideCols);
+		}
+		else if (n.noteData >= sideCols)
+		{
+			n.origNoteData = n.noteData;
+			newData = n.noteData % sideCols;
+		}
+		if (newData != n.noteData)
+		{
+			n.noteData = newData;
+			n.ID = newData;
+			if (n.tail != null) for (t in n.tail) if (t != null) { t.noteData = newData; t.ID = newData; t.origNoteData = n.origNoteData; }
 		}
 		// 2) 换新档配色/动画数组 + 档位记录，立即刷新动画与着色
 		if (PlayState.instance.isLeDualChart)
