@@ -467,6 +467,25 @@ class PlayState extends MusicBeatState
 	private var startArrowSkin:String = null;
 	private var startSplashSkin:String = null;
 
+	// —— LE LTS 双侧轨道数（跟随 EK 配置化结构：每侧一个 EK 档位） ——
+	// 玩家侧沿用 curMania/totalColumns/colArray/singAnimations/keysArray（applyMania 填充）；
+	// 对手侧由下列镜像字段承载（applyOpponentMania 填充，与 applyMania 同构）。
+	// isLeDualChart=true 时（谱面含 playerKeyCount 且 != keyCount）两侧轨道数独立，
+	// 解析按 LE 规则（mustHit 段连续编号）、事件 "change keycount" 可实时切换；false 时对手侧恒等于玩家侧。
+	public var isLeDualChart:Bool = false;
+	public var oppMania:Int = 3;
+	public var opponentColumns:Int = 4;
+	public var opponentColArray:Array<String> = ['purple', 'blue', 'green', 'red'];
+	public var opponentSingAnimations:Array<String> = ['singLEFT', 'singDOWN', 'singUP', 'singRIGHT'];
+
+	// LE LTS 双侧：两侧 strum/滚动音符的独立缩放（computeMultiKeyStrumScale 按各自键数与中心计算）。
+	// 非双侧两侧同值（= 原 strumScale 逻辑）；strumScale 主值保持玩家侧，兼容既有引用。
+	public var playerStrumScale:Float = 1;
+	public var opponentStrumScale:Float = 1;
+	// 当前正在生成的音符属于哪一侧（供 Note 构造时缩放：构造阶段 mustPress 尚未赋值，
+	// 由 generateSongLeDual 在 new Note() 前写入；非双侧/其他路径恒 true=主值，无影响）。
+	public var currentSideMustPress:Bool = true;
+
 	public var inCutscene:Bool = false;
 	public var skipCountdown:Bool = false;
 	var songLength:Float = 0;
@@ -2682,7 +2701,20 @@ tempScore += '${lblScore}: ${songScore}';
 
 		// Extra Keys：在解析谱面前先按歌曲 mania 档位配置好列数/颜色/键位，
 		// 否则下面 generateSongLegacy/Optimized 里的 sectCols 会按 4 键硬解析多键谱面。
-		applyMania((SONG != null && SONG.mania != null) ? SONG.mania : 3);
+		// LE LTS 双侧模式（谱面含 playerKeyCount 且 != keyCount）：玩家侧/对手侧各按独立 EK 档位配置；
+		// 非双侧模式对手侧恒等于玩家侧（isLeDualChart=false）。
+		isLeDualChart = (SONG != null && SONG.playerKeyCount != null && SONG.keyCount != null && SONG.playerKeyCount != SONG.keyCount);
+		if (isLeDualChart)
+		{
+			applyMania((SONG.playerKeyCount - 1));
+			applyOpponentMania((SONG.keyCount - 1));
+			// 双侧模式：两侧 strum/音符按各自键数与中心独立缩放（computeMultiKeyStrumScale 内按侧计算）
+			if (totalColumns > 4 || opponentColumns > 4) computeMultiKeyStrumScale();
+		}
+		else
+		{
+			applyMania((SONG != null && SONG.mania != null) ? SONG.mania : 3);
+		}
 
 		songSpeedType = ClientPrefs.getGameplaySetting('scrolltype');
 		switch(songSpeedType)
@@ -2876,7 +2908,10 @@ tempScore += '${lblScore}: ${songScore}';
 			trace('[OptimizedNoteLoading] setting=OFF → LEGACY (eager note creation)');
 		}
 
-		if (useOptimizedLoading) {
+		if (isLeDualChart) {
+			// LE LTS 双侧模式：独立 LE 解析路径（mustHit 段连续编号 + change keycount 事件时间点推进键数）
+			generateSongLeDual(sectionsData, daBpm, oldNote, ghostNotesCaught);
+		} else if (useOptimizedLoading) {
 			// 优化模式：暂存音符对象，延迟添加到游戏世界
 			generateSongOptimized(sectionsData, daBpm, oldNote, ghostNotesCaught);
 		} else {
@@ -3124,9 +3159,219 @@ tempScore += '${lblScore}: ${songScore}';
 		trace('["${SONG.song.toUpperCase()}" CHART INFO]: Ghost Notes Cleared: $ghostNotesCaught');
 	}
 
-	/**
-	 * 优化音符生成方式 - 预加载数据，延迟创建 Note 对象
-	 */
+	// —— LE LTS 双侧模式解析（跟随 EK 配置化结构：按侧独立键数；逻辑参考 LE：连续编号 noteData + change keycount 事件实时推进）——
+	// 仅 isLeDualChart（谱面含 playerKeyCount 且 != keyCount）时由 generateSong 分流调用。
+	// 谱面 noteData 为 LE 连续编号：mustHit 小节 0..plr-1 = 玩家、plr..plr+opp-1 = 对手；
+	// 非 mustHit 小节 0..opp-1 = 对手、opp..opp+plr-1 = 玩家。
+	// change keycount 事件（value1=玩家键数、value2=对手键数）按时间点实时切换两侧键数；
+	// 音符按生成时刻固化"侧内列"（不随后续事件二次取模），直接生成 Note 对象（legacy 式，x 按侧居中）。
+	private function generateSongLeDual(sectionsData:Array<SwagSection>, daBpm:Float, oldNote:Note, ghostNotesCaught:Int):Void
+	{
+		// 预扫描 change keycount 事件（SONG.events 由 Song.getChart 合并 events.json 而来，可能为空）
+		var maniaChanges:Array<Array<Dynamic>> = [];
+		if (SONG.events != null)
+			for (event in SONG.events)
+				if (event != null && event[1] != null)
+					for (i in 0...event[1].length)
+					{
+						var ev:Array<Dynamic> = event[1][i];
+						if (ev != null && ev.length >= 4 && Std.string(ev[1]).toLowerCase() == 'change keycount')
+							maniaChanges.push([Std.parseFloat(Std.string(ev[0])), Std.parseInt(Std.string(ev[2])), Std.parseInt(Std.string(ev[3]))]);
+					}
+		maniaChanges.sort(function(a:Array<Dynamic>, b:Array<Dynamic>):Int { return (a[0] < b[0]) ? -1 : ((a[0] > b[0]) ? 1 : 0); });
+		var mcIndex:Int = 0;
+
+		// 去重查找表（与 generateSongLegacy 同构）
+		var ghostNoteMap:Map<String, Note> = new Map();
+
+		var curPlr:Int = (SONG.playerKeyCount != null) ? SONG.playerKeyCount : 4; // 玩家侧当前键数
+		var curOpp:Int = (SONG.keyCount != null) ? SONG.keyCount : 4;             // 对手侧当前键数
+
+		trace('["${SONG.song.toUpperCase()}" CHART INFO]: LE LTS dual-keycount loading (player=${SONG.playerKeyCount}K opponent=${SONG.keyCount}K)');
+
+		for (section in sectionsData)
+		{
+			if (section.changeBPM != null && section.changeBPM && section.bpm != null && daBpm != section.bpm)
+				daBpm = section.bpm;
+
+			// 按本小节首个音符时间推进 change keycount 事件（LE：事件在时间轴上生效）；
+			// 空小节无音符不推进（下一有音符小节会推进）
+			var sectionStartTime:Float = (section.sectionNotes != null && section.sectionNotes.length > 0)
+				? Std.parseFloat(Std.string(section.sectionNotes[0][0])) : 0.0;
+			while (mcIndex < maniaChanges.length && maniaChanges[mcIndex][0] <= sectionStartTime)
+			{
+				curPlr = maniaChanges[mcIndex][1];
+				curOpp = maniaChanges[mcIndex][2];
+				trace('[LE DUAL] change keycount @${maniaChanges[mcIndex][0]}ms -> player=${curPlr}K opponent=${curOpp}K');
+				mcIndex++;
+			}
+
+			if (section.sectionNotes == null) continue;
+
+			var sectionMustHit:Bool = section.mustHitSection;
+
+			for (i in 0...section.sectionNotes.length)
+			{
+				final songNotes:Array<Dynamic> = section.sectionNotes[i];
+				var spawnTime:Float = songNotes[0];
+				var rawColumn:Int = Std.int(songNotes[1]);
+				var holdLength:Float = songNotes[2];
+				// Leather 谱面音符：[time, data, length, 0, "type"]——type 在第 5 位；Psych 在第 4 位。
+				var noteType:String;
+				if (songNotes.length > 4 && Std.isOfType(songNotes[4], String))
+					noteType = songNotes[4];
+				else
+					noteType = !Std.isOfType(songNotes[3], String) ? Note.defaultNoteTypes[songNotes[3]] : songNotes[3];
+				if (Math.isNaN(holdLength)) holdLength = 0.0;
+
+				// LE 连续编号 → mustPress + 侧内列（按小节归属 + 当前两侧键数；取模防御越界）
+				var mustPress:Bool;
+				var noteColumn:Int;
+				if (sectionMustHit)
+				{
+					mustPress = rawColumn < curPlr;
+					noteColumn = mustPress ? (rawColumn % curPlr) : ((rawColumn - curPlr) % curOpp);
+				}
+				else
+				{
+					mustPress = rawColumn >= curOpp;
+					noteColumn = mustPress ? ((rawColumn - curOpp) % curPlr) : (rawColumn % curOpp);
+				}
+
+				if (i != 0) {
+					// CLEAR ANY POSSIBLE GHOST NOTES（与 legacy 一致）
+					var ghostKey:String = '${noteColumn}_${mustPress}_${noteType}_$spawnTime';
+					if (ghostNoteMap.exists(ghostKey))
+					{
+						var evilNote:Note = ghostNoteMap.get(ghostKey);
+						if (evilNote.tail.length > 0)
+							for (tail in evilNote.tail)
+							{
+								tail.destroy();
+								unspawnNotes.remove(tail);
+							}
+						evilNote.destroy();
+						unspawnNotes.remove(evilNote);
+						ghostNotesCaught++;
+					}
+				}
+
+				// 修正构造时缩放所依据的生成侧：先写 currentSideMustPress 再 new Note
+				// （构造阶段 mustPress 尚未赋值，Note 的 loadNoteAnims 依此按侧缩放）
+				if (PlayState.instance.isLeDualChart)
+					PlayState.instance.currentSideMustPress = mustPress;
+				var swagNote:Note = new Note(spawnTime, noteColumn, oldNote);
+				// 保留原始 LE 连续编号（供需要时重映射）
+				swagNote.noteColumnRaw = rawColumn;
+				swagNote.noteData = noteColumn;
+
+				var isAlt:Bool = section.altAnim && !mustPress;
+				swagNote.gfNote = (section.gfSection && mustPress == sectionMustHit);
+				swagNote.animSuffix = isAlt ? "-alt" : "";
+				swagNote.mustPress = mustPress;
+				// LE LTS 双侧：对手侧音符绑定对手列配色/动画数组，并立即刷新为正确配色
+				if (!mustPress && PlayState.instance.isLeDualChart)
+				{
+					swagNote.noteColArray = PlayState.instance.opponentColArray;
+					swagNote.refreshNoteVisual();
+				}
+				swagNote.sustainLength = holdLength;
+				swagNote.noteType = noteType;
+
+				swagNote.scrollFactor.set();
+				unspawnNotes.push(swagNote);
+				ghostNoteMap.set('${noteColumn}_${mustPress}_${noteType}_$spawnTime', swagNote);
+
+				// 双侧 x 布局：按 mustPress 侧 + 该侧当前键数居中，间距按该侧 strumScale（LE LTS 双侧：两侧独立缩放）
+				var sideCols:Int = mustPress ? curPlr : curOpp;
+				var side:Int = mustPress ? 1 : 0;
+				var sideScale:Float = mustPress ? playerStrumScale : opponentStrumScale;
+				var cX:Float = ClientPrefs.data.middleScroll ? (FlxG.width * 0.5) : (side == 1 ? (FlxG.width * 0.75) : (FlxG.width * 0.25));
+				if (sideCols == 4)
+				{
+					if (mustPress) swagNote.x += FlxG.width / 2;
+					else if (ClientPrefs.data.middleScroll)
+					{
+						swagNote.x += 310;
+						if (noteColumn > 1) swagNote.x += FlxG.width / 2 + 25;
+					}
+				}
+				else swagNote.x = cX - (sideCols - 1) * (Note.swagWidth * sideScale) / 2 + (Note.swagWidth * sideScale) * noteColumn;
+
+				var curStepCrochet:Float = 60 / daBpm * 1000 / 4.0;
+				final roundSus:Int = Math.round(swagNote.sustainLength / curStepCrochet);
+				if (roundSus > 0)
+				{
+					for (susNote in 0...roundSus)
+					{
+						oldNote = unspawnNotes[Std.int(unspawnNotes.length - 1)];
+
+						// 长条构造同样按当前侧缩放（构造阶段 mustPress 未赋值）
+						if (PlayState.instance.isLeDualChart)
+							PlayState.instance.currentSideMustPress = mustPress;
+						var sustainNote:Note = new Note(spawnTime + (curStepCrochet * susNote), noteColumn, oldNote, true);
+						sustainNote.animSuffix = swagNote.animSuffix;
+						sustainNote.mustPress = swagNote.mustPress;
+						sustainNote.gfNote = swagNote.gfNote;
+						sustainNote.noteType = swagNote.noteType;
+						sustainNote.noteColumnRaw = swagNote.noteColumnRaw;
+						sustainNote.noteData = swagNote.noteData;
+						// LE LTS 双侧：对手侧长条绑定对手列配色并刷新（含前驱 head 的 hold 动画）
+						if (!swagNote.mustPress && PlayState.instance.isLeDualChart)
+						{
+							sustainNote.noteColArray = PlayState.instance.opponentColArray;
+							sustainNote.refreshNoteVisual();
+						}
+						sustainNote.scrollFactor.set();
+						sustainNote.parent = swagNote;
+						unspawnNotes.push(sustainNote);
+						swagNote.tail.push(sustainNote);
+
+						sustainNote.correctionOffset = swagNote.height / 2;
+						if (!PlayState.isPixelStage)
+						{
+							if (oldNote.isSustainNote)
+							{
+								oldNote.scale.y *= Note.SUSTAIN_SIZE / oldNote.frameHeight * Note.kadeHoldGapScale();
+								oldNote.scale.y /= playbackRate;
+								oldNote.resizeByRatio(curStepCrochet / Conductor.stepCrochet);
+							}
+							if (ClientPrefs.data.downScroll) sustainNote.correctionOffset = 0;
+						}
+						else if (oldNote.isSustainNote)
+						{
+							oldNote.scale.y /= playbackRate;
+							oldNote.resizeByRatio(curStepCrochet / Conductor.stepCrochet);
+						}
+
+						if (sideCols == 4)
+						{
+							if (mustPress) sustainNote.x += FlxG.width / 2;
+							else if (ClientPrefs.data.middleScroll)
+							{
+								sustainNote.x += 310;
+								if (noteColumn > 1) sustainNote.x += FlxG.width / 2 + 25;
+							}
+						}
+						else sustainNote.x = cX - (sideCols - 1) * (Note.swagWidth * sideScale) / 2 + (Note.swagWidth * sideScale) * sustainNote.noteData;
+					}
+
+					// 尾条判定优化（同 legacy）
+					var lastTailNote:Note = swagNote.tail[swagNote.tail.length - 1];
+					if (sustainTailFixMode == 'extend' || sustainTailFixMode == 'both')
+						lastTailNote.strumTime = spawnTime + swagNote.sustainLength + ClientPrefs.data.noteOffset;
+					if (sustainTailFixMode == 'earlyHit' || sustainTailFixMode == 'both')
+						lastTailNote.earlyHitMult = 1;
+				}
+
+				if (!noteTypes.contains(swagNote.noteType))
+					noteTypes.push(swagNote.noteType);
+
+				oldNote = swagNote;
+			}
+		}
+		trace('["${SONG.song.toUpperCase()}" CHART INFO]: Ghost Notes Cleared: $ghostNotesCaught');
+	}
 	private function generateSongOptimized(sectionsData:Array<SwagSection>, daBpm:Float, oldNote:Note, ghostNotesCaught:Int):Void {
 		unspawnNotesPreloaded = [];
 		spawnedNotes = [];
@@ -3344,16 +3589,31 @@ tempScore += '${lblScore}: ${songScore}';
 	 */
 	public function computeMultiKeyStrumScale():Void
 	{
-		// 非 middleScroll 下玩家侧中心 0.75W、对手侧 0.25W，两侧到边缘的较小值相同（0.25W），
-		// middleScroll 两侧均为 0.5W，故用玩家侧中心计算即可保证两侧都不越屏。
-		// 边缘再留 24px 观感留白，避免多键整组贴死屏幕边（右缘离边过近显得"偏右"）。
-		var centerX:Float = ClientPrefs.data.middleScroll ? (FlxG.width * 0.5) : (FlxG.width * 0.75);
+		// LE LTS 双侧：两侧 strum/音符独立缩放（玩家侧中心 0.75W、对手侧 0.25W；middleScroll 均 0.5W）。
+		// 非双侧两侧同值（= 原单侧逻辑）。strumScale 主值 = 玩家侧，兼容既有引用。
+		playerStrumScale = calcSideStrumScale(totalColumns, ClientPrefs.data.middleScroll ? 0.5 : 0.75);
+		opponentStrumScale = calcSideStrumScale(isLeDualChart ? opponentColumns : totalColumns, ClientPrefs.data.middleScroll ? 0.5 : 0.25);
+		strumScale = playerStrumScale;
+	}
+
+	// 单侧 strum 缩放：按该侧列数与中心比例计算（边缘留 24px 观感留白）。4 键侧恒为 1（保留原布局）。
+	function calcSideStrumScale(cols:Int, centerFrac:Float):Float
+	{
+		if (cols <= 4) return 1;
+		var centerX:Float = FlxG.width * centerFrac;
 		var edge:Float = Math.min(centerX, FlxG.width - centerX) - 24;
-		var maxSpacing:Float = 2 * edge / (totalColumns + 2);
-		if (Note.swagWidth * strumScale > maxSpacing)
-			strumScale = maxSpacing / Note.swagWidth;
-		/*trace('[EK] computeMultiKeyStrumScale cols=' + totalColumns + ' strumScale=' + strumScale
-			+ ' spacing=' + (Note.swagWidth * strumScale) + ' edge=' + edge);*/
+		var maxSpacing:Float = 2 * edge / (cols + 2);
+		var scale:Float = 1;
+		if (Note.swagWidth * scale > maxSpacing)
+			scale = maxSpacing / Note.swagWidth;
+		return scale;
+	}
+
+	// 滚动音符（Note.hx 构造/长条尾部）按侧取 strum 缩放；非双侧恒为主值 strumScale
+	public static function getNoteSideScale(mustPress:Bool):Float
+	{
+		if (instance == null || !instance.isLeDualChart) return strumScale;
+		return mustPress ? instance.playerStrumScale : instance.opponentStrumScale;
 	}
 
 	private function generateStaticArrows(player:Int, ?instant:Bool = false):Void
@@ -3364,8 +3624,12 @@ tempScore += '${lblScore}: ${songScore}';
 		// 应用传统音符位置偏移
 		var legacyOffset:Float = ClientPrefs.data.legacynotepos ? 50 : 0;
 
+		// LE LTS 双侧：strum 组按各自侧键数生成（玩家侧=totalColumns、对手侧=opponentColumns）；
+		// 非双侧时 opponentColumns 不生效，恒用 totalColumns。
+		var sideCols:Int = (player == 1) ? totalColumns : (isLeDualChart ? opponentColumns : totalColumns);
+
 		// 标准 4 键：保留旧引擎原始布局，确保 100% 向后兼容。
-		if (totalColumns == 4)
+		if (sideCols == 4)
 		{
 			strumScale = 1; // 重置多键收缩残留，避免上一首多键歌影响 4 键大小
 			for (i in 0...4)
@@ -3410,12 +3674,13 @@ tempScore += '${lblScore}: ${songScore}';
 			return;
 		}
 
-		// 多键：居中分布 + 按 strumScale 缩放（已在 generateSong 前由 computeMultiKeyStrumScale 算好）
-		var spacing:Float = Note.swagWidth * strumScale;
-		var groupWidth:Float = (totalColumns - 1) * spacing;
+		// 多键：居中分布 + 按侧 strumScale 缩放（LE LTS 双侧：玩家/对手各自独立缩放，非双侧同值）
+		var sideScale:Float = (player == 1) ? playerStrumScale : opponentStrumScale;
+		var spacing:Float = Note.swagWidth * sideScale;
+		var groupWidth:Float = (sideCols - 1) * spacing;
 		var centerX:Float = ClientPrefs.data.middleScroll ? (FlxG.width * 0.5) : (player == 1 ? (FlxG.width * 0.75) : (FlxG.width * 0.25));
 
-		for (i in 0...totalColumns)
+		for (i in 0...sideCols)
 		{
 			var targetAlpha:Float = 1;
 			// 同上：淡化规则作用于 CPU 自动演奏侧
@@ -3435,9 +3700,9 @@ tempScore += '${lblScore}: ${songScore}';
 			}
 			else babyArrow.alpha = targetAlpha;
 
-			if (!PlayState.isPixelStage && strumScale != 1)
+			if (!PlayState.isPixelStage && sideScale != 1)
 			{
-				babyArrow.scale.scale(strumScale);
+				babyArrow.scale.scale(sideScale);
 				// 关键：缩放后必须同步 width/offset/origin，否则 strum 渲染中心
 				// 仍按缩放前的 width 计算（offset=(frameWidth-width)/2），比滚动箭头偏右约半列宽。
 				babyArrow.updateHitbox();
@@ -3696,6 +3961,106 @@ tempScore += '${lblScore}: ${songScore}';
 			+ ' colArray=[' + newColArray.join(',') + ']'
 			+ ' arrowRGB.len=' + (ClientPrefs.data.arrowRGB != null ? ClientPrefs.data.arrowRGB.length : -1)
 			+ ' arrowRGBPixel.len=' + (ClientPrefs.data.arrowRGBPixel != null ? ClientPrefs.data.arrowRGBPixel.length : -1));*/
+	}
+
+	// —— LE LTS 双侧轨道数：对手侧 EK 档位配置（与 applyMania 同构，填充 opponentColumns/opponentColArray/opponentSingAnimations）——
+	// 仅双侧模式（isLeDualChart）调用；非双侧模式对手侧恒等于玩家侧（generateStaticArrows 等按 totalColumns 处理）。
+	public function applyOpponentMania(mania:Int):Void
+	{
+		ExtraKeysHandler.ensure();
+		var ek = ExtraKeysHandler.instance.data;
+		oppMania = mania;
+		opponentColumns = mania + 1;
+
+		// 兜底：extrakeys.json 缺失时退回 4 键
+		if (ek == null || ek.keys == null || ek.keys.length <= mania)
+		{
+			opponentColArray = ['purple', 'blue', 'green', 'red'];
+			opponentSingAnimations = ['singLEFT', 'singDOWN', 'singUP', 'singRIGHT'];
+			return;
+		}
+
+		// 按对手档位逐列填充（与 applyMania 相同的 EK 配置读取逻辑）
+		var newColArray:Array<String> = [];
+		var newSingAnims:Array<String> = [];
+		var mode:EKManiaMode = ek.keys[mania];
+		var laneCount:Int = (mode != null && mode.notes != null) ? mode.notes.length : 4;
+
+		for (i in 0...laneCount)
+		{
+			var globalIdx:Int = (mode.notes != null && i < mode.notes.length) ? mode.notes[i] : i;
+			var anim:EKAnimation = (ek.animations != null && globalIdx >= 0 && globalIdx < ek.animations.length)
+				? ek.animations[globalIdx] : null;
+
+			newColArray.push(anim != null ? anim.note : 'purple');
+			newSingAnims.push(anim != null ? ('sing' + anim.sing) : 'singLEFT');
+		}
+
+		opponentColArray = newColArray;
+		opponentSingAnimations = newSingAnims;
+		/*trace('[EK] applyOpponentMania(' + mania + ') -> columns=' + laneCount
+			+ ' colArray=[' + newColArray.join(',') + ']');*/
+	}
+
+	// —— LE LTS 双侧：change keycount 事件实时切换两侧轨道数 ——
+	// 参考 LTS EventHandler 思路：写回 SONG 两侧键数 → applyMania/applyOpponentMania 更新两侧 EK 档配置
+	// → 重建两侧 strums（instant 不播渐入）→ 重排已生成音符 x（按 mustPress 侧 + 新键数）→ 回放键数组随 applyMania 重建。
+	public function changeKeyCounts(playerKeyCount:Int, oppKeyCount:Int):Void
+	{
+		if (playerKeyCount < 1 || playerKeyCount > 18) playerKeyCount = 4;
+		if (oppKeyCount < 1 || oppKeyCount > 18) oppKeyCount = 4;
+
+		// 无变化则跳过（防事件重复触发导致无谓重建）
+		var curPlr:Int = (SONG.playerKeyCount != null) ? SONG.playerKeyCount : ((SONG.keyCount != null) ? SONG.keyCount : 4);
+		var curOpp:Int = (SONG.keyCount != null) ? SONG.keyCount : curPlr;
+		if (curPlr == playerKeyCount && curOpp == oppKeyCount) return;
+
+		isLeDualChart = true; // 事件显式进入双侧模式
+		SONG.playerKeyCount = playerKeyCount;
+		SONG.keyCount = oppKeyCount;
+
+		applyMania(playerKeyCount - 1);
+		applyOpponentMania(oppKeyCount - 1);
+		if (totalColumns > 4 || opponentColumns > 4) computeMultiKeyStrumScale();
+		else strumScale = 1;
+
+		// 重建两侧 strums（不播渐入）
+		playerStrums.clear();
+		opponentStrums.clear();
+		strumLineNotes.clear();
+		generateStaticArrows(0, true);
+		generateStaticArrows(1, true);
+
+		// 重排已生成音符（按 mustPress 侧 + 新键数居中，与 generateSongLeDual 同公式）
+		relayoutNotes();
+
+		trace('[LE DUAL] changeKeyCounts -> player=${playerKeyCount}K opponent=${oppKeyCount}K');
+	}
+
+	// 重排场上/待生成音符的 x 位置（change keycount 事件后调用）
+	public function relayoutNotes():Void
+	{
+		for (note in unspawnNotes)
+			if (note != null && note.animation != null)
+				relayoutNoteX(note);
+		for (note in notes)
+			if (note != null && note.animation != null)
+				relayoutNoteX(note);
+	}
+
+	private function relayoutNoteX(n:Note):Void
+	{
+		var cols:Int = n.mustPress ? totalColumns : opponentColumns;
+		var side:Int = n.mustPress ? 1 : 0;
+		var sideScale:Float = n.mustPress ? playerStrumScale : opponentStrumScale;
+		var cX:Float = ClientPrefs.data.middleScroll ? (FlxG.width * 0.5) : (side == 1 ? (FlxG.width * 0.75) : (FlxG.width * 0.25));
+		if (cols == 4)
+		{
+			if (n.mustPress) n.x = STRUM_X + 50 + Note.swagWidth * n.noteData + FlxG.width / 2;
+			else if (ClientPrefs.data.middleScroll) n.x = STRUM_X + 50 + Note.swagWidth * n.noteData + 310 + (n.noteData > 1 ? FlxG.width / 2 + 25 : 0);
+			else n.x = STRUM_X + 50 + Note.swagWidth * n.noteData;
+		}
+		else n.x = cX - (cols - 1) * (Note.swagWidth * sideScale) / 2 + (Note.swagWidth * sideScale) * n.noteData;
 	}
 
 	override function openSubState(SubState:FlxSubState)

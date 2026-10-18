@@ -32,6 +32,12 @@ typedef SwagSong =
 	// onLoadJson 里会把 keyCount 映射成 mania = keyCount - 1。
 	@:optional var keyCount:Int;
 
+	// LE LTS 双侧轨道数：玩家侧键数（LE 语义）。
+	// 缺省 = keyCount（两侧相同，保持 Psych/EK 现有行为）；
+	// 存在且 != keyCount 时进入"双侧模式"：keyCount=对手侧键数、playerKeyCount=玩家侧键数，
+	// 谱面 noteData 按 LE 规则（mustHit 段连续编号）由运行时解析，事件 "change keycount" 可实时切换。
+	@:optional var playerKeyCount:Int;
+
 	@:optional var gameOverChar:String;
 	@:optional var gameOverSound:String;
 	@:optional var gameOverLoop:String;
@@ -100,8 +106,10 @@ class Song
 		// Extra Keys：在按列折叠之前先确定列数。
 		// legacy 谱面无 mania 字段 → 兜底 3（4 键），行为与原版一致；
 		// 多键谱面（keyCount:6 或 mania:5）→ sectCols=6，轨道号 0-5 玩家 / 6-11 敌人。
+		// LE LTS 双侧模式（含 playerKeyCount）：列重排整体跳过，保留原始连续 noteData 交给运行时解析。
+		var dualMode:Bool = (songJson.playerKeyCount != null);
 		var mania:Int = 3;
-		if (songJson.keyCount != null) mania = Std.int(songJson.keyCount) - 1;
+		if (!dualMode && songJson.keyCount != null) mania = Std.int(songJson.keyCount) - 1;
 		else if (songJson.mania != null) mania = Std.int(songJson.mania);
 		var sectCols:Int = mania + 1;
 
@@ -148,6 +156,14 @@ class Song
 
 			for (note in section.sectionNotes)
 			{
+				// LE LTS 双侧模式：保留谱面原始连续 noteData（mustHit 段 0..playerKeyCount-1 = 玩家、
+				// playerKeyCount.. = 对手；非 mustHit 段反之），运行时按事件时间点映射。不做列折叠。
+				if (dualMode)
+				{
+					if(!Std.isOfType(note[3], String))
+						note[3] = Note.defaultNoteTypes[note[3]];
+					continue;
+				}
 				// 列数从硬编码 4 改成按 mania 档位动态计算。
 				// legacy 相对车道：0..sectCols-1 = 当前小节归属方，sectCols..2*sectCols-1 = 另一方。
 				// psych_v1 绝对车道：0..sectCols-1 永远是玩家，sectCols..2*sectCols-1 永远是对手。
@@ -366,10 +382,19 @@ class Song
 
 		// Extra Keys：mania 字段兜底为 3（标准 4 键），与 Psych EK 行为一致。
 		// 兼容 "keyCount" 字段（其他多键引擎风格）：keyCount=6 → mania=5。
-		if (songJson.keyCount != null && songJson.mania == null)
+		// LE LTS 双侧模式（含 playerKeyCount）：keyCount=对手侧键数、playerKeyCount=玩家侧键数，
+		// 两者独立生效，不再映射成统一 mania；mania 取玩家侧档供视觉/配色使用。
+		var dualMode:Bool = (songJson.playerKeyCount != null);
+		if (songJson.keyCount != null && songJson.mania == null && !dualMode)
 			songJson.mania = Std.int(songJson.keyCount) - 1;
 		if (songJson.mania == null)
 			songJson.mania = 3;
+		if (dualMode)
+		{
+			if (songJson.keyCount == null || songJson.keyCount < 1) songJson.keyCount = 4;
+			if (songJson.playerKeyCount == null || songJson.playerKeyCount < 1) songJson.playerKeyCount = songJson.keyCount;
+			songJson.mania = Std.int(songJson.playerKeyCount) - 1;
+		}
 
 		return songJson;
 	}

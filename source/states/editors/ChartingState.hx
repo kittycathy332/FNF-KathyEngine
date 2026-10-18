@@ -126,7 +126,9 @@ class ChartingState extends MusicBeatState implements PsychUIEventHandler.PsychU
 		['Change Opponent Scroll Speed', "same as Change Scroll Speed, but only for Opponent"],
 		['Change Player Scroll Speed', "same as Change Scroll Speed, but only for Player"],
 		['Toggle IconBop', "Enable or disable icon bopping.\nValue 1: on/off/true/false/0/1 (default: on)"],
-		['Add IconBop', "Make the health icons bop once immediately."]
+		['Add IconBop', "Make the health icons bop once immediately."],
+		// LE LTS 双侧轨道数：谱面播放到该事件时间点时实时切换两侧箭头轨道数（事件名小写与 EventHandler case 精确匹配）
+		['change keycount', "LE LTS dual keycount: switches lane count mid-song.\nValue 1: Player key count (e.g. 4, 6, 8)\nValue 2: Opponent key count (e.g. 6, 8)"]
 		];
 	
 	/** 根据事件名获取本地化描述，找不到翻译则返回原文 */
@@ -146,6 +148,53 @@ class ChartingState extends MusicBeatState implements PsychUIEventHandler.PsychU
 	public static var GRID_SIZE = 40;
 	public static var TRACK_SPACING = 0; // 轨道间距（0=取消对手/事件/玩家三组之间的间距，使12条轨道连续排布）
 	final BACKUP_EXT = '.bkp';
+
+	// —— LE LTS 双侧轨道数（制谱器 LE 式分侧编辑） ——
+	// editorSide：当前编辑侧（0=玩家、1=对手）。双侧模式下网格列数 = 该侧键数（各侧独立列数与网格），
+	// 音符 noteData 按 LE 规则映射（mustHit 段 0..plr-1 玩家 / plr.. 对手；非 mustHit 段反之），
+	// 对侧音符若超出当前编辑侧网格宽度则不显示（切换编辑侧后可编辑）。非双侧谱面恒为玩家侧语义。
+	public static var editorSide:Int = 0;
+
+	// LE LTS 双侧：谱面是否双侧模式（playerKeyCount 存在且 != keyCount）
+	public static function isDualChart():Bool
+	{
+		return (PlayState.SONG != null && PlayState.SONG.playerKeyCount != null
+			&& PlayState.SONG.keyCount != null && PlayState.SONG.playerKeyCount != PlayState.SONG.keyCount);
+	}
+
+	// 玩家侧键数（双侧模式；非双侧 = keyCount/mania+1）
+	public static function dualPlayerKeyCount():Int
+	{
+		if (PlayState.SONG == null) return 4;
+		if (PlayState.SONG.playerKeyCount != null) return Std.int(PlayState.SONG.playerKeyCount);
+		if (PlayState.SONG.keyCount != null) return Std.int(PlayState.SONG.keyCount);
+		return 4;
+	}
+
+	// 对手侧键数（双侧模式；非双侧 = keyCount/mania+1）
+	public static function dualOpponentKeyCount():Int
+	{
+		if (PlayState.SONG == null) return 4;
+		if (PlayState.SONG.keyCount != null) return Std.int(PlayState.SONG.keyCount);
+		if (PlayState.SONG.playerKeyCount != null) return Std.int(PlayState.SONG.playerKeyCount);
+		return 4;
+	}
+
+	// —— LE LTS 双侧：不对称网格列数 ——
+	// 双侧模式下玩家/对手网格各自独立列数（网格布局/轨道色块/静态箭头/鼠标映射全部按各自列数渲染）；
+	// 非双侧 = 两侧同值（GRID_COLUMNS_PER_PLAYER，即 mania+1）。
+	public static function playerGridCols():Int
+	{
+		return isDualChart() ? dualPlayerKeyCount() : GRID_COLUMNS_PER_PLAYER;
+	}
+	public static function opponentGridCols():Int
+	{
+		return isDualChart() ? dualOpponentKeyCount() : GRID_COLUMNS_PER_PLAYER;
+	}
+
+	// 上次网格重建时的两侧列数（用于检测键数变化触发重建；双侧下编辑侧切换不触发）
+	var _lastGridPlayerCols:Int = -1;
+	var _lastGridOpponentCols:Int = -1;
 
 	/**
 	 * 制谱器高清模式开关：进入制谱器时临时将内部渲染分辨率提升到 1080P（仅桌面端生效），
@@ -686,8 +735,8 @@ if(_shouldReset) Conductor.songPosition = 0;
 		var extraHeight:Int = 500; // 增加500像素缓冲确保覆盖整个网格区域
 		var gridLayout = getGridLayout();
 
-		// 对手轨道覆盖层（最左侧，UI列0-3）
-		opponentTrackOverlay = new FlxSprite(gridLayout.opponentX, gridY).makeGraphic(GRID_SIZE * GRID_COLUMNS_PER_PLAYER, Std.int(gridHeight) + extraHeight, 0xFFCC88FF); // 浅紫色
+		// 对手轨道覆盖层（最左侧，UI列0至对手键数-1；LE LTS 双侧：按对手侧键数）
+		opponentTrackOverlay = new FlxSprite(gridLayout.opponentX, gridY).makeGraphic(GRID_SIZE * opponentGridCols(), Std.int(gridHeight) + extraHeight, 0xFFCC88FF); // 浅紫色
 		opponentTrackOverlay.alpha = 0.15;
 		opponentTrackOverlay.scrollFactor.set(0, 0); // X和Y方向都固定，不随网格滚动
 		opponentTrackOverlay.visible = chartEditorSave.data.showTrackColors;
@@ -703,8 +752,8 @@ if(_shouldReset) Conductor.songPosition = 0;
 			add(eventTrackOverlay);
 		}
 
-		// 玩家轨道覆盖层（最右侧，UI列8-11）
-		playerTrackOverlay = new FlxSprite(gridLayout.playerX, gridY).makeGraphic(GRID_SIZE * GRID_COLUMNS_PER_PLAYER, Std.int(gridHeight) + extraHeight, 0xFF88CCFF); // 浅蓝色
+		// 玩家轨道覆盖层（最右侧；LE LTS 双侧：按玩家侧键数）
+		playerTrackOverlay = new FlxSprite(gridLayout.playerX, gridY).makeGraphic(GRID_SIZE * playerGridCols(), Std.int(gridHeight) + extraHeight, 0xFF88CCFF); // 浅蓝色
 		playerTrackOverlay.alpha = 0.15;
 		playerTrackOverlay.scrollFactor.set(0, 0); // X和Y方向都固定，不随网格滚动
 		playerTrackOverlay.visible = chartEditorSave.data.showTrackColors;
@@ -783,9 +832,11 @@ if(_shouldReset) Conductor.songPosition = 0;
 			icon.ID = i + 1;
 			add(icon);
 			icons.push(icon);
-			// 修复逻辑：i=0（对手）用玩家偏移，i=1（玩家）用对手偏移
-			var iconStartOffset:Int = (i == 0) ? (GRID_COLUMNS_PER_PLAYER + EVENT_TRACK_COUNT) : 0;
-			icon.x = gridLayout.startX + GRID_SIZE * iconStartOffset + (iconStartOffset > 0 ? TRACK_SPACING * 2 : 0) + GRID_SIZE * (GRID_COLUMNS_PER_PLAYER / 2) - icon.width / 2;
+			// 修复逻辑：i=0（对手）用玩家偏移，i=1（玩家）用对手偏移（LE LTS 双侧：按各自键数列数）
+			var pColsI:Int = playerGridCols();
+			var oColsI:Int = opponentGridCols();
+			var iconStartOffset:Int = (i == 0) ? (oColsI + EVENT_TRACK_COUNT) : 0;
+			icon.x = gridLayout.startX + GRID_SIZE * iconStartOffset + (iconStartOffset > 0 ? TRACK_SPACING * 2 : 0) + GRID_SIZE * ((i == 0) ? pColsI : oColsI) / 2 - icon.width / 2;
 		}
 		// 直接进入制谱器时可能还没有加载任何歌曲，先确保 SONG 已初始化，避免空引用崩溃
 		if(PlayState.SONG == null)
@@ -818,7 +869,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 		infoBox.getTab(Language.get('charting_infotab_text')).menu.add(infoText);
 		add(infoBox);
 
-		mainBox = new PsychUIBox(mainBoxPosition.x, mainBoxPosition.y, 350, 300, [Language.get('charting_charting_text'), Language.get('charting_data_text'), Language.get('charting_events_text'), Language.get('charting_notes_text'), Language.get('charting_section_text'), Language.get('charting_song_text')]);
+		mainBox = new PsychUIBox(mainBoxPosition.x, mainBoxPosition.y, 350, 360, [Language.get('charting_charting_text'), Language.get('charting_data_text'), Language.get('charting_events_text'), Language.get('charting_notes_text'), Language.get('charting_section_text'), Language.get('charting_song_text')]);
 		mainBox.selectedName = Language.get('charting_song_text');
 		mainBox.scrollFactor.set();
 		mainBox.cameras = [camUI];
@@ -1340,6 +1391,18 @@ if(_shouldReset) Conductor.songPosition = 0;
 
 		if (maniaStepper != null)
 			maniaStepper.value = (PlayState.SONG.mania != null) ? PlayState.SONG.mania : 3;
+		if (opponentKeyStepper != null)
+			opponentKeyStepper.value = (PlayState.SONG.keyCount != null && PlayState.SONG.keyCount >= 1) ? Std.int(PlayState.SONG.keyCount) : 4;
+		// 两个键数设置项始终显示（Psych/EK 谱面两侧默认同值）；双侧模式显示编辑侧切换按钮
+		if (editPlayerBtn != null && editOpponentBtn != null)
+		{
+			editPlayerBtn.visible = isDualChart();
+			editOpponentBtn.visible = isDualChart();
+			if (opponentKeyStepperText != null) opponentKeyStepperText.visible = true;
+			if (opponentKeyStepper != null) opponentKeyStepper.visible = true;
+			if (!isDualChart()) ChartingState.editorSide = 0;
+			refreshEditSideButtons();
+		}
 
 		specialInstInputText.text = PlayState.SONG.specialInst != null ? PlayState.SONG.specialInst : '';
 		specialVocalInputText.text = PlayState.SONG.specialVocal != null ? PlayState.SONG.specialVocal : '';
@@ -2123,8 +2186,8 @@ if(_shouldReset) Conductor.songPosition = 0;
 					var uiColumn:Int = Math.floor(diffX / GRID_SIZE);
 
 					// 根据轨道类型调整UI列偏移
-					if(trackInfo.trackType == 'event') uiColumn += GRID_COLUMNS_PER_PLAYER;
-					else if(trackInfo.trackType == 'player') uiColumn += GRID_COLUMNS_PER_PLAYER + EVENT_TRACK_COUNT;
+					if(trackInfo.trackType == 'event') uiColumn += opponentGridCols();
+					else if(trackInfo.trackType == 'player') uiColumn += opponentGridCols() + EVENT_TRACK_COUNT;
 
 			var noteData:Int = uiColumnToNoteData(uiColumn);
 			dummyArrow.visible = !selectionBox.visible;
@@ -2142,11 +2205,11 @@ if(_shouldReset) Conductor.songPosition = 0;
 					// 计算最终的UI列并应用间距偏移
 					var finalUIColumn:Int = noteDataToUIColumn(noteData);
 					var spacingOffset:Float = 0;
-					if (finalUIColumn >= GRID_COLUMNS_PER_PLAYER)
+					if (finalUIColumn >= opponentGridCols())
 					{
 						spacingOffset += TRACK_SPACING; // Event轨道后的间距
 					}
-					if (finalUIColumn >= GRID_COLUMNS_PER_PLAYER + EVENT_TRACK_COUNT)
+					if (finalUIColumn >= opponentGridCols() + EVENT_TRACK_COUNT)
 					{
 						spacingOffset += TRACK_SPACING; // 玩家轨道前的间距
 					}
@@ -2191,7 +2254,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 							}
 		
 							var diff:Int = nData - movingNotesLastData;
-							var maxn:Int = (GRID_PLAYERS * GRID_COLUMNS_PER_PLAYER) - 1;
+							var maxn:Int = (playerGridCols() + opponentGridCols()) - 1;
 							movingNotesMinData += diff;
 							movingNotesMaxData += diff;
 							if(movingNotesMinData < 0)
@@ -2330,9 +2393,10 @@ if(_shouldReset) Conductor.songPosition = 0;
 								selectedNotes.push(noteAdded);
 								addUndoAction(ADD_NOTE, {notes: [noteAdded]});
 
-								// 播放角色对应箭头动画（多键：列数以当前轨道数计算）
-								var targetChar:Character = (noteData >= GRID_COLUMNS_PER_PLAYER) ? dad : boyfriend;
-								var direction:Int = noteData % GRID_COLUMNS_PER_PLAYER;
+								// 播放角色对应箭头动画（LE LTS 双侧：noteData 连续编号，按侧划分）
+								var pCols:Int = playerGridCols();
+								var targetChar:Character = (noteData < pCols) ? boyfriend : dad;
+								var direction:Int = noteData % ((noteData < pCols) ? pCols : opponentGridCols());
 								if(targetChar != null && targetChar.visible)
 									playCharacterSing(targetChar, direction);
 							}
@@ -2408,8 +2472,8 @@ if(_shouldReset) Conductor.songPosition = 0;
 				var uiColumn:Int = Math.floor(diffX / GRID_SIZE);
 
 				// 根据轨道类型调整UI列偏移
-				if(mouseTrackInfo.trackType == 'event') uiColumn += GRID_COLUMNS_PER_PLAYER;
-				else if(mouseTrackInfo.trackType == 'player') uiColumn += GRID_COLUMNS_PER_PLAYER + EVENT_TRACK_COUNT;
+				if(mouseTrackInfo.trackType == 'event') uiColumn += opponentGridCols();
+				else if(mouseTrackInfo.trackType == 'player') uiColumn += opponentGridCols() + EVENT_TRACK_COUNT;
 
 				var noteData:Int = uiColumnToNoteData(uiColumn);
 			dummyArrow.visible = !selectionBox.visible;
@@ -2432,11 +2496,11 @@ if(_shouldReset) Conductor.songPosition = 0;
 			// 计算最终的UI列并应用间距偏移
 				var finalUIColumn:Int = noteDataToUIColumn(noteData);
 				var spacingOffset:Float = 0;
-				if (finalUIColumn >= GRID_COLUMNS_PER_PLAYER)
+				if (finalUIColumn >= opponentGridCols())
 				{
 					spacingOffset += TRACK_SPACING; // Event轨道后的间距
 				}
-				if (finalUIColumn >= GRID_COLUMNS_PER_PLAYER + EVENT_TRACK_COUNT)
+				if (finalUIColumn >= opponentGridCols() + EVENT_TRACK_COUNT)
 				{
 					spacingOffset += TRACK_SPACING; // 玩家轨道前的间距
 				}
@@ -2481,7 +2545,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 						}
 
 						var diff:Int = nData - movingNotesLastData;
-						var maxn:Int = (GRID_PLAYERS * GRID_COLUMNS_PER_PLAYER) - 1;
+						var maxn:Int = (playerGridCols() + opponentGridCols()) - 1;
 						movingNotesMinData += diff;
 						movingNotesMaxData += diff;
 						if(movingNotesMinData < 0)
@@ -2610,9 +2674,10 @@ if(_shouldReset) Conductor.songPosition = 0;
 								selectedNotes.push(noteAdded);
 								addUndoAction(ADD_NOTE, {notes: [noteAdded]});
 
-								// 播放角色对应箭头动画（多键：列数以当前轨道数计算）
-								var targetChar:Character = (noteData >= GRID_COLUMNS_PER_PLAYER) ? dad : boyfriend;
-								var direction:Int = noteData % GRID_COLUMNS_PER_PLAYER;
+								// 播放角色对应箭头动画（LE LTS 双侧：noteData 连续编号，按侧划分）
+								var pCols:Int = playerGridCols();
+								var targetChar:Character = (noteData < pCols) ? boyfriend : dad;
+								var direction:Int = noteData % ((noteData < pCols) ? pCols : opponentGridCols());
 								if(targetChar != null && targetChar.visible)
 									playCharacterSing(targetChar, direction);
 							}
@@ -2700,15 +2765,15 @@ if(_shouldReset) Conductor.songPosition = 0;
 			{
 				if(note.mustPress)
 				{
-					// 玩家音符（多键：方向 = noteData % 轨道列数）
-					var direction:Int = noteData % GRID_COLUMNS_PER_PLAYER;
+					// 玩家音符（LE LTS 双侧：方向 = noteData % 玩家侧键数；非双侧 = 轨道列数）
+					var direction:Int = noteData % playerGridCols();
 					if(boyfriend != null && boyfriend.visible)
 						playCharacterSing(boyfriend, direction);
 				}
 				else
 				{
-					// 对手音符（多键：方向 = noteData % 轨道列数）
-					var direction:Int = noteData % GRID_COLUMNS_PER_PLAYER;
+					// 对手音符（LE LTS 双侧：方向 = noteData % 对手侧键数；非双侧 = 轨道列数）
+					var direction:Int = noteData % opponentGridCols();
 					if(dad != null && dad.visible)
 						playCharacterSing(dad, direction);
 				}
@@ -2776,7 +2841,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 			var noteStrumTime:Float = note.strumTime;
 			if(noteStrumTime > lilLastStrumCheckTime && noteStrumTime <= lilNow)
 			{
-				playLilSing(note.mustPress, Std.int(note.noteData) % GRID_COLUMNS_PER_PLAYER);
+				playLilSing(note.mustPress, Std.int(note.noteData) % (note.mustPress ? playerGridCols() : opponentGridCols()));
 			}
 		}
 		lilLastStrumCheckTime = lilNow;
@@ -2884,7 +2949,8 @@ if(_shouldReset) Conductor.songPosition = 0;
 				for(note in secData.sectionNotes)
 				{
 					if(note == null) continue;
-					if(note[1] < GRID_COLUMNS_PER_PLAYER) playCount++; else oppCount++;
+					var secMustHit:Bool = secData.mustHitSection;
+					if(isPlayerNoteByData(Std.int(note[1]), secMustHit)) playCount++; else oppCount++;
 				}
 			}
 			if(curSecData != null)
@@ -2893,7 +2959,8 @@ if(_shouldReset) Conductor.songPosition = 0;
 				{
 					if(note == null) continue;
 					if(note[0] > Conductor.songPosition) continue;
-					if(note[1] < GRID_COLUMNS_PER_PLAYER) playCount++; else oppCount++;
+					var secMustHitCur:Bool = curSecData.mustHitSection;
+					if(isPlayerNoteByData(Std.int(note[1]), secMustHitCur)) playCount++; else oppCount++;
 				}
 			}
 			var str:String =  '$curTime / $songLength' +
@@ -3411,20 +3478,22 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 			destroyed = true;
 		}
 
-		// 创建三个独立的轨道网格
+		// 创建三个独立的轨道网格（LE LTS 双侧：对手/玩家各按各自键数渲染）
 		var startX:Float = FlxG.width / 2;
+		var pCols:Int = playerGridCols();
+		var oCols:Int = opponentGridCols();
 		
 		// 计算总宽度并居中
-		var opponentWidth:Float = GRID_SIZE * GRID_COLUMNS_PER_PLAYER;
+		var opponentWidth:Float = GRID_SIZE * oCols;
 		var eventWidth:Float = SHOW_EVENT_COLUMN ? GRID_SIZE * EVENT_TRACK_COUNT : 0;
-		var playerWidth:Float = GRID_SIZE * GRID_COLUMNS_PER_PLAYER;
+		var playerWidth:Float = GRID_SIZE * pCols;
 		var spacingWidth:Float = TRACK_SPACING * (SHOW_EVENT_COLUMN ? 2 : 1);
 		var totalWidth:Float = opponentWidth + eventWidth + playerWidth + spacingWidth;
 		
 		startX = (FlxG.width - totalWidth) / 2;
 
 		// 对手轨道网格
-		opponentGridBg = new ChartingGridSprite(GRID_COLUMNS_PER_PLAYER, gridColors[0], gridColors[1]);
+		opponentGridBg = new ChartingGridSprite(oCols, gridColors[0], gridColors[1]);
 		opponentGridBg.x = startX;
 		opponentGridBg.y = FlxG.height / 2;
 		
@@ -3437,17 +3506,17 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 		}
 		
 		// 玩家轨道网格
-		playerGridBg = new ChartingGridSprite(GRID_COLUMNS_PER_PLAYER, gridColors[0], gridColors[1]);
+		playerGridBg = new ChartingGridSprite(pCols, gridColors[0], gridColors[1]);
 		playerGridBg.x = startX + opponentWidth + eventWidth + TRACK_SPACING * (SHOW_EVENT_COLUMN ? 2 : 1);
 		playerGridBg.y = opponentGridBg.y;
 
 		// 创建前一节和下一节的网格
-		prevOpponentGridBg = new ChartingGridSprite(GRID_COLUMNS_PER_PLAYER, gridColorsOther[0], gridColorsOther[1]);
+		prevOpponentGridBg = new ChartingGridSprite(oCols, gridColorsOther[0], gridColorsOther[1]);
 		prevOpponentGridBg.x = opponentGridBg.x;
 		prevOpponentGridBg.y = opponentGridBg.y;
 		prevOpponentGridBg.stripes = opponentGridBg.stripes = stripes;
 		
-		nextOpponentGridBg = new ChartingGridSprite(GRID_COLUMNS_PER_PLAYER, gridColorsOther[0], gridColorsOther[1]);
+		nextOpponentGridBg = new ChartingGridSprite(oCols, gridColorsOther[0], gridColorsOther[1]);
 		nextOpponentGridBg.x = opponentGridBg.x;
 		nextOpponentGridBg.y = opponentGridBg.y;
 		nextOpponentGridBg.stripes = opponentGridBg.stripes;
@@ -3465,12 +3534,12 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 			nextEventGridBg.stripes = eventGridBg.stripes;
 		}
 		
-		prevPlayerGridBg = new ChartingGridSprite(GRID_COLUMNS_PER_PLAYER, gridColorsOther[0], gridColorsOther[1]);
+		prevPlayerGridBg = new ChartingGridSprite(pCols, gridColorsOther[0], gridColorsOther[1]);
 		prevPlayerGridBg.x = playerGridBg.x;
 		prevPlayerGridBg.y = playerGridBg.y;
 		prevPlayerGridBg.stripes = playerGridBg.stripes = stripes;
 		
-		nextPlayerGridBg = new ChartingGridSprite(GRID_COLUMNS_PER_PLAYER, gridColorsOther[0], gridColorsOther[1]);
+		nextPlayerGridBg = new ChartingGridSprite(pCols, gridColorsOther[0], gridColorsOther[1]);
 		nextPlayerGridBg.x = playerGridBg.x;
 		nextPlayerGridBg.y = playerGridBg.y;
 		nextPlayerGridBg.stripes = playerGridBg.stripes;
@@ -3511,14 +3580,15 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 	applyGridStripeColors();
 }
 
-	// 根据UI列获取对应的网格
+	// 根据UI列获取对应的网格（LE LTS 双侧：对手区按对手键数列数）
 	function getGridByUIColumn(uiColumn:Int):ChartingGridSprite
 	{
-		if(uiColumn < GRID_COLUMNS_PER_PLAYER)
+		var oCols:Int = opponentGridCols();
+		if(uiColumn < oCols)
 		{
 			return opponentGridBg;
 		}
-		else if(SHOW_EVENT_COLUMN && uiColumn < GRID_COLUMNS_PER_PLAYER + EVENT_TRACK_COUNT)
+		else if(SHOW_EVENT_COLUMN && uiColumn < oCols + EVENT_TRACK_COUNT)
 		{
 			return eventGridBg;
 		}
@@ -3531,9 +3601,10 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 	// 获取所有轨道的总宽度和起始位置
 	function getGridLayout():{startX:Float, opponentX:Float, eventX:Float, playerX:Float, totalWidth:Float}
 	{
-		var opponentWidth:Float = GRID_SIZE * GRID_COLUMNS_PER_PLAYER;
+		// LE LTS 双侧：对手/玩家网格按各自键数渲染（不对称布局）；非双侧 = 两侧同值
+		var opponentWidth:Float = GRID_SIZE * opponentGridCols();
 		var eventWidth:Float = SHOW_EVENT_COLUMN ? GRID_SIZE * EVENT_TRACK_COUNT : 0;
-		var playerWidth:Float = GRID_SIZE * GRID_COLUMNS_PER_PLAYER;
+		var playerWidth:Float = GRID_SIZE * playerGridCols();
 		var spacingWidth:Float = TRACK_SPACING * (SHOW_EVENT_COLUMN ? 2 : 1);
 		var totalWidth:Float = opponentWidth + eventWidth + playerWidth + spacingWidth;
 		var startX:Float = (FlxG.width - totalWidth) / 2;
@@ -3556,8 +3627,11 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 	}
 
 	// 某小节的轨道列数（Extra Keys：mania + 1；4 键 = 4 列，6 键 = 6 列...）
+	// LE LTS 双侧（LE 式分侧编辑）：网格列数 = 当前编辑侧键数（玩家侧=playerKeyCount、对手侧=keyCount），各侧独立网格。
 	public static function getSectionColumns(secNum:Int):Int
 	{
+		if (isDualChart())
+			return (editorSide == 0) ? dualPlayerKeyCount() : dualOpponentKeyCount();
 		return getSectionMania(secNum) + 1;
 	}
 
@@ -3590,9 +3664,15 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 		Note.colArray = newColArray;
 		singAnimations = newSingAnims;
 
-		if (cols != GRID_COLUMNS_PER_PLAYER)
+		// LE LTS 双侧：GRID_COLUMNS_PER_PLAYER 主值 = 玩家侧列数（非双侧 = mania+1）；
+		// 重建条件 = 两侧列数任一变化（编辑侧切换不再误触发重建，网格始终按两侧真实键数渲染）
+		var pCols:Int = playerGridCols();
+		var oCols:Int = opponentGridCols();
+		if (pCols != _lastGridPlayerCols || oCols != _lastGridOpponentCols)
 		{
-			GRID_COLUMNS_PER_PLAYER = cols;
+			_lastGridPlayerCols = pCols;
+			_lastGridOpponentCols = oCols;
+			GRID_COLUMNS_PER_PLAYER = pCols;
 			_rebuildingGrids = true;
 			createGrids(); // 内部因 _rebuildingGrids 守护而不会递归调用 loadSection
 			rebuildStrumLineNotes();
@@ -3602,25 +3682,26 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 		}
 	}
 
-	// 重建漩涡编辑器的静态箭头（数量跟随当前 GRID_COLUMNS_PER_PLAYER）
+	// 重建漩涡编辑器的静态箭头（LE LTS 双侧：玩家/对手按各自键数，不对称布局）
 	function rebuildStrumLineNotes():Void
 	{
 		for (note in strumLineNotes) note.destroy();
 		strumLineNotes.clear();
 		var gridLayout = getGridLayout();
 
-		var cols:Int = GRID_COLUMNS_PER_PLAYER;
-		var total:Int = GRID_PLAYERS * cols;
+		var pCols:Int = playerGridCols();
+		var oCols:Int = opponentGridCols();
+		var total:Int = pCols + oCols;
 		var startY:Float = FlxG.height / 2;
 		for (i in 0...total)
 		{
-			var noteData:Int = i % cols;
-			var isPlayer:Bool = i < cols; // 前 cols 个为玩家，后 cols 个为对手
-			var uiColumn:Int = isPlayer ? (noteData + GRID_COLUMNS_PER_PLAYER + EVENT_TRACK_COUNT) : noteData;
+			var isPlayer:Bool = (i >= oCols); // 前 oCols 个为对手，后 pCols 个为玩家
+			var noteData:Int = isPlayer ? (i - oCols) : i;
+			var uiColumn:Int = isPlayer ? (noteData + oCols + EVENT_TRACK_COUNT) : noteData;
 
 			var spacingOffset:Float = 0;
-			if (uiColumn >= GRID_COLUMNS_PER_PLAYER) spacingOffset += TRACK_SPACING;
-			if (uiColumn >= GRID_COLUMNS_PER_PLAYER + EVENT_TRACK_COUNT) spacingOffset += TRACK_SPACING;
+			if (uiColumn >= oCols) spacingOffset += TRACK_SPACING;
+			if (uiColumn >= oCols + EVENT_TRACK_COUNT) spacingOffset += TRACK_SPACING;
 
 			var note:StrumNote = new StrumNote(gridLayout.startX + (GRID_SIZE * uiColumn) + spacingOffset, startY, noteData, 0);
 			note.scrollFactor.set();
@@ -3646,24 +3727,27 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 		if (playerTrackOverlay == null || opponentGridBg == null) return;
 		var gridHeight:Float = opponentGridBg.height;
 		var extraHeight:Int = 500;
-		opponentTrackOverlay.makeGraphic(GRID_SIZE * GRID_COLUMNS_PER_PLAYER, Std.int(gridHeight) + extraHeight, 0xFFCC88FF);
+		// LE LTS 双侧：对手/玩家色块按各自键数宽度
+		opponentTrackOverlay.makeGraphic(GRID_SIZE * opponentGridCols(), Std.int(gridHeight) + extraHeight, 0xFFCC88FF);
 		opponentTrackOverlay.alpha = 0.15;
-		playerTrackOverlay.makeGraphic(GRID_SIZE * GRID_COLUMNS_PER_PLAYER, Std.int(gridHeight) + extraHeight, 0xFF88CCFF);
+		playerTrackOverlay.makeGraphic(GRID_SIZE * playerGridCols(), Std.int(gridHeight) + extraHeight, 0xFF88CCFF);
 		playerTrackOverlay.alpha = 0.15;
 	}
 
-	// 为三块网格（对手 / Event / 玩家）重新着色条纹
+	// 为三块网格（对手 / Event / 玩家）重新着色条纹（LE LTS 双侧：条纹范围按各自键数）
 	function applyGridStripeColors():Void
 	{
 		if (opponentGridBg == null) return;
-		for (i in 0...GRID_COLUMNS_PER_PLAYER)
+		var oCols:Int = opponentGridCols();
+		var pCols:Int = playerGridCols();
+		for (i in 0...oCols)
 			opponentGridBg.stripe.color = 0xFFFF4488; // 对手：红色
 		if (SHOW_EVENT_COLUMN)
 		{
-			for (i in GRID_COLUMNS_PER_PLAYER...(GRID_COLUMNS_PER_PLAYER + EVENT_TRACK_COUNT))
+			for (i in oCols...(oCols + EVENT_TRACK_COUNT))
 				eventGridBg.stripe.color = 0xFFFFFF44; // Event：黄色
 		}
-		for (i in (GRID_COLUMNS_PER_PLAYER + EVENT_TRACK_COUNT)...(GRID_COLUMNS_PER_PLAYER + EVENT_TRACK_COUNT + GRID_COLUMNS_PER_PLAYER))
+		for (i in (oCols + EVENT_TRACK_COUNT)...(oCols + EVENT_TRACK_COUNT + pCols))
 			playerGridBg.stripe.color = 0xFF4488FF; // 玩家：蓝色
 	}
 
@@ -3671,8 +3755,9 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 	function getTrackAtPosition(x:Float, y:Float):{grid:ChartingGridSprite, prevGrid:ChartingGridSprite, nextGrid:ChartingGridSprite, trackX:Float, trackType:String}
 	{
 		var gridLayout = getGridLayout();
-		var opponentWidth:Float = GRID_SIZE * GRID_COLUMNS_PER_PLAYER;
+		var opponentWidth:Float = GRID_SIZE * opponentGridCols();
 		var eventWidth:Float = SHOW_EVENT_COLUMN ? GRID_SIZE * EVENT_TRACK_COUNT : 0;
+		var playerWidth:Float = GRID_SIZE * playerGridCols();
 
 		if(x >= gridLayout.opponentX && x < gridLayout.opponentX + opponentWidth)
 		{
@@ -3694,7 +3779,7 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 				trackType: 'event'
 			};
 		}
-		else if(x >= gridLayout.playerX && x < gridLayout.playerX + opponentWidth)
+		else if(x >= gridLayout.playerX && x < gridLayout.playerX + playerWidth)
 		{
 			return {
 				grid: playerGridBg,
@@ -4094,8 +4179,8 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 	function positionEventOnTrack(event:EventMetaNote, trackIndex:Int)
 	{
 		// 轨道布局：对手(0-3) → Event(4-7) → 玩家(8-11)
-		// Event轨道的起始偏移：GRID_COLUMNS_PER_PLAYER（对手4列）+ TRACK_SPACING
-		var eventTrackOffset:Int = GRID_COLUMNS_PER_PLAYER;
+		// Event轨道的起始偏移（LE LTS 双侧：对手区列数 = 对手侧键数）
+		var eventTrackOffset:Int = opponentGridCols();
 		var gridLayout = getGridLayout();
 
 		var eventX:Float = gridLayout.startX + (GRID_SIZE - event.width) / 2;
@@ -4511,6 +4596,31 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 
 	function uiColumnToNoteData(uiColumn:Int):Int
 	{
+		// LE LTS 双侧（分侧编辑）：noteData 为 LE 连续编号——
+		// mustHit 小节 0..plr-1 玩家 / plr..plr+opp-1 对手；非 mustHit 小节 0..opp-1 对手 / opp..opp+plr-1 玩家。
+		// 不对称网格：对手列区（0..opp-1）放对手音符、玩家列区（opp+EVENT..）放玩家音符，两区均可直接编辑。
+		if (isDualChart())
+		{
+			var plr:Int = dualPlayerKeyCount();
+			var opp:Int = dualOpponentKeyCount();
+			var secMustHit:Bool = getCurrentSectionMustHit();
+			var oCols:Int = opponentGridCols();
+			if (uiColumn < oCols)
+			{
+				// 对手列区（放置对手音符）
+				return secMustHit ? (plr + uiColumn) : uiColumn;
+			}
+			else if (uiColumn < oCols + EVENT_TRACK_COUNT && SHOW_EVENT_COLUMN)
+			{
+				return -1; // Event轨道（noteData -1，通过eventTrackIndex区分）
+			}
+			else
+			{
+				// 玩家列区（放置玩家音符）
+				var col:Int = uiColumn - (oCols + EVENT_TRACK_COUNT);
+				return secMustHit ? col : (opp + col);
+			}
+		}
 		// 动态列数布局：对手(0..cols-1) → Event(cols..cols+EVENT-1) → 玩家(cols+EVENT..2cols+EVENT-1)
 		if (uiColumn < GRID_COLUMNS_PER_PLAYER)
 		{
@@ -4526,8 +4636,60 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 		}
 	}
 
+	// 当前小节是否 mustHit（LE 双侧映射依据）
+	function getCurrentSectionMustHit():Bool
+	{
+		if (PlayState.SONG != null && PlayState.SONG.notes != null
+			&& curSec >= 0 && curSec < PlayState.SONG.notes.length)
+			return PlayState.SONG.notes[curSec].mustHitSection;
+		return true;
+	}
+
+	// noteData 是否属于玩家侧（LE LTS 双侧：按小节 mustHit 与 LE 连续编号判断；非双侧 = noteData < 玩家侧键数）
+	public static function isPlayerNoteByData(noteData:Int, secMustHit:Bool):Bool
+	{
+		if (!isDualChart()) return (noteData < playerGridCols());
+		var plr:Int = dualPlayerKeyCount();
+		var opp:Int = dualOpponentKeyCount();
+		return secMustHit ? (noteData < plr) : (noteData >= opp);
+	}
+
+	// LE LTS 双侧：刷新编辑侧切换按钮高亮（当前编辑侧高亮）
+	function refreshEditSideButtons():Void
+	{
+		if (editPlayerBtn == null || editOpponentBtn == null) return;
+		editPlayerBtn.color = (ChartingState.editorSide == 0) ? 0xFF60A0FF : 0xFFFFFFFF;
+		editOpponentBtn.color = (ChartingState.editorSide == 1) ? 0xFF60A0FF : 0xFFFFFFFF;
+	}
+
 	function noteDataToUIColumn(noteData:Int):Int
 	{
+		// LE LTS 双侧（分侧编辑）：按 LE 规则把 noteData 映射回 UI 列。
+		// 不对称网格下两侧各自渲染（对手区 0..opp-1、玩家区 opp+EVENT..），对侧音符显示在对侧网格，不再裁剪隐藏。
+		if (isDualChart())
+		{
+			var plr:Int = dualPlayerKeyCount();
+			var opp:Int = dualOpponentKeyCount();
+			var secMustHit:Bool = getCurrentSectionMustHit();
+			var oCols:Int = opponentGridCols();
+			var pCols:Int = playerGridCols();
+
+			if (noteData < 0 && SHOW_EVENT_COLUMN)
+				return oCols; // Event轨道（返回起始位置，具体位置由eventTrackIndex决定）
+
+			if (isPlayerNoteByData(noteData, secMustHit))
+			{
+				var col:Int = secMustHit ? noteData : (noteData - opp);
+				if (col < 0 || col >= pCols) return -2;
+				return col + oCols + EVENT_TRACK_COUNT;
+			}
+			else
+			{
+				var col:Int = secMustHit ? (noteData - plr) : noteData;
+				if (col < 0 || col >= oCols) return -2;
+				return col;
+			}
+		}
 		// 动态列数布局：对手(0..cols-1) → Event → 玩家(0..cols-1)
 		if (noteData >= GRID_COLUMNS_PER_PLAYER)
 		{
@@ -4551,8 +4713,8 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 
 		var diffX:Float = FlxG.mouse.x - trackInfo.trackX;
 		var uiColumn:Int = Math.floor(diffX / GRID_SIZE);
-		if(trackInfo.trackType == 'event') uiColumn += GRID_COLUMNS_PER_PLAYER;
-		else if(trackInfo.trackType == 'player') uiColumn += GRID_COLUMNS_PER_PLAYER + EVENT_TRACK_COUNT;
+		if(trackInfo.trackType == 'event') uiColumn += opponentGridCols();
+		else if(trackInfo.trackType == 'player') uiColumn += opponentGridCols() + EVENT_TRACK_COUNT;
 
 		var noteData:Int = uiColumnToNoteData(uiColumn);
 		if(trackInfo.trackType == 'event') noteData = -1;
@@ -4597,8 +4759,8 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 
 		var diffX:Float = FlxG.mouse.x - trackInfo.trackX;
 		var uiColumn:Int = Math.floor(diffX / GRID_SIZE);
-		if(trackInfo.trackType == 'event') uiColumn += GRID_COLUMNS_PER_PLAYER;
-		else if(trackInfo.trackType == 'player') uiColumn += GRID_COLUMNS_PER_PLAYER + EVENT_TRACK_COUNT;
+		if(trackInfo.trackType == 'event') uiColumn += opponentGridCols();
+		else if(trackInfo.trackType == 'player') uiColumn += opponentGridCols() + EVENT_TRACK_COUNT;
 
 		var noteData:Int = uiColumnToNoteData(uiColumn);
 		if(trackInfo.trackType == 'event') noteData = -1;
@@ -4656,8 +4818,10 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 			resetSelectedNotes();
 			selectedNotes.push(noteAdded);
 
-			var targetChar:Character = (dragStartNoteData >= GRID_COLUMNS_PER_PLAYER) ? dad : boyfriend;
-			var direction:Int = dragStartNoteData % GRID_COLUMNS_PER_PLAYER;
+			var pColsD:Int = playerGridCols();
+			var isPlrNote:Bool = isDualChart() ? isPlayerNoteByData(dragStartNoteData, getCurrentSectionMustHit()) : (dragStartNoteData < pColsD);
+			var targetChar:Character = isPlrNote ? boyfriend : dad;
+			var direction:Int = dragStartNoteData % (isPlrNote ? pColsD : opponentGridCols());
 			if(targetChar != null && targetChar.visible)
 				playCharacterSing(targetChar, direction);
 		}
@@ -4697,7 +4861,9 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 
 		dragStartStrumTime = note.strumTime;
 		dragStartNoteData = note.noteData;
-		dragStartTrackType = note.isEvent ? 'event' : ((note.noteData >= GRID_COLUMNS_PER_PLAYER) ? 'player' : 'normal');
+		dragStartTrackType = note.isEvent ? 'event' : (isDualChart()
+			? (isPlayerNoteByData(note.noteData, getCurrentSectionMustHit()) ? 'player' : 'normal')
+			: ((note.noteData >= GRID_COLUMNS_PER_PLAYER) ? 'player' : 'normal'));
 		dragStartX = note.x;     // 延伸时箭头始终停留在该轨道
 		dragStartChartY = note.y; // 以箭头头部为起点计算位移
 
@@ -4831,6 +4997,24 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 			// Event使用专用方法，根据eventTrackIndex定位
 			var eventNote:EventMetaNote = cast note;
 			positionEventOnTrack(eventNote, eventNote.eventTrackIndex);
+			return;
+		}
+
+		// LE LTS 双侧（分侧编辑）：按 LE 规则映射 UI 列；音符渲染在各自侧网格（不对称布局）
+		if (isDualChart())
+		{
+			var uiCol:Int = noteDataToUIColumn(data);
+			if (uiCol < 0)
+			{
+				note.visible = false;
+				return;
+			}
+			note.visible = true;
+			var oColsP:Int = opponentGridCols();
+			var spacingOffset:Float = 0;
+			if (uiCol >= oColsP) spacingOffset += TRACK_SPACING;
+			if (uiCol >= oColsP + EVENT_TRACK_COUNT) spacingOffset += TRACK_SPACING;
+			note.x = gridLayout.startX + uiCol * GRID_SIZE + spacingOffset + (GRID_SIZE - note.width) / 2;
 			return;
 		}
 
@@ -6214,6 +6398,10 @@ for (i in 0...GRID_PLAYERS)
 	var scrollSpeedStepper:PsychUINumericStepper;
 	var audioOffsetStepper:PsychUINumericStepper;
 	var maniaStepper:PsychUINumericStepper; // Extra Keys：键数档位 stepper
+	var opponentKeyStepper:PsychUINumericStepper; // LE LTS 双侧：对手侧键数（keyCount）
+	var opponentKeyStepperText:FlxText; // 对手侧键数标签
+	var editPlayerBtn:PsychUIButton; // LE LTS 双侧：编辑侧切换（玩家）
+	var editOpponentBtn:PsychUIButton; // LE LTS 双侧：编辑侧切换（对手）
  	var specialInstInputText:PsychUIInputText;
 	var specialVocalInputText:PsychUIInputText;
 	var specialEventsInputText:PsychUIInputText;
@@ -6293,16 +6481,65 @@ for (i in 0...GRID_PLAYERS)
 			updateWaveform();
 		};
 
+		// LE LTS 双侧：键数变化后刷新编辑侧按钮可见性与当前编辑侧有效性（两侧同值时无分侧编辑概念）
+		function refreshDualUI():Void
+		{
+			var dual:Bool = isDualChart();
+			if (editPlayerBtn != null) editPlayerBtn.visible = dual;
+			if (editOpponentBtn != null) editOpponentBtn.visible = dual;
+			if (!dual) ChartingState.editorSide = 0; // 非双侧恒为玩家侧语义
+			refreshEditSideButtons();
+		}
+
 		// Extra Keys：键数档位（0=1键 ... 17=18键；4 键 = 3）。改键数会重建网格列数与轨道色块。
-		// 位置：与“音频延迟”同列（objX+220）、位于其上方一行（objY-40），避免横向溢出菜单框。
-		maniaStepper = new PsychUINumericStepper(objX + 220, objY - 40, 1, 3, 0, 17, 0, 80);
+		// 位置：BPM 所在行的下一行（objY+40）第一列（objX）；对手键数在第二列（objX+110）。
+		// LE LTS 双侧（分侧编辑，两个独立设置项）：此 stepper = 玩家侧键数档（playerKeyCount），始终显示；
+		// 对手侧键数（keyCount）由 opponentKeyStepper 独立控制。两者相等时保存为 EK/Psych 格式（mania），不等时保存为 LE 格式。
+		maniaStepper = new PsychUINumericStepper(objX, objY + 40, 1, 3, 0, 17, 0, 80);
 		maniaStepper.onValueChange = function()
 		{
 			PlayState.SONG.mania = Std.int(maniaStepper.value);
-			if (PlayState.SONG.keyCount != null) PlayState.SONG.keyCount = Std.int(maniaStepper.value) + 1;
+			PlayState.SONG.playerKeyCount = Std.int(maniaStepper.value) + 1; // 玩家侧始终独立记录
+			refreshDualUI();
 			applySectionColumns(curSec);
 			updateJsonData();
 		};
+
+		// LE LTS 双侧：对手侧键数（keyCount，1..18），BPM 下一行第二列（objX+110），始终显示（Psych/EK 谱面默认为玩家侧同值）。
+		opponentKeyStepper = new PsychUINumericStepper(objX + 110, objY + 40, 1, 4, 1, 18, 0, 80);
+		opponentKeyStepper.onValueChange = function()
+		{
+			PlayState.SONG.keyCount = Std.int(opponentKeyStepper.value);
+			refreshDualUI();
+			applySectionColumns(curSec);
+			updateJsonData();
+		};
+		opponentKeyStepper.visible = true;
+
+		// LE LTS 双侧：编辑侧切换（玩家/对手），BPM 下一行第三列起（objX+220/objX+300）。双侧模式下网格列数 = 编辑侧键数（LE 式分侧编辑）。
+		editPlayerBtn = new PsychUIButton(objX + 220, objY + 40, Language.get('charting_editside_player'), function()
+		{
+			if (ChartingState.editorSide != 0)
+			{
+				ChartingState.editorSide = 0;
+				refreshEditSideButtons();
+				applySectionColumns(curSec);
+				updateJsonData();
+			}
+		});
+		editOpponentBtn = new PsychUIButton(objX + 300, objY + 40, Language.get('charting_editside_opponent'), function()
+		{
+			if (ChartingState.editorSide != 1)
+			{
+				ChartingState.editorSide = 1;
+				refreshEditSideButtons();
+				applySectionColumns(curSec);
+				updateJsonData();
+			}
+		});
+		editPlayerBtn.visible = isDualChart();
+		editOpponentBtn.visible = isDualChart();
+		refreshEditSideButtons();
 
 
 		tab_group.add(new FlxText(songNameInputText.x, songNameInputText.y - 15, 80, Language.get('charting_songname')).setFormat(Paths.font(Language.get('uitab_font')), 12));
@@ -6312,14 +6549,21 @@ for (i in 0...GRID_PLAYERS)
 	#if (mac || mobile)
 		tab_group.add(reloadJsonButton);
 	#end
-		tab_group.add(new FlxText(maniaStepper.x, maniaStepper.y - 15, 100, Language.get('charting_mania')).setFormat(Paths.font(Language.get('uitab_font')), 12));
+		tab_group.add(new FlxText(maniaStepper.x, maniaStepper.y - 15, 100, Language.get('charting_playerkeycount')).setFormat(Paths.font(Language.get('uitab_font')), 12));
 		tab_group.add(maniaStepper);
+		opponentKeyStepperText = new FlxText(opponentKeyStepper.x, opponentKeyStepper.y - 15, 120, Language.get('charting_oppkeycount')).setFormat(Paths.font(Language.get('uitab_font')), 12);
+		opponentKeyStepperText.visible = true;
+		tab_group.add(opponentKeyStepperText);
+		tab_group.add(opponentKeyStepper);
+		tab_group.add(editPlayerBtn);
+		tab_group.add(editOpponentBtn);
 
 	// Find characters
 	var characters:Array<String> = [];
 	//
 		
-		objY += 40;
+		// LE LTS 双侧：对手侧键数 stepper/编辑侧按钮占用了 objY+40 一行，字符区整体下移 40px
+		objY += 80;
 		playerDropDown = new PsychUIDropDownMenu(objX, objY, [''], function(id:Int, character:String)
 		{
 			PlayState.SONG.player1 = character;
@@ -8562,7 +8806,18 @@ for (i in 0...GRID_PLAYERS)
 	{
 		updateChartData();
 		chartDataDirty = false;
-		var chartData:String = PsychJsonPrinter.print(PlayState.SONG, ['sectionNotes', 'events']);
+		// LE LTS 双侧：保存格式按两侧键数相等性切换（仅作用于深拷贝，不影响内存 SONG）——
+		// 相等（或未设置 playerKeyCount）→ EK/Psych 格式：输出 mania = keyCount-1、不输出 playerKeyCount；
+		// 不等 → LE 格式：输出 keyCount + playerKeyCount、不输出 mania（LE 引擎读取）。
+		var saveSong:Dynamic = haxe.Json.parse(haxe.Json.stringify(PlayState.SONG));
+		if (saveSong.playerKeyCount == null || saveSong.playerKeyCount == saveSong.keyCount)
+		{
+			Reflect.deleteField(saveSong, 'playerKeyCount');
+			if (saveSong.keyCount != null) saveSong.mania = Std.int(saveSong.keyCount) - 1;
+			else if (saveSong.mania == null) saveSong.mania = 3;
+		}
+		else Reflect.deleteField(saveSong, 'mania');
+		var chartData:String = PsychJsonPrinter.print(saveSong, ['sectionNotes', 'events']);
 		if(canQuickSave && Song.chartPath != null)
 		{
 			#if mobile

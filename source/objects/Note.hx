@@ -169,6 +169,31 @@ class Note extends FlxSprite
 	// 由 PlayState.applyMania() 按 extrakeys.json 动态填充；4 键默认值保持向后兼容。
 	public static var colArray:Array<String> = ['purple', 'blue', 'green', 'red'];
 
+	// LE LTS 双侧：本音符实际使用的列配色/动画前缀数组。
+	// null = 用全局 colArray（玩家侧/Psych/EK 路径）；对手侧音符由 PlayState 设为 opponentColArray。
+	public var noteColArray:Array<String> = null;
+
+	// LE LTS 双侧：取本音符生效的列配色数组中的第 data 项（取模防御越界）。
+	// noteColArray 未设置时回退全局 colArray，保证 Psych/EK 路径零影响。
+	inline function colAt(data:Int):String
+	{
+		var arr:Array<String> = noteColArray;
+		if (arr == null || arr.length == 0) arr = colArray;
+		return arr[data % arr.length];
+	}
+
+	// LE LTS 双侧：PlayState 设置 noteColArray 后刷新本音符（及前驱长条）的动画帧，使对手侧音符立即使用正确配色
+	public function refreshNoteVisual():Void
+	{
+		if (noteData < 0) return;
+		if (!isSustainNote) animation.play(colAt(noteData) + 'Scroll');
+		else if (prevNote != null)
+		{
+			animation.play(colAt(noteData) + 'holdend');
+			prevNote.animation.play(prevNote.colAt(prevNote.noteData) + 'hold');
+		}
+	}
+
 	/**
 	 * 把 noteData 映射到全局样式索引（用于 RGB shader 颜色表）。
 	 * 标准4键下 style == noteData % 4；多键时查 extrakeys.json 的 keys[mania].notes 映射。
@@ -178,6 +203,16 @@ class Note extends FlxSprite
 		var mania = 3;
 		if (Note.uiManiaOverride >= 0) mania = Note.uiManiaOverride;
 		else if (PlayState.SONG != null && PlayState.SONG.mania != null) mania = PlayState.SONG.mania;
+		if (ExtraKeysHandler.instance == null) return noteData % 4;
+		return ExtraKeysHandler.instance.globalIndex(mania, noteData);
+	}
+
+	// LE LTS 双侧：本音符生效的样式索引（双侧下对手侧音符按对手键数档位查色表，非双侧=styleIndex）
+	public function getStyleIndex():Int
+	{
+		var mania:Int = Note.uiManiaOverride >= 0 ? Note.uiManiaOverride : ((PlayState.SONG != null && PlayState.SONG.mania != null) ? PlayState.SONG.mania : 3);
+		if (PlayState.instance != null && PlayState.instance.isLeDualChart && !mustPress)
+			mania = (PlayState.SONG != null && PlayState.SONG.keyCount != null) ? Std.int(PlayState.SONG.keyCount) - 1 : mania;
 		if (ExtraKeysHandler.instance == null) return noteData % 4;
 		return ExtraKeysHandler.instance.globalIndex(mania, noteData);
 	}
@@ -263,7 +298,7 @@ class Note extends FlxSprite
 
 	public function defaultRGB()
 	{
-		var style:Int = styleIndex(noteData);
+		var style:Int = getStyleIndex();
 		var arr:Array<FlxColor> = (style > -1 && style < ClientPrefs.data.arrowRGB.length) ? ClientPrefs.data.arrowRGB[style] : null;
 		if(PlayState.isPixelStage && style > -1 && style < ClientPrefs.data.arrowRGBPixel.length) arr = ClientPrefs.data.arrowRGBPixel[style];
 
@@ -423,7 +458,7 @@ class Note extends FlxSprite
 			x += swagWidth * (noteData);
 			if(!isSustainNote && noteData < colArray.length) { //Doing this 'if' check to fix the warnings on Senpai songs
 				var animToPlay:String = '';
-				animToPlay = colArray[noteData % colArray.length];
+				animToPlay = colAt(noteData);
 				animation.play(animToPlay + 'Scroll');
 			}
 		}
@@ -452,7 +487,7 @@ class Note extends FlxSprite
 			offsetX += width / 2;
 			copyAngle = false;
 
-			animation.play(colArray[noteData % colArray.length] + 'holdend');
+			animation.play(colAt(noteData) + 'holdend');
 
 			updateHitbox();
 
@@ -463,7 +498,7 @@ class Note extends FlxSprite
 
 			if (prevNote.isSustainNote)
 			{
-				prevNote.animation.play(colArray[prevNote.noteData % colArray.length] + 'hold');
+				prevNote.animation.play(prevNote.colAt(prevNote.noteData) + 'hold');
 
 				prevNote.scale.y *= Conductor.stepCrochet / 100 * 1.05;
 				if(createdFrom != null && createdFrom.songSpeed != null) prevNote.scale.y *= createdFrom.songSpeed;
@@ -708,6 +743,8 @@ class Note extends FlxSprite
 		earlyHitMult = 1;
 		lateHitMult = 1;
 		hitsoundDisabled = false;
+		// LE LTS 双侧：复位按侧配色（池化复用默认回退全局玩家档）
+		noteColArray = null;
 		// 复位裁剪框（被裁剪过的音符复用会残留 clipRect 导致绘制异常）
 		clipRect = null;
 		flipY = false;
@@ -768,8 +805,8 @@ class Note extends FlxSprite
 				shader = null;
 
 			x += swagWidth * noteData;
-			if (!isSustainNote && noteData < colArray.length)
-				animation.play(colArray[noteData % colArray.length] + 'Scroll');
+			if (!isSustainNote)
+				animation.play(colAt(noteData) + 'Scroll');
 		}
 
 		// 前驱连接（与 new 一致：写前驱 nextNote）
@@ -792,7 +829,7 @@ class Note extends FlxSprite
 			hitsoundDisabled = true;
 			if (ClientPrefs.data.downScroll) flipY = true;
 			copyAngle = false;
-			animation.play(colArray[noteData % colArray.length] + 'holdend');
+			animation.play(colAt(noteData) + 'holdend');
 
 			offsetX += width / 2;
 			if (ClientPrefs.data.downScroll) offsetX -= width / 2; // 保持与 construct 偏移一致
@@ -805,7 +842,7 @@ class Note extends FlxSprite
 
 			if (this.prevNote.isSustainNote)
 			{
-				this.prevNote.animation.play(colArray[this.prevNote.noteData % colArray.length] + 'hold');
+				this.prevNote.animation.play(this.prevNote.colAt(this.prevNote.noteData) + 'hold');
 				this.prevNote.scale.y *= Conductor.stepCrochet / 100 * 1.05;
 			if (PlayState.instance != null)
 				this.prevNote.scale.y *= PlayState.instance.songSpeed;
@@ -949,10 +986,10 @@ class Note extends FlxSprite
 	}
 
 	function loadNoteAnims() {
-		if (colArray[noteData] == null)
+		if (colAt(noteData) == null)
 			return;
 
-		var name:String = colArray[noteData];
+		var name:String = colAt(noteData);
 		// 若皮肤缺少该颜色帧（如多键 rombus/circle 在非 ek 皮肤中不存在），回退到 green（上音符）帧；
 		// 动画名仍用原 name，保证构造函数 / MetaNote 的 play 能命中（普通长条/上动画）。
 		var framePrefix:String = hasNoteFrame(name) ? name : 'green';
@@ -966,7 +1003,11 @@ class Note extends FlxSprite
 		else animation.addByPrefix(name + 'Scroll', framePrefix + '0');
 
 		setGraphicSize(Std.int(width * 0.7));
-		if (!PlayState.isPixelStage && PlayState.strumScale != 1) scale.scale(PlayState.strumScale);
+		// LE LTS 双侧：滚动音符按侧缩放（构造时 mustPress 尚未赋值，用 PlayState.currentSideMustPress 判断生成侧；
+		// 非双侧=全局 strumScale）
+		var genSide:Bool = (PlayState.instance != null) ? PlayState.instance.currentSideMustPress : true;
+		var noteSideScale:Float = PlayState.getNoteSideScale(genSide);
+		if (!PlayState.isPixelStage && noteSideScale != 1) scale.scale(noteSideScale);
 		updateHitbox();
 		// 记录基准 scale（供对象池 prepareForReuse 复位，消除 sustain 改前驱累积）
 		baseScaleX = scale.x;
@@ -980,14 +1021,14 @@ class Note extends FlxSprite
 	}
 
 	function loadPixelNoteAnims() {
-		if (colArray[noteData] == null)
+		if (colAt(noteData) == null)
 			return;
 
 		if(isSustainNote)
 		{
-			animation.add(colArray[noteData] + 'holdend', [noteData + 4], 24, true);
-			animation.add(colArray[noteData] + 'hold', [noteData], 24, true);
-		} else animation.add(colArray[noteData] + 'Scroll', [noteData + 4], 24, true);
+			animation.add(colAt(noteData) + 'holdend', [noteData + 4], 24, true);
+			animation.add(colAt(noteData) + 'hold', [noteData], 24, true);
+		} else animation.add(colAt(noteData) + 'Scroll', [noteData + 4], 24, true);
 	}
 
 	function attemptToAddAnimationByPrefix(name:String, prefix:String, framerate:Float = 24, doLoop:Bool = true)
@@ -1121,7 +1162,7 @@ class Note extends FlxSprite
 		if (ClientPrefs.data.kadeHoldVisual)
 			return;
 
-		var center:Float = myStrum.y + offsetY + Note.swagWidth / 2 * PlayState.strumScale;
+		var center:Float = myStrum.y + offsetY + Note.swagWidth / 2 * PlayState.getNoteSideScale(mustPress);
 		if((mustPress || !ignoreNote) && (wasGoodHit || (prevNote.wasGoodHit && !canBeHit)))
 		{
 			var swagRect:FlxRect = clipRect;
