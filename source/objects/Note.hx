@@ -133,6 +133,8 @@ class Note extends FlxSprite
 	public static var uiManiaOverride:Int = -1;
 	public var colorSwap:ColorSwap;
 	public static var globalColorSwapShaders:Array<ColorSwap> = [];
+	// HSV 模式下本音符 colorSwap 绑定的样式索引（LE LTS 双侧：对手侧构造时按玩家档绑定，defaultHSV 按侧重绑）
+	public var colorSwapIndex:Int = -1;
 
 	/**
 	 * 皮肤版本号：每次切换当前皮肤（如切到不同 note skin）时自增。
@@ -182,16 +184,41 @@ class Note extends FlxSprite
 		return arr[data % arr.length];
 	}
 
-	// LE LTS 双侧：PlayState 设置 noteColArray 后刷新本音符（及前驱长条）的动画帧，使对手侧音符立即使用正确配色
+	// LE LTS 双侧：PlayState 设置 noteColArray 后刷新本音符（及前驱长条）的动画帧与着色，使对手侧音符立即使用正确配色。
+	// 注意：loadNoteAnims 只注册了构造时 colAt 色名的动画帧；切换 noteColArray 后新色名的 Scroll/hold 帧可能从未注册，
+	// 直接 play 会落空（动画不生效），故播放前先按当前 colAt 色名补齐动画。
 	public function refreshNoteVisual():Void
 	{
 		if (noteData < 0) return;
+		ensureAnimForColor();
 		if (!isSustainNote) animation.play(colAt(noteData) + 'Scroll');
 		else if (prevNote != null)
 		{
+			prevNote.ensureAnimForColor();
 			animation.play(colAt(noteData) + 'holdend');
 			prevNote.animation.play(prevNote.colAt(prevNote.noteData) + 'hold');
 		}
+		// 着色按当前生效的侧（对手档）重刷；RGB/HSV 两模式都覆盖（HSV 下 defaultHSV 须用 getStyleIndex）
+		if (ClientPrefs.data.arrowColorMode == 'HSV') defaultHSV();
+		else defaultRGB();
+	}
+
+	// 确保当前 colAt 色名的 Scroll/hold 动画帧已注册（切换 noteColArray 后补注册，与 loadNoteAnims 的帧规则一致）
+	function ensureAnimForColor():Void
+	{
+		if (frames == null) return;
+		var name:String = colAt(noteData);
+		if (name == null) return;
+		var framePrefix:String = hasNoteFrame(name) ? name : 'green';
+		if (isSustainNote)
+		{
+			if (animation.getByName(name + 'holdend') == null)
+				attemptToAddAnimationByPrefix(name + 'holdend', framePrefix + ' hold end', 24, true);
+			if (animation.getByName(name + 'hold') == null)
+				attemptToAddAnimationByPrefix(name + 'hold', framePrefix + ' hold piece', 24, true);
+		}
+		else if (animation.getByName(name + 'Scroll') == null)
+			attemptToAddAnimationByPrefix(name + 'Scroll', framePrefix + '0', 24, true);
 	}
 
 	/**
@@ -334,7 +361,15 @@ class Note extends FlxSprite
 	public function defaultHSV()
 	{
 		if (colorSwap == null) return;
-		var style:Int = styleIndex(noteData);
+		// LE LTS 双侧：按侧取样式索引（对手侧用对手键数档位），避免 HSV 模式下对手多键色相错用玩家档
+		var style:Int = getStyleIndex();
+		// 构造时 colorSwap 按当时（玩家档）索引绑定共享 shader；双侧下对手音符索引不符时重绑到当前侧档位
+		if (colorSwapIndex != style)
+		{
+			colorSwap = Note.initializeGlobalColorSwapShader(style);
+			shader = (PlayState.SONG != null && PlayState.SONG.disableNoteRGB) ? null : colorSwap.shader;
+			colorSwapIndex = style;
+		}
 		if (style > -1 && style < ClientPrefs.data.arrowHSV.length)
 		{
 			var arr:Array<Int> = ClientPrefs.data.arrowHSV[style];
@@ -452,6 +487,7 @@ class Note extends FlxSprite
 			// Legacy HSV path: override the sprite's shader with the shared ColorSwap shader.
 			if(ClientPrefs.data.arrowColorMode == 'HSV') {
 				colorSwap = Note.initializeGlobalColorSwapShader(styleIndex(noteData));
+				colorSwapIndex = styleIndex(noteData);
 				shader = rgbDisabled ? null : colorSwap.shader;
 			}
 
