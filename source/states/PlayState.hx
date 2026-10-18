@@ -3573,6 +3573,14 @@ tempScore += '${lblScore}: ${songScore}';
 	// CPU 自动演奏侧的角色（playOpponent 时为 boyfriend）
 	inline public function cpuSideChar():Character
 		return playOpponent ? boyfriend : dad;
+	// LE LTS 双侧：按角色取 sing 动画数组（dad=对手档 opponentSingAnimations、bf/gf=玩家档；
+	// 非双侧恒玩家档）。解决双侧下对手侧超 4 列角色动画被钳制到 singRIGHT 的问题。
+	inline function singAnimsFor(char:Character):Array<String>
+	{
+		if (isLeDualChart && char != null && char == dad)
+			return opponentSingAnimations;
+		return singAnimations;
+	}
 	// 当前由人类玩家控制的音符（playOpponent 时为对手/dad 侧，否则为玩家/bf 侧）。
 	// 注意：note.mustPress 始终保持原版语义（true=bf 侧），不要反转它，否则脚本会读错。
 	inline public function isPlayerNote(note:Note):Bool
@@ -7235,11 +7243,11 @@ tempScore += '${lblScore}: ${songScore}';
 		songScore -= 10;
 		if (!endingSong) songMisses++;
 
-		// 角色 miss 动画
+		// 角色 miss 动画（LE LTS 双侧：受控角色为 dad 时用对手档 sing 动画）
 		var char:Character = playerSideChar();
 		if(char != null && char.hasMissAnimations)
 		{
-			var animToPlay:String = singAnimations[Std.int(Math.abs(Math.min(singAnimations.length-1, direction)))] + 'miss';
+			var animToPlay:String = singAnimsFor(char)[Std.int(Math.abs(Math.min(singAnimsFor(char).length-1, direction)))] + 'miss';
 			char.playAnim(animToPlay, true);
 
 			if(char != gf && lastCombo > 5 && gf != null && gf.hasAnimation('sad'))
@@ -7437,7 +7445,7 @@ tempScore += '${lblScore}: ${songScore}';
 		else
 			RecalculateRating(true);
 
-		// play character anims（playOpponent 时受控角色是 dad）
+		// play character anims（playOpponent 时受控角色是 dad；LE LTS 双侧：dad 用对手档 sing 动画）
 		var char:Character = playerSideChar();
 		if((note != null && note.gfNote) || (SONG.notes[curSection] != null && SONG.notes[curSection].gfSection)) char = gf;
 
@@ -7446,7 +7454,7 @@ tempScore += '${lblScore}: ${songScore}';
 			var postfix:String = '';
 			if(note != null) postfix = note.animSuffix;
 
-			var animToPlay:String = singAnimations[Std.int(Math.abs(Math.min(singAnimations.length-1, direction)))] + 'miss' + postfix;
+			var animToPlay:String = singAnimsFor(char)[Std.int(Math.abs(Math.min(singAnimsFor(char).length-1, direction)))] + 'miss' + postfix;
 			char.playAnim(animToPlay, true);
 
 			if(char != gf && lastCombo > 5 && gf != null && gf.hasAnimation('sad'))
@@ -7521,8 +7529,9 @@ tempScore += '${lblScore}: ${songScore}';
 		else if(!note.noAnimation)
 		{
 			var char:Character = autoChar;
-			var animToPlay:String = singAnimations[Std.int(Math.abs(Math.min(singAnimations.length-1, note.noteData)))] + note.animSuffix;
+			// gf 音符先切到 gf，动画名按其所属角色取数组（LE LTS 双侧：仅 dad 用对手档）
 			if(note.gfNote) char = gf;
+			var animToPlay:String = singAnimsFor(char)[Std.int(Math.abs(Math.min(singAnimsFor(char).length-1, note.noteData)))] + note.animSuffix;
 
 			if(char != null)
 			{
@@ -7657,8 +7666,7 @@ tempScore += '${lblScore}: ${songScore}';
 		{
 			if(!note.noAnimation)
 			{
-				var animToPlay:String = singAnimations[Std.int(Math.abs(Math.min(singAnimations.length-1, note.noteData)))] + note.animSuffix;
-
+				// LE LTS 双侧：受控角色为 dad（playOpponent）时用对手档 sing 动画；gf 音符先切到 gf 再取数组
 				var char:Character = playerSideChar();
 				var animCheck:String = 'hey';
 				if(note.gfNote)
@@ -7666,6 +7674,7 @@ tempScore += '${lblScore}: ${songScore}';
 					char = gf;
 					animCheck = 'cheer';
 				}
+				var animToPlay:String = singAnimsFor(char)[Std.int(Math.abs(Math.min(singAnimsFor(char).length-1, note.noteData)))] + note.animSuffix;
 
 				if(char != null)
 				{
