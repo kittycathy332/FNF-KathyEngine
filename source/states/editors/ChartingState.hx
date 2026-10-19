@@ -449,6 +449,14 @@ class ChartingState extends MusicBeatState implements PsychUIEventHandler.PsychU
 	var isMovingNotes:Bool = false;
 	var movingNotesLastData:Int = 0;
 	var movingNotesLastY:Float = 0;
+	// 叠加标记：同 strumTime（同一网格行）+ 同列的箭头/事件数量 > 1 时，在格子右下角显示 "xN"（位于箭头图层之上）
+	var overlapMarkers:FlxTypedGroup<FlxText>;
+	// 去重按钮（当前小节 / 整个谱面；无重复时自动隐藏且不可按下）
+	var dedupe1Button:PsychUIButton = null;
+	var clearDupButton:PsychUIButton = null;
+	// 《音符/事件》复选框（去重按钮与"清空"按钮共用；勾选决定去重处理哪些类型）
+	var affectNotes:PsychUICheckBox = null;
+	var affectEvents:PsychUICheckBox = null;
 	
 	var vocals:FlxSound = new FlxSound();
 	var opponentVocals:FlxSound = new FlxSound();
@@ -775,6 +783,10 @@ if(_shouldReset) Conductor.songPosition = 0;
 		add(behindRenderedNotes);
 		add(curRenderedNotes);
 		add(movingNotes);
+
+		// 叠加标记层（最后 add → 渲染在最上层，覆盖箭头/长条）
+		overlapMarkers = new FlxTypedGroup<FlxText>();
+		add(overlapMarkers);
 
 		eventLockOverlay = new FlxSprite(SHOW_EVENT_COLUMN ? gridLayout.eventX : gridLayout.opponentX, 0).makeGraphic(1, 1, FlxColor.BLACK);
 		eventLockOverlay.alpha = 0.6;
@@ -4733,12 +4745,251 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 				}
 			}
 		}
+		// 叠加标记：按当前小节渲染的音符/事件统计同格数量，>1 时在格子右下角显示 xN
+		updateOverlapMarkers();
+		// 去重按钮：无重复时自动隐藏
+		refreshDedupeButtons();
+	}
+
+	// 叠加标记：统计当前小节渲染音符/事件中"同一网格行（步）+ 同一 UI 列/事件轨"的数量，
+	// 数量 > 1 时在该格子右下角显示 "xN"（文本右缘/底缘贴格线）；标记层 add 在箭头之上。
+	// 允许重叠（复制粘贴等产生的同格多音符），仅作视觉提示，不阻止、不清理。
+	function updateOverlapMarkers():Void
+	{
+		if (overlapMarkers == null) return;
+		overlapMarkers.clear();
+
+		var gl = getGridLayout();
+		var counts:Map<String, Int> = [];
+		var samples:Map<String, MetaNote> = [];
+		for (note in curRenderedNotes)
+		{
+			if (note == null || !note.exists) continue;
+			var row:Int = Math.round(note.chartY / (GRID_SIZE * curZoom));
+			var key:String;
+			if (!note.isEvent)
+			{
+				var uiCol:Int = noteDataToUIColumn(note.songData[1]);
+				if (uiCol < 0) continue; // 事件列占位等无效列
+				key = row + '|' + uiCol;
+			}
+			else
+			{
+				var ev:EventMetaNote = cast note;
+				key = row + '|ev' + ev.eventTrackIndex;
+			}
+			if (counts.exists(key)) counts.set(key, counts.get(key) + 1);
+			else counts.set(key, 1);
+			if (samples.get(key) == null) samples.set(key, note);
+		}
+
+		for (key in counts.keys())
+		{
+			var cnt:Int = counts.get(key);
+			if (cnt <= 1) continue;
+			var sample:MetaNote = samples.get(key);
+			if (sample == null) continue;
+			var x:Float = 0;
+			if (!sample.isEvent)
+			{
+				var uiCol:Int = noteDataToUIColumn(sample.songData[1]);
+				var spacingOffset:Float = 0;
+				if (uiCol >= opponentGridCols()) spacingOffset += TRACK_SPACING;
+				if (uiCol >= opponentGridCols() + EVENT_TRACK_COUNT) spacingOffset += TRACK_SPACING;
+				x = gl.startX + uiCol * GRID_SIZE + spacingOffset + GRID_SIZE;
+			}
+			else
+			{
+				var ev:EventMetaNote = cast sample;
+				x = gl.eventX + ev.eventTrackIndex * GRID_SIZE + GRID_SIZE;
+			}
+			var y:Float = sample.chartY + GRID_SIZE - 24; // 文本底缘贴格子底边
+			var txt:FlxText = new FlxText(x - 48, y, 48, 'x$cnt', 24);
+			// arturito-slab 24px + 1px 黑色描边
+			txt.setFormat(Paths.font('arturito-slab.ttf'), 24, 0xFFFFFFFF, RIGHT, OUTLINE_FAST, 0xFF000000);
+			txt.borderSize = 1;
+			// X 固定（网格不随摄像机横向滚动）；Y 跟随摄像机纵向滚动（与音符一致，滚动时标记随网格移动）
+			txt.scrollFactor.set(0, 1);
+			overlapMarkers.add(txt);
+		}
+	}
+
+	// 去除当前作用域内的重复箭头与事件
+	// 箭头重复：同 strumTime + 同数据列（songData[1]）；事件重复：strumTime + 事件名 + 全部 value 值相同（不要求轨道索引）
+	// wholeSong=false（"-1 重复"）：仅当前小节；wholeSong=true（"清除重复"）：整个谱面
+	// minusOne=true（"-1 重复"）：每个重复组仅删除 1 个（N→N-1，可多次点击逐步减）；
+	// minusOne=false（"清除重复"）：每组保留 1 个、删除其余 N-1 个
+	// 受《音符/事件》复选框（affectNotes/affectEvents）控制：只处理勾选类型
+	function dedupeSection(wholeSong:Bool, minusOne:Bool = false):Void
+	{
+		var removedNotes:Int = 0;
+		var removedEvents:Int = 0;
+		var minTime:Float = wholeSong ? Math.NEGATIVE_INFINITY : getMinNoteTime(curSec);
+		var maxTime:Float = wholeSong ? Math.POSITIVE_INFINITY : getMaxNoteTime(curSec);
+
+		if (affectNotes.checked)
+		{
+			var counts:Map<String, Int> = [];
+			if (minusOne)
+			{
+				for (note in notes)
+				{
+					if (note == null || note.isEvent) continue;
+					if (note.strumTime < minTime || note.strumTime >= maxTime) continue;
+					var k:String = note.strumTime + '|' + note.songData[1];
+					if (counts.exists(k)) counts.set(k, counts.get(k) + 1);
+					else counts.set(k, 1);
+				}
+			}
+			var keptNotes:Map<String, Bool> = [];
+			var deletedKeys:Map<String, Bool> = [];
+			for (note in notes.copy())
+			{
+				if (note == null || note.isEvent) continue;
+				if (note.strumTime < minTime || note.strumTime >= maxTime) continue;
+				var key:String = note.strumTime + '|' + note.songData[1];
+				if (minusOne)
+				{
+					// 每个重复组只删 1 个
+					if (counts.get(key) != null && counts.get(key) > 1 && !deletedKeys.exists(key))
+					{
+						notes.remove(note);
+						selectedNotes.remove(note);
+						removedNotes++;
+						deletedKeys.set(key, true);
+					}
+				}
+				else
+				{
+					if (keptNotes.exists(key))
+					{
+						notes.remove(note);
+						selectedNotes.remove(note);
+						removedNotes++;
+					}
+					else keptNotes.set(key, true);
+				}
+			}
+		}
+
+		if (affectEvents.checked)
+		{
+			var eventCounts:Map<String, Int> = [];
+			if (minusOne)
+			{
+				for (ev in events)
+				{
+					if (ev == null) continue;
+					if (ev.strumTime < minTime || ev.strumTime >= maxTime) continue;
+					var entries:Array<Array<String>> = ev.events;
+					if (entries == null || entries.length == 0) continue;
+					for (entry in entries)
+					{
+						if (entry == null) continue;
+						var k:String = ev.strumTime + '|' + entry.join('|');
+						if (eventCounts.exists(k)) eventCounts.set(k, eventCounts.get(k) + 1);
+						else eventCounts.set(k, 1);
+					}
+				}
+			}
+			var keptEvents:Map<String, Bool> = [];
+			var deletedEventKeys:Map<String, Bool> = [];
+			for (ev in events.copy())
+			{
+				if (ev == null) continue;
+				if (ev.strumTime < minTime || ev.strumTime >= maxTime) continue;
+				var entries:Array<Array<String>> = ev.events;
+				if (entries == null || entries.length == 0) continue;
+				for (entry in entries)
+				{
+					if (entry == null) continue;
+					var key:String = ev.strumTime + '|' + entry.join('|');
+					if (minusOne)
+					{
+						// 每个重复组只删 1 个（该组首个重复图标）
+						if (eventCounts.get(key) != null && eventCounts.get(key) > 1 && !deletedEventKeys.exists(key))
+						{
+							events.remove(ev);
+							selectedNotes.remove(ev);
+							removedEvents++;
+							deletedEventKeys.set(key, true);
+							break;
+						}
+					}
+					else
+					{
+						if (keptEvents.exists(key))
+						{
+							events.remove(ev);
+							selectedNotes.remove(ev);
+							removedEvents++;
+							break; // 该图标已判定为重复，不再处理其后续条目
+						}
+						keptEvents.set(key, true);
+					}
+				}
+			}
+		}
+
+		if (removedNotes + removedEvents > 0)
+		{
+			softReloadNotes(wholeSong ? false : true);
+			chartDataDirty = true;
+			showOutput(Language.get('charting_dedupesec_result', [Std.string(removedNotes), Std.string(removedEvents)]), true);
+		}
+		else showOutput(Language.get('charting_msg_nothingdedupe'), true);
+	}
+
+	// 检测 [minTime, maxTime) 范围内是否存在重复（箭头或事件，可分别开关）
+	function hasDuplicatesInRange(minTime:Float, maxTime:Float, checkNotes:Bool = true, checkEvents:Bool = true):Bool
+	{
+		if (checkNotes)
+		{
+			var seenNotes:Map<String, Bool> = [];
+			for (note in notes)
+			{
+				if (note == null || note.isEvent) continue;
+				if (note.strumTime < minTime || note.strumTime >= maxTime) continue;
+				var key:String = note.strumTime + '|' + note.songData[1];
+				if (seenNotes.exists(key)) return true;
+				seenNotes.set(key, true);
+			}
+		}
+		if (checkEvents)
+		{
+			var seenEvents:Map<String, Bool> = [];
+			for (ev in events)
+			{
+				if (ev == null) continue;
+				if (ev.strumTime < minTime || ev.strumTime >= maxTime) continue;
+				var entries:Array<Array<String>> = ev.events;
+				if (entries == null || entries.length == 0) continue;
+				for (entry in entries)
+				{
+					if (entry == null) continue;
+					var key:String = ev.strumTime + '|' + entry.join('|');
+					if (seenEvents.exists(key)) return true;
+					seenEvents.set(key, true);
+				}
+			}
+		}
+		return false;
+	}
+
+	// 去重按钮：始终可见；按《音符/事件》复选框检测各自作用域是否存在重复——
+	// 有重复时正常亮度，无重复时半透明（点击仍会给出"未发现重复项"提示）；仅清除重复部分、每组保留 1 个
+	function refreshDedupeButtons():Void
+	{
+		if (dedupe1Button == null || clearDupButton == null) return;
+		if (cachedSectionTimes == null) return; // create 早期 _cacheSections() 尚未执行，跳过本次刷新
+		dedupe1Button.alpha = hasDuplicatesInRange(getMinNoteTime(curSec), getMaxNoteTime(curSec), affectNotes.checked, affectEvents.checked) ? 1 : 0.5;
+		clearDupButton.alpha = hasDuplicatesInRange(Math.NEGATIVE_INFINITY, Math.POSITIVE_INFINITY, affectNotes.checked, affectEvents.checked) ? 1 : 0.5;
 	}
 
 	function getMinNoteTime(sec:Int)
 	{
 		var minTime:Float = Math.NEGATIVE_INFINITY;
-		if(sec > 0)
+		if(sec > 0 && cachedSectionTimes != null)
 			minTime = cachedSectionTimes[sec];
 		return minTime;
 	}
@@ -4746,7 +4997,7 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 	function getMaxNoteTime(sec:Int)
 	{
 		var maxTime:Float = Math.POSITIVE_INFINITY;
-		if(sec < cachedSectionTimes.length)
+		if(cachedSectionTimes != null && sec + 1 < cachedSectionTimes.length)
 			maxTime = cachedSectionTimes[sec + 1];
 		return maxTime;
 	}
@@ -4929,6 +5180,9 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 		selectedNotes.remove(note);
 		curRenderedNotes.remove(note, true);
 		addUndoAction(DELETE_NOTE, !note.isEvent ? {notes: [note]} : {events: [note]});
+		// 手动删减（鼠标/触屏/右键）后刷新叠加标记与去重按钮状态（此路径不走 softReloadNotes）
+		updateOverlapMarkers();
+		refreshDedupeButtons();
 	}
 
 	// 在空白处按下左键时立即创建箭头，并进入“拖拽创建长条”状态（拖动时实时预览长度）
@@ -6017,8 +6271,6 @@ for (i in 0...GRID_PLAYERS)
 
 	function addSectionTab()
 	{
-		var affectNotes:PsychUICheckBox = null;
-		var affectEvents:PsychUICheckBox = null;
 		var copyLastSecStepper:PsychUINumericStepper = null;
 		var tab_group = mainBox.getTab(Language.get('charting_section_text')).menu;
 		var objX = 10;
@@ -6204,9 +6456,29 @@ for (i in 0...GRID_PLAYERS)
 		clearButton.normalStyle.textColor = FlxColor.WHITE;
 
 		objY += 25;
-		affectNotes = new PsychUICheckBox(objX, objY, Language.get('charting_notes_text'), 60);
+		affectNotes = new PsychUICheckBox(objX, objY, Language.get('charting_notes_text'), 60, function()
+		{
+			refreshDedupeButtons();
+		});
 		affectNotes.checked = true;
-		affectEvents = new PsychUICheckBox(objX + 100, objY, Language.get('charting_events_text'), 60);
+		affectEvents = new PsychUICheckBox(objX + 100, objY, Language.get('charting_events_text'), 60, function()
+		{
+			refreshDedupeButtons();
+		});
+
+		// 两套去重按钮：
+		// "-1 重复"：仅当前小节，每个重复组仅删除 1 个（N→N-1，可多次点击逐步减）
+		// "清除重复"：整个谱面，每组保留 1 个、删除其余 N-1 个
+		objY += 25;
+		dedupe1Button = new PsychUIButton(objX, objY, Language.get('charting_dedupesec_button'), function()
+		{
+			dedupeSection(false, true);
+		});
+		clearDupButton = new PsychUIButton(objX + 100, objY, Language.get('charting_cleardup_button'), function()
+		{
+			dedupeSection(true, false);
+		});
+		refreshDedupeButtons();
 
 		objY += 32;
 		var copyLastSecButton:PsychUIButton = new PsychUIButton(objX, objY, Language.get('charting_copylastsec_button'), function()
@@ -6308,6 +6580,8 @@ for (i in 0...GRID_PLAYERS)
 		tab_group.add(clearButton);
 		tab_group.add(affectNotes);
 		tab_group.add(affectEvents);
+		tab_group.add(dedupe1Button);
+		tab_group.add(clearDupButton);
 
 		tab_group.add(copyLastSecButton);
 		tab_group.add(copyLastSecStepper);
