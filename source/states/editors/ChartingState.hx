@@ -6966,6 +6966,9 @@ for (i in 0...GRID_PLAYERS)
 			// 否则 isDualChart() 恒 false，对手侧网格会跟着玩家侧 mania 一起变（初次调整"双方同时变化"）。
 			if (PlayState.SONG.keyCount == null)
 				PlayState.SONG.keyCount = ((PlayState.SONG.mania != null) ? Std.int(PlayState.SONG.mania) : 3) + 1;
+			// 先把当前显示层编辑（未保存的放置/删除/移动）同步回 SONG——
+			// 否则下方 reloadNotes() 从 SONG.sectionNotes 全量重建会丢失所有未保存编辑（谱面"重置回最初进入时"）。
+			updateChartData();
 			PlayState.SONG.mania = newKeys - 1;
 			PlayState.SONG.playerKeyCount = newKeys;
 			if (isDualChart() && oldPlrM != newKeys)
@@ -6988,6 +6991,9 @@ for (i in 0...GRID_PLAYERS)
 			// 对称补齐：Psych/EK 谱面 playerKeyCount 为 null 时，先按原 mania+1 补齐玩家侧，再进入双侧语义
 			if (PlayState.SONG.playerKeyCount == null)
 				PlayState.SONG.playerKeyCount = ((PlayState.SONG.mania != null) ? Std.int(PlayState.SONG.mania) : 3) + 1;
+			// 先把当前显示层编辑（未保存的放置/删除/移动）同步回 SONG——
+			// 否则下方 reloadNotes() 从 SONG.sectionNotes 全量重建会丢失所有未保存编辑（谱面"重置回最初进入时"）。
+			updateChartData();
 			PlayState.SONG.keyCount = newKeys;
 			if (isDualChart() && oldOppO != newKeys)
 				reencodeChartNotes(oldPlrO, oldOppO, oldDualO); // 保持侧+侧内列不变，按新键数重编码 LE 编号
