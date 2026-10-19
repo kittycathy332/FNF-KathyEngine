@@ -223,6 +223,7 @@ import haxe.io.BytesInput;
 	// Extra Keys 相关设置
 	public var touchLaneMode:String = 'auto'; // 触屏多键轨道：'auto' = 跟随谱面键数 / '4k' = 固定 4 键
 	public var showKeyPreview:Bool = true; // 开局在每个 strum 下方短暂显示对应按键名（EK KeybindShowcase）
+	public var keyPreviewStyle:String = 'ek'; // 键位预览样式：'ek' = EK KeybindShowcase（背景块+双键位切换）/ 'le' = LE extraKeyReminders（白字黑阴影+逐列淡出）
 	public var inputSystem:String = 'default'; // 输入判定系统: 'default' (传统) 或 'rhythm' (Rhythm模式，只允许击中最近的音符)
 	public var discordRPC:Bool = true;
 	public var loadingScreen:Bool = true;

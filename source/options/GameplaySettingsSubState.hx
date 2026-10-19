@@ -242,6 +242,14 @@ class GameplaySettingsSubState extends BaseOptionsMenu
 			BOOL);
 		addOption(option);
 
+		// 键位预览样式（EK KeybindShowcase / LE extraKeyReminders）
+		var option:Option = new Option(Language.get('key_preview_style'),
+			Language.get("key_preview_style_desc"),
+			'keyPreviewStyle',
+			STRING, ['ek', 'le']);
+		option.valueLocalizations = ['ek' => Language.get('key_preview_style_ek'), 'le' => Language.get('key_preview_style_le')];
+		addOption(option);
+
 		var option:Option = new Option(Language.get('hitsound_volume'),
 			Language.get("hitsoundvolume_desc"),
 			'hitsoundVolume',

@@ -228,11 +228,16 @@ class Note extends FlxSprite
 		if (noteData < 0) return;
 		ensureAnimForColor();
 		if (!isSustainNote) animation.play(colAt(noteData) + 'Scroll');
-		else if (prevNote != null)
+		else
 		{
-			prevNote.ensureAnimForColor();
 			animation.play(colAt(noteData) + 'holdend');
-			prevNote.animation.play(prevNote.colAt(prevNote.noteData) + 'hold');
+			// prevNote 可能已被 removeNote 销毁（FlxSprite.destroy 会置 animation=null）而本 tail 仍残留
+			// （改键事件在 hold 进行中/刚结束时触发），此时只更新自身，跳过已销毁的 head。
+			if (prevNote != null && prevNote.animation != null)
+			{
+				prevNote.ensureAnimForColor();
+				prevNote.animation.play(prevNote.colAt(prevNote.noteData) + 'hold');
+			}
 		}
 		// 着色按当前生效的侧（对手档）重刷；RGB/HSV 两模式都覆盖（HSV 下 defaultHSV 须用 getStyleIndex）
 		if (ClientPrefs.data.arrowColorMode == 'HSV') defaultHSV();

@@ -128,7 +128,7 @@ class ChartingState extends MusicBeatState implements PsychUIEventHandler.PsychU
 		['Toggle IconBop', "Enable or disable icon bopping.\nValue 1: on/off/true/false/0/1 (default: on)"],
 		['Add IconBop', "Make the health icons bop once immediately."],
 		// LE LTS 双侧轨道数：谱面播放到该事件时间点时实时切换两侧箭头轨道数（首字母大写；EventHandler 同时兼容小写老谱面）
-		['Change KeyCount', "LE LTS dual keycount: switches lane count mid-song.\nValue 1: Player key count (e.g. 4, 6, 8)\nValue 2: Opponent key count (e.g. 6, 8)"]
+		['Change KeyCount', "LE LTS dual keycount: switches lane count mid-song.\nValue 1: Player key count (e.g. 4, 6, 8)\nValue 2: Opponent key count (e.g. 6, 8)\nValue 3: Whether to re-show the key preview after the change (1/true/0/false; default 1 = show)"]
 		];
 	
 	/** 根据事件名获取本地化描述，找不到翻译则返回原文 */

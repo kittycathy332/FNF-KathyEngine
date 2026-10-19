@@ -351,7 +351,10 @@ class EventHandler
                 var oppKeys:Int = (value2 != null && value2 != '' && !Math.isNaN(Std.parseFloat(value2))) ? Std.parseInt(value2) : 4;
                 if (plrKeys < 1) plrKeys = 4;
                 if (oppKeys < 1) oppKeys = 4;
-                playState.changeKeyCounts(plrKeys, oppKeys);
+                // value3：改键后是否重显键位预览（默认 true 显示；'0'/'false'/'no' 则跳过，不影响已有的预览显示）
+                var showPreviewAfter:Bool = true;
+                if (value3 != null && value3 != '' && (value3 == '0' || value3.toLowerCase() == 'false' || value3.toLowerCase() == 'no')) showPreviewAfter = false;
+                playState.changeKeyCounts(plrKeys, oppKeys, showPreviewAfter);
         }
 
         playState.stagesFunc(function(stage:BaseStage) stage.eventCalled(eventName, value1, value2, flValue1, flValue2, strumTime));

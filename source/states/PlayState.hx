@@ -10,6 +10,7 @@ import backend.HitSoundPool;
 import backend.Language.ScoreLanguage;
 import backend.Rating;
 import backend.ExtraKeysHandler;
+import backend.InputFormatter;
 
 #if MODS_ALLOWED
 import sys.FileSystem;
@@ -2062,21 +2063,8 @@ isReplaying = false;
 		createLaneCovers();
 		createHoldCovers();
 
-		// Extra Keys：开局键位预览（EK KeybindShowcase）——玩家侧每个 strum 下方短暂显示绑定键名
-		if (ClientPrefs.data.showKeyPreview && !playOpponent)
-		{
-			for (i in 0...playerStrums.members.length)
-			{
-				var st:StrumNote = playerStrums.members[i];
-				var keyCodes:Array<FlxKey> = (i < keysArray.length) ? ClientPrefs.keyBinds.get(keysArray[i]) : null;
-				if (keyCodes == null || keyCodes.length < 1) continue;
-				var kc:KeybindShowcase = new KeybindShowcase(st.x,
-					ClientPrefs.data.downScroll ? st.y - 30 : st.y + st.height + 5,
-					keyCodes, camHUD, st.width / 2, (SONG != null && SONG.mania != null) ? SONG.mania : 3);
-				kc.onComplete = function() remove(kc);
-				add(kc);
-			}
-		}
+		// 开局键位预览（样式见 showKeyPreview：'ek' = EK KeybindShowcase / 'le' = LE extraKeyReminders）
+		showKeyPreview();
 
 		for (i in 0...playerStrums.length) {
 				setOnScripts('defaultPlayerStrumX' + i, playerStrums.members[i].x);
@@ -4021,7 +4009,79 @@ tempScore += '${lblScore}: ${songScore}';
 	// —— LE LTS 双侧：change keycount 事件实时切换两侧轨道数 ——
 	// 参考 LTS EventHandler 思路：写回 SONG 两侧键数 → applyMania/applyOpponentMania 更新两侧 EK 档配置
 	// → 重建两侧 strums（instant 不播渐入）→ 重排已生成音符 x（按 mustPress 侧 + 新键数）→ 回放键数组随 applyMania 重建。
-	public function changeKeyCounts(playerKeyCount:Int, oppKeyCount:Int):Void
+	// —— 开局 / change keycount 改键后的键位预览 ——
+	// 样式由 ClientPrefs.data.keyPreviewStyle 决定：
+	//  - 'ek'：EK KeybindShowcase（strum 下方背景块 + 双键位切换淡出）
+	//  - 'le'：LE extraKeyReminders（strum 上方白字黑阴影，逐列延迟上浮淡出；仅非 4 键显示）
+	// 记录当前在屏的预览对象：快速连续改键（change keycount 高频触发）时先清除旧的，避免叠字重叠
+	public var keyPreviewObjs:Array<FlxBasic> = [];
+
+	public function clearKeyPreview():Void
+	{
+		for (obj in keyPreviewObjs)
+		{
+			if (obj != null && members.indexOf(obj) != -1) remove(obj);
+			if (obj != null) obj.kill();
+		}
+		keyPreviewObjs = [];
+	}
+
+	public function showKeyPreview():Void
+	{
+		clearKeyPreview();
+		if (!ClientPrefs.data.showKeyPreview || playOpponent) return;
+		if (ClientPrefs.data.keyPreviewStyle == 'le' && playerStrums.length != 4)
+		{
+			for (i in 0...playerStrums.members.length)
+			{
+				var st:StrumNote = playerStrums.members[i];
+				var keyCodes:Array<FlxKey> = (i < keysArray.length) ? ClientPrefs.keyBinds.get(keysArray[i]) : null;
+				if (keyCodes == null || keyCodes.length < 1) continue;
+				var coolWidth:Int = Math.ceil(st.width / 2.83684);
+				if (coolWidth < 4) coolWidth = 4;
+				var keyName:String = InputFormatter.getKeyName(keyCodes[0]);
+				var keyShadow:FlxText = new FlxText((st.x + (st.width / 2)) - (coolWidth / 2), st.y - (coolWidth / 2), coolWidth, keyName, coolWidth);
+				keyShadow.cameras = [camHUD];
+				keyShadow.color = FlxColor.BLACK;
+				keyShadow.scrollFactor.set();
+				add(keyShadow);
+				keyPreviewObjs.push(keyShadow);
+				var keyThing:FlxText = new FlxText(keyShadow.x - 6, keyShadow.y - 6, coolWidth, keyName, coolWidth);
+				keyThing.cameras = [camHUD];
+				keyThing.scrollFactor.set();
+				add(keyThing);
+				keyPreviewObjs.push(keyThing);
+				FlxTween.tween(keyShadow, {y: keyShadow.y + 10, alpha: 0}, 3, {
+					ease: FlxEase.circOut,
+					startDelay: 0.5 + (0.2 * i),
+					onComplete: function(_) { remove(keyShadow); keyShadow.kill(); keyShadow.destroy(); }
+				});
+				FlxTween.tween(keyThing, {y: keyThing.y + 10, alpha: 0}, 3, {
+					ease: FlxEase.circOut,
+					startDelay: 0.5 + (0.2 * i),
+					onComplete: function(_) { remove(keyThing); keyThing.kill(); keyThing.destroy(); }
+				});
+			}
+		}
+		else
+		{
+			for (i in 0...playerStrums.members.length)
+			{
+				var st:StrumNote = playerStrums.members[i];
+				var keyCodes:Array<FlxKey> = (i < keysArray.length) ? ClientPrefs.keyBinds.get(keysArray[i]) : null;
+				if (keyCodes == null || keyCodes.length < 1) continue;
+				var kc:KeybindShowcase = new KeybindShowcase(st.x,
+					ClientPrefs.data.downScroll ? st.y - 30 : st.y + st.height + 5,
+					keyCodes, camHUD, st.width / 2, (SONG != null && SONG.mania != null) ? SONG.mania : 3);
+				kc.onComplete = function() remove(kc);
+				add(kc);
+				keyPreviewObjs.push(kc);
+			}
+		}
+	}
+
+	// showPreviewAfter：改键后是否重显键位预览（由 change keycount 事件 value3 控制，默认 true；false 则跳过且不影响已显示的预览）
+	public function changeKeyCounts(playerKeyCount:Int, oppKeyCount:Int, showPreviewAfter:Bool = true):Void
 	{
 		if (playerKeyCount < 1 || playerKeyCount > 18) playerKeyCount = 4;
 		if (oppKeyCount < 1 || oppKeyCount > 18) oppKeyCount = 4;
@@ -4057,6 +4117,9 @@ tempScore += '${lblScore}: ${songScore}';
 		remapNotesToNewKeyCount();
 		// hold cover 绑定的 strum 已被 clear 重建，需重新创建（绑定新 strums、按新档着色）
 		createHoldCovers();
+		// 改键后按当前样式重显键位预览（LE extraKeyReminders / EK KeybindShowcase），让玩家知道新键位；
+		// 事件 value3 = 0/false 时跳过，且不会清掉当前已显示的预览（showKeyPreview 内部才做清理）
+		if (showPreviewAfter) showKeyPreview();
 
 		trace('[LE DUAL] changeKeyCounts -> player=${playerKeyCount}K opponent=${oppKeyCount}K');
 	}
@@ -4072,6 +4135,8 @@ tempScore += '${lblScore}: ${songScore}';
 
 	private function remapNote(n:Note):Void
 	{
+		// 已销毁的音符（FlxSprite.destroy 置 frames=null，如 hold 结束后被 removeNote）跳过，避免无效操作
+		if (n.frames == null) return;
 		var sideCols:Int = n.mustPress ? totalColumns : opponentColumns;
 		// 1) noteData 折叠/展开（可逆）：改键变小取模折叠并记录原始列；键数恢复（能容纳原列）时展开回原列。
 		//    长条段（tail）跟随 head 同步折叠/展开，避免 9k→6k→9k 后高列音符丢失。
