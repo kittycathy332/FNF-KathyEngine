@@ -4172,6 +4172,11 @@ tempScore += '${lblScore}: ${songScore}';
 		// 4) 按新侧 scale 重缩（宽度；sustain 的 y 为长条长度逻辑，不动）
 		rescaleNote(n);
 		if (n.tail != null) for (t in n.tail) if (t != null) rescaleNote(t);
+		// 5) 长条衔接偏移：tail.y = strumY + offsetY + correctionOffset + distance，correctionOffset 只在
+		//    spawn 时按 head.height/2 设置一次；改键后 head 高度已随新 scale 变化，同步更新在场长条的
+		//    correctionOffset，避免长条起点与箭头衔接处出现 y 偏移（downScroll 恒为 0 不变）。
+		if (n.tail != null && !ClientPrefs.data.downScroll)
+			for (t in n.tail) if (t != null) t.correctionOffset = n.height / 2;
 	}
 
 	private function rescaleNote(n:Note):Void
@@ -4188,6 +4193,10 @@ tempScore += '${lblScore}: ${songScore}';
 		// sustain tail 的 scale.y 是长条长度（baseScale 后又经长条逻辑调整），只等比 x，不破坏长度。
 		if (!n.isSustainNote) n.scale.y = n.baseScaleY / n.genStrumScale * want;
 		n.updateHitbox();
+		// 渲染锚点与重建后的 strum 保持一致（strum 构造时 centerOffsets/centerOrigin 按当前 scale 校准；
+		// 音符只改 scale 会保留旧 scale 的 offset/origin，多键缩放下箭头/长条相对 strum 整体偏移）。
+		n.centerOffsets();
+		n.centerOrigin();
 	}
 
 	// 重排场上/待生成音符的 x 位置（change keycount 事件后调用）
