@@ -186,13 +186,38 @@ class Note extends FlxSprite
 	// 避免 9k→6k→9k 后 7/8/9 列音符因取模不可逆而丢失。
 	public var origNoteData:Int = -1;
 
+	// 制谱器双侧编辑：音符真实侧（0=玩家、1=对手；-1=未设置）。
+	// createNote 按 LE 连续编号 + 所属小节 mustHit 判定（isPlayerNoteByData），
+	// 供 getStyleIndex / 角色动画等在不依赖 mustPress（分侧编辑时统一标记，不代表真实侧）的情况下取侧。
+	public var editorSideNote:Int = -1;
+
+	// 制谱器双侧：音符的"侧内列"（LE 连续编号按小节 mustHit 换算后的列 0..侧键数-1；-1=未设置）。
+	// 双侧谱面音符 noteData 是 LE 连续编号（非 mustHit 小节玩家音符 = opp + col），
+	// colAt/getStyleIndex 若直接用 noteData 取模/查表会把侧内列算错（如 6..9 % 4 = 2,3,0,1），
+	// 导致玩家箭头动画帧与着色错位。PlayState 里音符 noteData 本身已是侧内列，此字段不影响。
+	public var sideNoteData:Int = -1;
+
+	// 当前 rgbShader 绑定的全局样式索引（defaultRGB 重绑判断用）。
+	// 双侧/多键下构造时按 SONG.mania 档绑定，getStyleIndex（按侧档）可能不同，
+	// 不重绑会改错共享 shader 的颜色并污染其他同 style 音符。
+	public var rgbShaderIndex:Int = -1;
+
+	// 制谱器双侧编辑模式（ChartingState 设置）：让 Note/StrumNote 的取色与动画档位
+	// 按编辑器玩家/对手键数走（PlayState.instance 在制谱器里为 null，原按侧分支不生效）。
+	public static var editorDualMode:Bool = false;
+	public static var editorPlrKeys:Int = 4;
+	public static var editorOppKeys:Int = 4;
+
 	// LE LTS 双侧：取本音符生效的列配色数组中的第 data 项（取模防御越界）。
 	// noteColArray 未设置时回退全局 colArray，保证 Psych/EK 路径零影响。
+	// 双侧制谱器：sideNoteData（侧内列）优先于 LE 连续编号，否则非 mustHit 小节玩家音符
+	// （LE 编号 = opp + col）取模会错位。
 	inline function colAt(data:Int):String
 	{
 		var arr:Array<String> = noteColArray;
 		if (arr == null || arr.length == 0) arr = colArray;
-		return arr[data % arr.length];
+		var idx:Int = (sideNoteData >= 0) ? sideNoteData : data;
+		return arr[idx % arr.length];
 	}
 
 	// LE LTS 双侧：PlayState 设置 noteColArray 后刷新本音符（及前驱长条）的动画帧与着色，使对手侧音符立即使用正确配色。
@@ -248,16 +273,32 @@ class Note extends FlxSprite
 	// LE LTS 双侧：本音符生效的样式索引（双侧下对手侧音符按对手键数档位查色表，非双侧=styleIndex）。
 	// 优先用生成时刻记录的 genMania/genOppMania（change keycount 改键折叠后已更新为新档），
 	// 保证与 noteColArray（动画名）一致；缺失时回退运行时档位。
+	// 制谱器（editorDualMode）：PlayState.instance 为 null，改用编辑器侧键数档 + editorSideNote 判定真实侧。
 	public function getStyleIndex():Int
 	{
 		var mania:Int = Note.uiManiaOverride >= 0 ? Note.uiManiaOverride : ((PlayState.SONG != null && PlayState.SONG.mania != null) ? PlayState.SONG.mania : 3);
-		if (PlayState.instance != null && PlayState.instance.isLeDualChart)
+		var dual:Bool = (PlayState.instance != null && PlayState.instance.isLeDualChart) || Note.editorDualMode;
+		if (dual)
 		{
-			if (!mustPress) mania = (genOppMania >= 0) ? genOppMania : PlayState.instance.oppMania;
-			else if (genMania >= 0) mania = genMania;
+			if (Note.editorDualMode)
+			{
+				// 制谱器分侧编辑：mustPress 统一按编辑侧标记（不代表真实侧），用 editorSideNote 判定
+				if (editorSideNote == 1) mania = (genOppMania >= 0) ? genOppMania : (Note.editorOppKeys - 1);
+				else mania = (genMania >= 0) ? genMania : (Note.editorPlrKeys - 1);
+			}
+			else
+			{
+				if (!mustPress) mania = (genOppMania >= 0) ? genOppMania : PlayState.instance.oppMania;
+				else if (genMania >= 0) mania = genMania;
+			}
 		}
-		if (ExtraKeysHandler.instance == null) return noteData % 4;
-		return ExtraKeysHandler.instance.globalIndex(mania, noteData);
+		if (ExtraKeysHandler.instance == null)
+		{
+			var idx0:Int = (sideNoteData >= 0) ? sideNoteData : noteData;
+			return idx0 % 4;
+		}
+		var idx:Int = (sideNoteData >= 0) ? sideNoteData : noteData;
+		return ExtraKeysHandler.instance.globalIndex(mania, idx);
 	}
 	public static var defaultNoteSkin(default, never):String = 'noteSkins/NOTE_assets';
 
@@ -342,6 +383,15 @@ class Note extends FlxSprite
 	public function defaultRGB()
 	{
 		var style:Int = getStyleIndex();
+		// RGB：getStyleIndex（按侧档）与构造时绑定的 style 不同时，重绑到对应共享 shader——
+		// 双侧/多键下构造按 SONG.mania 档绑定，不重绑会改错共享对象的颜色并污染其他同 style 音符。
+		if (rgbShaderIndex != style)
+		{
+			rgbShader = new RGBShaderReference(this, initializeGlobalRGBShader(style));
+			rgbShaderIndex = style;
+			var rgbDisabled: Bool = (PlayState.SONG != null && PlayState.SONG.disableNoteRGB);
+			if (rgbDisabled) rgbShader.enabled = false;
+		}
 		var arr:Array<FlxColor> = (style > -1 && style < ClientPrefs.data.arrowRGB.length) ? ClientPrefs.data.arrowRGB[style] : null;
 		if(PlayState.isPixelStage && style > -1 && style < ClientPrefs.data.arrowRGBPixel.length) arr = ClientPrefs.data.arrowRGBPixel[style];
 
@@ -496,6 +546,7 @@ class Note extends FlxSprite
 			// RGB shader is always initialized (shared globals are referenced by NoteSplash /
 			// VisualsSettings previews even in HSV mode). Only the sprite's active shader differs.
 			rgbShader = new RGBShaderReference(this, initializeGlobalRGBShader(styleIndex(noteData)));
+			rgbShaderIndex = styleIndex(noteData); // 记录绑定索引，defaultRGB 按 getStyleIndex 变化时重绑
 			var rgbDisabled:Bool = (PlayState.SONG != null && PlayState.SONG.disableNoteRGB);
 			if(rgbDisabled) rgbShader.enabled = false;
 			texture = '';

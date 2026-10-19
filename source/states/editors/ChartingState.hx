@@ -127,8 +127,8 @@ class ChartingState extends MusicBeatState implements PsychUIEventHandler.PsychU
 		['Change Player Scroll Speed', "same as Change Scroll Speed, but only for Player"],
 		['Toggle IconBop', "Enable or disable icon bopping.\nValue 1: on/off/true/false/0/1 (default: on)"],
 		['Add IconBop', "Make the health icons bop once immediately."],
-		// LE LTS 双侧轨道数：谱面播放到该事件时间点时实时切换两侧箭头轨道数（事件名小写与 EventHandler case 精确匹配）
-		['change keycount', "LE LTS dual keycount: switches lane count mid-song.\nValue 1: Player key count (e.g. 4, 6, 8)\nValue 2: Opponent key count (e.g. 6, 8)"]
+		// LE LTS 双侧轨道数：谱面播放到该事件时间点时实时切换两侧箭头轨道数（首字母大写；EventHandler 同时兼容小写老谱面）
+		['Change KeyCount', "LE LTS dual keycount: switches lane count mid-song.\nValue 1: Player key count (e.g. 4, 6, 8)\nValue 2: Opponent key count (e.g. 6, 8)"]
 		];
 	
 	/** 根据事件名获取本地化描述，找不到翻译则返回原文 */
@@ -364,6 +364,12 @@ class ChartingState extends MusicBeatState implements PsychUIEventHandler.PsychU
 
 	// Sing动画相关
 	private var singAnimations:Array<String> = ['singLEFT', 'singDOWN', 'singUP', 'singRIGHT'];
+
+	// LE LTS 双侧：玩家侧 / 对手侧各自独立的列配色数组（按各自键数档位从 extrakeys.json 填充）。
+	// 双侧谱面音符为 LE 连续编号跨两侧渲染，单份 Note.colArray（编辑侧档）无法同时满足两侧取色，
+	// 音符构造时按自身侧（editorSideNote）选用对应数组。
+	private var playerColArrayCache:Array<String> = null;
+	private var opponentColArrayCache:Array<String> = null;
 
 	var prevOpponentGridBg:ChartingGridSprite;
 	var prevEventGridBg:ChartingGridSprite;
@@ -791,6 +797,10 @@ if(_shouldReset) Conductor.songPosition = 0;
 		vortexIndicator.visible = strumLineNotes.visible = strumLineNotes.active = vortexEnabled;
 
 		// 漩涡编辑器静态箭头：固定 4 列
+		// LE LTS 双侧：提前同步编辑器静态档位——strums 在 applySectionColumns/reloadNotes 之前创建，
+		// 双侧下必须让 StrumNote 构造即按两侧键数取档（PlayState.instance 为 null）。
+		Note.editorDualMode = isDualChart();
+		if (isDualChart()) { Note.editorPlrKeys = dualPlayerKeyCount(); Note.editorOppKeys = dualOpponentKeyCount(); }
 		rebuildStrumLineNotes();
 
 
@@ -1149,11 +1159,28 @@ if(_shouldReset) Conductor.songPosition = 0;
 	}
 
 	// 播放角色的sing动画
-	public function playCharacterSing(char:Character, noteData:Int, ?forcePlay:Bool = false):Void
+	// LE LTS 双侧：isBf 决定取哪侧档位的 sing 方向映射（玩家=playerKeyCount-1、对手=keyCount-1）——
+	// 全局 singAnimations 是"当前编辑侧"档位，跨两侧播放时对侧角色会用错档方向（"播放的不是箭头对应动画"）。
+	public function playCharacterSing(char:Character, noteData:Int, ?isBf:Bool = true, ?forcePlay:Bool = false):Void
 	{
 		if(char == null || !char.visible) return;
 
-		var animToPlay:String = singAnimations[Std.int(Math.abs(Math.min(singAnimations.length-1, noteData)))];
+		var dir:Int = Std.int(Math.abs(noteData));
+		var animToPlay:String = singAnimations[Std.int(Math.abs(Math.min(singAnimations.length-1, dir)))];
+		// 多键/双侧：按该侧档位从 extrakeys 映射方向动画（列 4+ 不再截断到 singRIGHT；4 键档结果与原生一致）
+		var mania:Int = (isDualChart()) ? ((isBf ? dualPlayerKeyCount() : dualOpponentKeyCount()) - 1) : getSectionMania(-1);
+		if (mania < 0) mania = 3;
+		ExtraKeysHandler.ensure();
+		if (ExtraKeysHandler.instance != null && ExtraKeysHandler.instance.data != null)
+		{
+			switch (ExtraKeysHandler.instance.singAnim(mania, dir))
+			{
+				case 'singLEFT': animToPlay = 'singLEFT';
+				case 'singDOWN': animToPlay = 'singDOWN';
+				case 'singUP': animToPlay = 'singUP';
+				case 'singRIGHT': animToPlay = 'singRIGHT';
+			}
+		}
 		if(char.animation.exists(animToPlay) || (char.isAnimateAtlas && char.atlas.anim.getByName(animToPlay) != null))
 		{
 			char.playAnim(animToPlay, true);
@@ -1173,9 +1200,11 @@ if(_shouldReset) Conductor.songPosition = 0;
 		if(target == null || !target.visible) return;
 		var dir:Int = Std.int(Math.abs(direction)) % 4;
 		ExtraKeysHandler.ensure();
+		// 该侧档位（双侧：玩家/对手各自档；非双侧：SONG.mania 档）——sing 方向与着色共用
+		var mania:Int = (isDualChart()) ? ((isBf ? dualPlayerKeyCount() : dualOpponentKeyCount()) - 1) : getSectionMania(-1);
+		if (mania < 0) mania = 3;
 		if (ExtraKeysHandler.instance != null && ExtraKeysHandler.instance.data != null)
 		{
-			var mania:Int = getSectionMania(-1); // 制谱器当前歌曲 mania（与网格列数一致）
 			switch (ExtraKeysHandler.instance.singAnim(mania, direction))
 			{
 				case 'singLEFT': dir = 0;
@@ -1186,8 +1215,9 @@ if(_shouldReset) Conductor.songPosition = 0;
 		}
 		var animName:String = "" + dir;
 		target.animation.play(animName, true);
-		// 唱歌时按该列样式染上箭头主色（Lil 主体黑白，染色后显示对应键的颜色）
-		var style:Int = Note.styleIndex(direction);
+		// 按该侧档位染上箭头主色（Lil 主体黑白，染色后显示对应键的颜色）。
+		// 不能用全局 Note.styleIndex——双侧谱面无 mania 字段时它会回退 4 键档，对手多键列（侧内列 ≥ 4）错色。
+		var style:Int = (ExtraKeysHandler.instance != null) ? ExtraKeysHandler.instance.globalIndex(mania, direction) : (direction % 4);
 		var arr:Array<FlxColor> = ClientPrefs.data.arrowRGB[style];
 		if (arr != null && arr.length > 0) target.color = arr[0];
 		else target.color = 0xFFFFFFFF;
@@ -2018,7 +2048,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 				else if(FlxG.keys.justPressed.S) // Save (Ctrl + S)
 					saveChart();
 			}
-			if(FlxG.keys.justPressed.F) // Ctrl + F: Toggle search box
+			if(FlxG.keys.pressed.CONTROL && FlxG.keys.justPressed.F) // Ctrl + F: Toggle search box（需同时按 Ctrl，避免误触）
 			{
 				searchBox.visible = !searchBox.visible;
 			}
@@ -2399,12 +2429,12 @@ if(_shouldReset) Conductor.songPosition = 0;
 								selectedNotes.push(noteAdded);
 								addUndoAction(ADD_NOTE, {notes: [noteAdded]});
 
-								// 播放角色对应箭头动画（LE LTS 双侧：noteData 连续编号，按侧划分）
-								var pCols:Int = playerGridCols();
-								var targetChar:Character = (noteData < pCols) ? boyfriend : dad;
-								var direction:Int = noteData % ((noteData < pCols) ? pCols : opponentGridCols());
+								// 播放角色对应箭头动画（LE LTS 双侧：noteData 连续编号，按侧+小节 mustHit 划分）
+								var charSide:Array<Dynamic> = resolveCharAnimSide(noteData, getCurrentSectionMustHit());
+								var targetChar:Character = charSide[0] ? boyfriend : dad;
+								var direction:Int = charSide[1];
 								if(targetChar != null && targetChar.visible)
-									playCharacterSing(targetChar, direction);
+									playCharacterSing(targetChar, direction, charSide[0]);
 							}
 								else if(!lockedEvents)
 								{
@@ -2680,12 +2710,12 @@ if(_shouldReset) Conductor.songPosition = 0;
 								selectedNotes.push(noteAdded);
 								addUndoAction(ADD_NOTE, {notes: [noteAdded]});
 
-								// 播放角色对应箭头动画（LE LTS 双侧：noteData 连续编号，按侧划分）
-								var pCols:Int = playerGridCols();
-								var targetChar:Character = (noteData < pCols) ? boyfriend : dad;
-								var direction:Int = noteData % ((noteData < pCols) ? pCols : opponentGridCols());
+								// 播放角色对应箭头动画（LE LTS 双侧：noteData 连续编号，按侧+小节 mustHit 划分）
+								var charSide:Array<Dynamic> = resolveCharAnimSide(noteData, getCurrentSectionMustHit());
+								var targetChar:Character = charSide[0] ? boyfriend : dad;
+								var direction:Int = charSide[1];
 								if(targetChar != null && targetChar.visible)
-									playCharacterSing(targetChar, direction);
+									playCharacterSing(targetChar, direction, charSide[0]);
 							}
 							else if(!lockedEvents)
 							{
@@ -2769,20 +2799,15 @@ if(_shouldReset) Conductor.songPosition = 0;
 			// 检查音符是否在上一帧和当前帧之间到达（类似打击音的触发时机）
 			if(noteStrumTime > lastStrumTime && noteStrumTime <= currentStrumTime)
 			{
-				if(note.mustPress)
-				{
-					// 玩家音符（LE LTS 双侧：方向 = noteData % 玩家侧键数；非双侧 = 轨道列数）
-					var direction:Int = noteData % playerGridCols();
-					if(boyfriend != null && boyfriend.visible)
-						playCharacterSing(boyfriend, direction);
-				}
-				else
-				{
-					// 对手音符（LE LTS 双侧：方向 = noteData % 对手侧键数；非双侧 = 轨道列数）
-					var direction:Int = noteData % opponentGridCols();
-					if(dad != null && dad.visible)
-						playCharacterSing(dad, direction);
-				}
+				// LE LTS 双侧：按音符所属小节 mustHit 解析侧与侧内列（LE 连续编号：mustHit 0..plr-1=玩家/plr..=对手；
+				// 非 mustHit 0..opp-1=对手/opp..=玩家）。不能用 % 侧键数——非 mustHit 玩家音符（LE=opp+col）会算错列。
+				var noteSec:Int = (note.editorSection >= 0) ? note.editorSection : curSec;
+				var secMustHit:Bool = (PlayState.SONG.notes[noteSec] != null) ? (PlayState.SONG.notes[noteSec].mustHitSection == true) : getCurrentSectionMustHit();
+				var charSide:Array<Dynamic> = resolveCharAnimSide(noteData, secMustHit);
+				var targetChar:Character = charSide[0] ? boyfriend : dad;
+				var direction:Int = charSide[1];
+				if(targetChar != null && targetChar.visible)
+					playCharacterSing(targetChar, direction, charSide[0]);
 			}
 		}
 
@@ -2847,7 +2872,11 @@ if(_shouldReset) Conductor.songPosition = 0;
 			var noteStrumTime:Float = note.strumTime;
 			if(noteStrumTime > lilLastStrumCheckTime && noteStrumTime <= lilNow)
 			{
-				playLilSing(note.mustPress, Std.int(note.noteData) % (note.mustPress ? playerGridCols() : opponentGridCols()));
+				// 双侧：按所属小节 mustHit 解析侧与侧内列（同主角色逻辑），避免非 mustHit 玩家音符 % 玩家键数算错列
+				var noteSec:Int = (note.editorSection >= 0) ? note.editorSection : curSec;
+				var secMustHit:Bool = (PlayState.SONG.notes[noteSec] != null) ? (PlayState.SONG.notes[noteSec].mustHitSection == true) : getCurrentSectionMustHit();
+				var charSide:Array<Dynamic> = resolveCharAnimSide(Std.int(note.noteData), secMustHit);
+				playLilSing(charSide[0], charSide[1]);
 			}
 		}
 		lilLastStrumCheckTime = lilNow;
@@ -3017,11 +3046,25 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 
 					if(vortexPlaying)
 					{
-						var strumNote:StrumNote = strumLineNotes.members[note.songData[1]];
-						if(strumNote != null)
+						// LE LTS 双侧/调换后：strums 按"对手左 / 玩家右"排列（members 索引 ≠ Psych 编码 noteData）。
+						// 必须通过 noteDataToUIColumn 映射到 UI 列，再换算成 strums 实际 members 索引，
+						// 否则玩家音符会触发对手 strum、对手音符触发玩家 strum（原 Psych 按 noteData 直索引的残留）。
+						var uiColV:Int = noteDataToUIColumn(Std.int(note.songData[1]));
+						var strumIndexV:Int = -1;
+						if (uiColV >= 0)
 						{
-							strumNote.playAnim('confirm', true);
-							strumNote.resetAnim = Math.max(Conductor.stepCrochet * 1.25, note.sustainLength) / 1000 / playbackRate;
+							var oColsV:Int = opponentGridCols();
+							if (uiColV < oColsV) strumIndexV = uiColV;                       // 对手区
+							else if (uiColV >= oColsV + EVENT_TRACK_COUNT) strumIndexV = uiColV - EVENT_TRACK_COUNT; // 玩家区（成员索引比 UI 列少 EVENT 轨道数）
+						}
+						if (strumIndexV >= 0 && strumIndexV < strumLineNotes.length)
+						{
+							var strumNote:StrumNote = strumLineNotes.members[strumIndexV];
+							if(strumNote != null)
+							{
+								strumNote.playAnim('confirm', true);
+								strumNote.resetAnim = Math.max(Conductor.stepCrochet * 1.25, note.sustainLength) / 1000 / playbackRate;
+							}
 						}
 					}
 				}
@@ -3642,6 +3685,62 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 	}
 
 	// 根据小节（按谱面 mania）同步：Note.colArray（颜色前缀）、singAnimations、网格列数、网格与箭头、轨道色块。
+	// 按指定 mania 档位生成一组的列配色数组（仅取色，不含 sing 动画名；双侧档位缓存用）。
+	// 逻辑与 applySectionColumns 的填充一致，4 键兜底 purple/blue/green/red。
+	function buildColArrayForMania(mania:Int, laneCountFallback:Int):Array<String>
+	{
+		ExtraKeysHandler.ensure();
+		var out:Array<String> = [];
+		var ek = ExtraKeysHandler.instance.data;
+		if (ek != null && ek.keys != null && ek.keys.length > mania) {
+			var mode = ek.keys[mania];
+			var laneCount:Int = (mode != null && mode.notes != null) ? mode.notes.length : laneCountFallback;
+			for (i in 0...laneCount) {
+				var g:Int = (mode.notes != null && i < mode.notes.length) ? mode.notes[i] : i;
+				var anim = (ek.animations != null && g >= 0 && g < ek.animations.length) ? ek.animations[g] : null;
+				out.push(anim != null ? anim.note : 'purple');
+			}
+		} else {
+			out = ['purple', 'blue', 'green', 'red'];
+		}
+		return out;
+	}
+
+	// LE LTS 双侧：改键数后按"新键数"重编码全部音符的 LE 连续编号，保持音符的"侧 + 侧内列"不变。
+	// 双侧谱面音符编号按谱面当前键数编码（mustHit 小节 0..plr-1=玩家/plr..=对手；非 mustHit 小节 0..opp-1=对手/opp..=玩家）。
+	// 若只改 SONG.keyCount/playerKeyCount 而不重编码，改对手键数后对手边界（opp）变化，
+	// 原玩家音符（如非 mustHit 下 LE 4..9）会被新边界重新判成对手——侧判定翻转、按对手档取动画/着色，
+	// 即"改对手键数后玩家箭头动画受影响"（改玩家键数不动 opp 边界，所以对手不受影响，现象不对称）。
+	// oldDual=false（改前是 Psych/EK 编码）：侧判定固定为 noteData < oldPlr（不随小节），转新 LE 编码。
+	function reencodeChartNotes(oldPlr:Int, oldOpp:Int, oldDual:Bool):Void
+	{
+		var newPlr:Int = dualPlayerKeyCount();
+		var newOpp:Int = dualOpponentKeyCount();
+		for (sec in PlayState.SONG.notes)
+		{
+			var secMustHit:Bool = sec.mustHitSection;
+			for (note in sec.sectionNotes)
+			{
+				if (note == null || note.length < 2) continue;
+				var d:Int = Std.int(note[1]);
+				var isPlr:Bool;
+				var col:Int;
+				if (oldDual)
+				{
+					if (secMustHit) { isPlr = (d < oldPlr); col = isPlr ? d : (d - oldPlr); }
+					else { isPlr = (d >= oldOpp); col = isPlr ? (d - oldOpp) : d; }
+				}
+				else
+				{
+					// Psych/EK 编码：0..oldPlr-1=玩家（固定，不随小节）、oldPlr..=对手
+					isPlr = (d < oldPlr);
+					col = d % oldPlr;
+				}
+				note[1] = isPlr ? (secMustHit ? col : newOpp + col) : (secMustHit ? newPlr + col : col);
+			}
+		}
+	}
+
 	function applySectionColumns(secNum:Int):Void
 	{
 		var cols = getSectionColumns(secNum);
@@ -3673,6 +3772,17 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 		}
 		Note.colArray = newColArray;
 		singAnimations = newSingAnims;
+
+		// LE LTS 双侧：同步编辑器静态档位（供 Note/StrumNote 按侧取色与动画），
+		// 并缓存玩家/对手两侧独立列配色（音符构造时按自身侧选用，避免跨侧取色错乱）。
+		Note.editorDualMode = isDualChart();
+		if (isDualChart())
+		{
+			Note.editorPlrKeys = dualPlayerKeyCount();
+			Note.editorOppKeys = dualOpponentKeyCount();
+			playerColArrayCache = buildColArrayForMania(dualPlayerKeyCount() - 1, dualPlayerKeyCount());
+			opponentColArrayCache = buildColArrayForMania(dualOpponentKeyCount() - 1, dualOpponentKeyCount());
+		}
 
 		// LE LTS 双侧：GRID_COLUMNS_PER_PLAYER 主值 = 玩家侧列数（非双侧 = mania+1）；
 		// 重建条件 = 两侧列数任一变化（编辑侧切换不再误触发重建，网格始终按两侧真实键数渲染）
@@ -3713,7 +3823,13 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 			if (uiColumn >= oCols) spacingOffset += TRACK_SPACING;
 			if (uiColumn >= oCols + EVENT_TRACK_COUNT) spacingOffset += TRACK_SPACING;
 
-			var note:StrumNote = new StrumNote(gridLayout.startX + (GRID_SIZE * uiColumn) + spacingOffset, startY, noteData, 0);
+			// player 参数必须按真实侧传（1=玩家、0=对手）：StrumNote.isPlayerSide()/按侧取档依赖它。
+			// 原 Psych 残留全传 0 会把玩家 strums 也当对手，导致双侧下玩家 strums 用对手档着色与动画。
+			var note:StrumNote = new StrumNote(gridLayout.startX + (GRID_SIZE * uiColumn) + spacingOffset, startY, noteData, isPlayer ? 1 : 0);
+			// 制谱器 strums 只是可视化指示器（无真实输入）：isBotplayMode=true 让玩家位（player=1）的
+			// confirm 动画也能像对手位一样计时自动恢复 static——否则受 autoResetStrumAnim 控制，
+			// 默认关闭时玩家 strum 会一直停留在命中动画（Vortex 播放时可见）。
+			note.isBotplayMode = true;
 			note.scrollFactor.set();
 			note.playAnim('static');
 			note.alpha = 0.4;
@@ -4096,10 +4212,18 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 		// 用音符所属小节的列数解码 note[1]，避免按当前显示小节的列数误判归属。
 		var cols:Int = getSectionColumns(secNum);
 		var daStrumTime:Float = note[0];
-		var daNoteData:Int = Std.int(note[1] % cols);
-		var gottaHitNote:Bool = (note[1] < cols);
+		// LE LTS 双侧：note[1] 是 LE 连续编号（mustHit 小节 0..plr-1=玩家/plr..=对手；非 mustHit 小节 0..opp-1=对手/opp..=玩家），
+		// 不能按编辑侧键数取模——否则非 mustHit 小节玩家音符（opp..opp+plr-1）与对手音符会被错误折叠进玩家列区。
+		// 非双侧：Psych 编码（0..cols-1=玩家/cols..=对手），取模得到侧内列。
+		var daNoteData:Int = isDualChart() ? Std.int(note[1]) : Std.int(note[1] % cols);
+		// LE LTS 双侧（分侧编辑）：mustPress 按音符真实侧判定（LE 连续编号 + 所属小节 mustHit），
+		// 而非编辑侧统一标记——否则非 mustHit 小节/对手区音符会被误标为玩家，
+		// 播放预览时对手音符命中却触发玩家角色 sing、打击音错侧。
+		// 非双侧：Psych 编码（note[1] < cols 即玩家）。
+		var gottaHitNote:Bool = isDualChart() ? isPlayerNoteByData(Std.int(note[1]), section.mustHitSection) : (note[1] < cols);
 
 		var swagNote:MetaNote = new MetaNote(daStrumTime, daNoteData, note);
+		swagNote.editorSection = secNum; // 记录所属小节（自动播放角色动画按小节 mustHit 解析双侧 LE 编号）
 		swagNote.mustPress = gottaHitNote;
 		swagNote.setSustainLength(note[2], cachedSectionCrochets[secNum] / 4, curZoom);
 		swagNote.gfNote = (section.gfSection && gottaHitNote == section.mustHitSection);
@@ -4116,6 +4240,29 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 
 		swagNote.updateHitbox();
 		swagNote.active = false;
+
+		// LE LTS 双侧：按音符真实侧（LE 编号 + 所属小节 mustHit）设置列配色数组与生成档位，
+		// 使动画帧（noteColArray）与着色（getStyleIndex → genMania/genOppMania）一致。
+		// 否则双侧谱面跨两侧渲染时，取色/动画全按"当前编辑侧"档（PlayState.instance 为 null），
+		// 出现"玩家箭头一个动画不同着色、对手多键错色错帧"类问题。
+		if (isDualChart())
+		{
+			var secMustHit:Bool = section.mustHitSection;
+			var isPlrNote:Bool = isPlayerNoteByData(daNoteData, secMustHit);
+			swagNote.editorSideNote = isPlrNote ? 0 : 1;
+			swagNote.noteColArray = isPlrNote ? playerColArrayCache : opponentColArrayCache;
+			swagNote.genMania = dualPlayerKeyCount() - 1;
+			swagNote.genOppMania = dualOpponentKeyCount() - 1;
+			// 侧内列：LE 连续编号按小节 mustHit 换算（玩家 mustHit=编号 / 非 mustHit=编号-对手键数；对手对称）。
+			// colAt/getStyleIndex 用此侧内列取色/查表，避免非 mustHit 小节玩家音符（LE=opp+col）取模错位。
+			var plrSide:Int = dualPlayerKeyCount();
+			var oppSide:Int = dualOpponentKeyCount();
+			swagNote.sideNoteData = isPlrNote ? (secMustHit ? daNoteData : (daNoteData - oppSide)) : (secMustHit ? (daNoteData - plrSide) : daNoteData);
+			if (swagNote.sideNoteData < 0) swagNote.sideNoteData = 0;
+			// 构造时已按 SONG.mania 档取色/播帧，双侧需按真实侧刷新（补注册动画帧 + 重绑 shader + 重着色）
+			swagNote.refreshNoteVisual();
+		}
+
 		positionNoteXByData(swagNote, null, cols);
 		positionNoteYOnTime(swagNote, secNum);
 		return swagNote;
@@ -4664,6 +4811,29 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 		return secMustHit ? (noteData < plr) : (noteData >= opp);
 	}
 
+	// LE LTS 双侧：把"音符 noteData + 所属小节 mustHit"解析为 [isPlayer, 侧内方向列]，供角色 sing 动画使用。
+	// 双侧下 noteData 为 LE 连续编号（mustHit 小节 0..plr-1=玩家 / plr..=对手；非 mustHit 小节 0..opp-1=对手 / opp..=玩家），
+	// 非双侧下为 Psych 编码（0..cols-1=玩家 / cols..=对手）。
+	function resolveCharAnimSide(noteData:Int, secMustHit:Bool):Array<Dynamic>
+	{
+		var pCols:Int = playerGridCols();
+		var oCols:Int = opponentGridCols();
+		var isPlr:Bool;
+		var direction:Int;
+		if (isDualChart())
+		{
+			isPlr = isPlayerNoteByData(noteData, secMustHit);
+			direction = isPlr ? (secMustHit ? noteData : (noteData - oCols)) : (secMustHit ? (noteData - pCols) : noteData);
+		}
+		else
+		{
+			isPlr = (noteData < pCols);
+			direction = noteData % (isPlr ? pCols : oCols);
+		}
+		if (direction < 0) direction = 0;
+		return [isPlr, direction];
+	}
+
 	// LE LTS 双侧：刷新编辑侧切换按钮高亮（当前编辑侧高亮）
 	function refreshEditSideButtons():Void
 	{
@@ -4828,12 +4998,11 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 			resetSelectedNotes();
 			selectedNotes.push(noteAdded);
 
-			var pColsD:Int = playerGridCols();
-			var isPlrNote:Bool = isDualChart() ? isPlayerNoteByData(dragStartNoteData, getCurrentSectionMustHit()) : (dragStartNoteData < pColsD);
-			var targetChar:Character = isPlrNote ? boyfriend : dad;
-			var direction:Int = dragStartNoteData % (isPlrNote ? pColsD : opponentGridCols());
+			var charSide:Array<Dynamic> = resolveCharAnimSide(dragStartNoteData, getCurrentSectionMustHit());
+			var targetChar:Character = charSide[0] ? boyfriend : dad;
+			var direction:Int = charSide[1];
 			if(targetChar != null && targetChar.visible)
-				playCharacterSing(targetChar, direction);
+				playCharacterSing(targetChar, direction, charSide[0]);
 		}
 		else if(!lockedEvents && dragStartTrackType == 'event')
 		{
@@ -6506,18 +6675,27 @@ for (i in 0...GRID_PLAYERS)
 		// LE LTS 双侧（分侧编辑，两个独立设置项）：此 stepper = 玩家侧键数（playerKeyCount，1..18），始终显示；
 		// 对手侧键数（keyCount）由 opponentKeyStepper 独立控制。两者相等时保存为 EK/Psych 格式（mania），不等时保存为 LE 格式。
 		// 注意：此处 value 为"键数"（1..18），与对手 stepper 同单位；内部换算档位 = 键数-1。
+		// 两个 stepper 完全独立：改玩家只改玩家侧（playerKeyCount + mania），改对手只改对手侧（keyCount），
+		// 互不同步——相等/不等由实际值决定，保存时自动切换 EK mania / LE keyCount+playerKeyCount 格式。
 		maniaStepper = new PsychUINumericStepper(objX, objY + 40, 1, 4, 1, 18, 0, 80);
 		maniaStepper.onValueChange = function()
 		{
 			var newKeys:Int = Std.int(maniaStepper.value);
-			var wasDual:Bool = isDualChart(); // 修改前状态（playerKeyCount/keyCount 尚未变更）
+			// 记录改键前边界（供重编码保持音符侧不变）。Psych/EK 谱面（非双侧）用 mania+1 作为玩家侧键数。
+			var oldDualM:Bool = isDualChart();
+			var oldPlrM:Int = oldDualM ? dualPlayerKeyCount() : ((PlayState.SONG.mania != null) ? Std.int(PlayState.SONG.mania) + 1 : 4);
+			var oldOppM:Int = oldDualM ? dualOpponentKeyCount() : oldPlrM;
+			// Psych/EK 谱面 keyCount 为 null：进入双侧语义前补齐对手侧 = 原 mania+1（原始 4 键）。
+			// 否则 isDualChart() 恒 false，对手侧网格会跟着玩家侧 mania 一起变（初次调整"双方同时变化"）。
+			if (PlayState.SONG.keyCount == null)
+				PlayState.SONG.keyCount = ((PlayState.SONG.mania != null) ? Std.int(PlayState.SONG.mania) : 3) + 1;
 			PlayState.SONG.mania = newKeys - 1;
 			PlayState.SONG.playerKeyCount = newKeys;
-			// 原本相等（Psych/EK 语义）：改玩家键数时同步对手键数，保持两侧相等（立即整体生效、值显示一致）；
-			// 已双侧（LE 分侧语义）：只改玩家侧，对手保持独立。
-			if (!wasDual) PlayState.SONG.keyCount = newKeys;
+			if (isDualChart() && oldPlrM != newKeys)
+				reencodeChartNotes(oldPlrM, oldOppM, oldDualM); // 保持侧+侧内列不变，按新键数重编码 LE 编号
 			refreshDualUI();
 			applySectionColumns(curSec);
+			reloadNotes(); // 改键后重建音符：已放置箭头的列/位置需按新网格重新映射
 			updateJsonData();
 		};
 
@@ -6526,16 +6704,19 @@ for (i in 0...GRID_PLAYERS)
 		opponentKeyStepper.onValueChange = function()
 		{
 			var newKeys:Int = Std.int(opponentKeyStepper.value);
-			var wasDual:Bool = isDualChart(); // 修改前状态
+			// 记录改键前边界：非双侧（Psych/EK）时两侧 = mania+1
+			var oldDualO:Bool = isDualChart();
+			var oldPlrO:Int = oldDualO ? dualPlayerKeyCount() : ((PlayState.SONG.mania != null) ? Std.int(PlayState.SONG.mania) + 1 : 4);
+			var oldOppO:Int = oldDualO ? dualOpponentKeyCount() : oldPlrO;
+			// 对称补齐：Psych/EK 谱面 playerKeyCount 为 null 时，先按原 mania+1 补齐玩家侧，再进入双侧语义
+			if (PlayState.SONG.playerKeyCount == null)
+				PlayState.SONG.playerKeyCount = ((PlayState.SONG.mania != null) ? Std.int(PlayState.SONG.mania) : 3) + 1;
 			PlayState.SONG.keyCount = newKeys;
-			// 原本相等：改对手键数时同步玩家侧（playerKeyCount + mania），保持相等、立即整体生效。
-			if (!wasDual)
-			{
-				PlayState.SONG.playerKeyCount = newKeys;
-				PlayState.SONG.mania = newKeys - 1;
-			}
+			if (isDualChart() && oldOppO != newKeys)
+				reencodeChartNotes(oldPlrO, oldOppO, oldDualO); // 保持侧+侧内列不变，按新键数重编码 LE 编号
 			refreshDualUI();
 			applySectionColumns(curSec);
+			reloadNotes(); // 改键后重建音符：已放置箭头的列/位置需按新网格重新映射
 			updateJsonData();
 		};
 		opponentKeyStepper.visible = true;
@@ -9241,6 +9422,9 @@ function adaptNotesToNewTimes(oldTimes:Array<Float>)
 
 	override function destroy()
 	{
+		// 退出制谱器时清除编辑器双侧静态档位，避免残留影响 PlayState 等后续状态
+		Note.editorDualMode = false;
+
 		// 退出制谱器时停止窗口缩放监听
 		FlxG.stage.removeEventListener(Event.RESIZE, onWindowResized);
 

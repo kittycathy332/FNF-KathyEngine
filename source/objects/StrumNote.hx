@@ -127,9 +127,14 @@ class StrumNote extends FlxSprite
 		// LE LTS 双侧：两侧 strum 颜色都按各自运行时档位重算（玩家=totalColumns-1、对手=oppMania），
 		// 覆盖 super 前按玩家档的默认值。档位用运行时值（change keycount 改键后重建即用新档），
 		// 而非 SONG.keyCount/SONG.mania（保持谱面原始值）。
-		if (PlayState.instance != null && PlayState.instance.isLeDualChart)
+		// 制谱器（Note.editorDualMode）：PlayState.instance 为 null，按编辑器侧键数取档。
+		if ((PlayState.instance != null && PlayState.instance.isLeDualChart) || Note.editorDualMode)
 		{
-			var sideManiaC:Int = (player == 1) ? (PlayState.instance.totalColumns - 1) : PlayState.instance.oppMania;
+			var sideManiaC:Int;
+			if (Note.editorDualMode)
+				sideManiaC = (player == 1) ? (Note.editorPlrKeys - 1) : (Note.editorOppKeys - 1);
+			else
+				sideManiaC = (player == 1) ? (PlayState.instance.totalColumns - 1) : PlayState.instance.oppMania;
 			var styleC:Int = (ExtraKeysHandler.instance != null) ? ExtraKeysHandler.instance.globalIndex(sideManiaC, noteData) : (noteData % 4);
 			var arrC:Array<FlxColor> = (styleC > -1 && styleC < ClientPrefs.data.arrowRGB.length) ? ClientPrefs.data.arrowRGB[styleC] : null;
 			if(PlayState.isPixelStage && styleC > -1 && styleC < ClientPrefs.data.arrowRGBPixel.length) arrC = ClientPrefs.data.arrowRGBPixel[styleC];
@@ -142,6 +147,9 @@ class StrumNote extends FlxSprite
 					rgbShader.b = arrC[2];
 				}
 			}
+			// HSV：构造时 colorSwap 已按 SONG.mania 档绑定（双侧下是错的），按侧档位重绑共享 shader
+			if (ClientPrefs.data.arrowColorMode == 'HSV')
+				colorSwap = Note.initializeGlobalColorSwapShader(styleC);
 		}
 		playAnim('static');
 
@@ -204,9 +212,15 @@ class StrumNote extends FlxSprite
 			// 多键：按当前 mania 档位查 extrakeys.json 取 strum 前缀（LEFT/DOWN/UP/RIGHT/ROMBUS/CIRCLE）。
 			// UI 态（颜色菜单等）由 Note.uiManiaOverride 接管，游戏内仍用 PlayState.SONG.mania。
 			// LE LTS 双侧：两侧 strum 都按各自运行时档位取前缀（玩家=totalColumns-1、对手=oppMania），与玩家侧独立。
+			// 制谱器（Note.editorDualMode）：PlayState.instance 为 null，按编辑器侧键数取档。
 			var mania:Int = Note.uiManiaOverride >= 0 ? Note.uiManiaOverride : ((PlayState.SONG != null && PlayState.SONG.mania != null) ? PlayState.SONG.mania : 3);
-			if (PlayState.instance != null && PlayState.instance.isLeDualChart)
-				mania = (player == 1) ? (PlayState.instance.totalColumns - 1) : PlayState.instance.oppMania;
+			if ((PlayState.instance != null && PlayState.instance.isLeDualChart) || Note.editorDualMode)
+			{
+				if (Note.editorDualMode)
+					mania = (player == 1) ? (Note.editorPlrKeys - 1) : (Note.editorOppKeys - 1);
+				else
+					mania = (player == 1) ? (PlayState.instance.totalColumns - 1) : PlayState.instance.oppMania;
+			}
 			var strumName:String = ExtraKeysHandler.instance.strumName(mania, noteData);
 			if (!hasFrame('arrow' + strumName)) strumName = 'UP';
 

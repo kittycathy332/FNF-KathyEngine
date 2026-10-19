@@ -345,7 +345,8 @@ class EventHandler
 
             // —— LE LTS 双侧轨道数：change keycount 事件（value1=玩家键数、value2=对手键数）实时切换 ——
             // 参考 LTS EventHandler：写回 SONG 两侧键数 → 更新两侧 EK 档配置 → 重建 strums/键位 → 重排音符
-            case 'change keycount':
+            // 首字母大写为主（制谱器新写入）；同时保留小写分支兼容已存在的旧谱面。
+            case 'Change KeyCount', 'change keycount':
                 var plrKeys:Int = (value1 != null && value1 != '' && !Math.isNaN(Std.parseFloat(value1))) ? Std.parseInt(value1) : 4;
                 var oppKeys:Int = (value2 != null && value2 != '' && !Math.isNaN(Std.parseFloat(value2))) ? Std.parseInt(value2) : 4;
                 if (plrKeys < 1) plrKeys = 4;

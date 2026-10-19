@@ -12,6 +12,9 @@ class MetaNote extends Note
 	public var sustainSprite:FlxSprite;
 	public var chartY:Float = 0;
 	public var chartNoteData:Int = 0;
+	// 音符所属小节编号（制谱器全谱面遍历时按小节 mustHit 解析双侧 LE 编号的侧与侧内列用；
+	// 音符可能不属于"当前显示小节"，不能用 getCurrentSectionMustHit 替代）。
+	public var editorSection:Int = -1;
 
 	public function new(time:Float, data:Int, songData:Array<Dynamic>)
 	{
