@@ -194,13 +194,15 @@ class NoteHoldCover extends FlxSprite
 	}
 
 	// LE LTS 双侧：本 hold cover 生效的样式索引。
-	// 对手侧 strum 的覆盖层按对手档位（运行时 oppMania）取色，非双侧/玩家侧=玩家档 styleIndex。
+	// 双侧下两侧都按运行时档位取色——对手侧用 oppMania、玩家侧用 totalColumns-1；
+	// 不能用静态 Note.styleIndex——双侧谱面无 mania 字段时它回退 4 键档，
+	// 玩家多键列（data ≥ 4）会错色（change keycount 改键后同样生效）。
 	function getCoverStyleIndex(data:Int):Int
 	{
-		if (targetStrum != null && PlayState.instance != null && PlayState.instance.isLeDualChart && !targetStrum.isPlayerSide())
+		if (targetStrum != null && PlayState.instance != null && PlayState.instance.isLeDualChart)
 		{
-			var oppMania:Int = PlayState.instance.oppMania;
-			if (ExtraKeysHandler.instance != null) return ExtraKeysHandler.instance.globalIndex(oppMania, data);
+			var mania:Int = targetStrum.isPlayerSide() ? (PlayState.instance.totalColumns - 1) : PlayState.instance.oppMania;
+			if (ExtraKeysHandler.instance != null) return ExtraKeysHandler.instance.globalIndex(mania, data);
 			return data % 4;
 		}
 		return Note.styleIndex(data);

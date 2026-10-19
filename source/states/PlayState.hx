@@ -4100,10 +4100,13 @@ tempScore += '${lblScore}: ${songScore}';
 			n.genOppMania = opponentColumns - 1;
 			n.refreshNoteVisual();
 		}
-		// 3) x 按新键数 + 新侧 scale 重排
+		// 3) x 按新键数 + 新侧 scale 重排（head 与 sustain tail 都要——tail 的 x 只在生成时设置过一次，
+		//    不重排会停在旧键数布局导致长条位置偏移）
 		relayoutNoteX(n);
+		if (n.tail != null) for (t in n.tail) if (t != null) relayoutNoteX(t);
 		// 4) 按新侧 scale 重缩（宽度；sustain 的 y 为长条长度逻辑，不动）
 		rescaleNote(n);
+		if (n.tail != null) for (t in n.tail) if (t != null) rescaleNote(t);
 	}
 
 	private function rescaleNote(n:Note):Void
