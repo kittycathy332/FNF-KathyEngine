@@ -2813,9 +2813,11 @@ if(_shouldReset) Conductor.songPosition = 0;
 			{
 				// LE LTS 双侧：按音符所属小节 mustHit 解析侧与侧内列（LE 连续编号：mustHit 0..plr-1=玩家/plr..=对手；
 				// 非 mustHit 0..opp-1=对手/opp..=玩家）。不能用 % 侧键数——非 mustHit 玩家音符（LE=opp+col）会算错列。
+				// 必须传原始 songData[1]（非双侧 0-3=玩家编码/4-7=对手编码），不能传 note.noteData（已 %cols 折叠成侧内列，
+				// 会把 4-7 折叠成 0-3 误判为玩家，导致对手侧箭头命中播玩家动画）。
 				var noteSec:Int = (note.editorSection >= 0) ? note.editorSection : curSec;
 				var secMustHit:Bool = (PlayState.SONG.notes[noteSec] != null) ? (PlayState.SONG.notes[noteSec].mustHitSection == true) : getCurrentSectionMustHit();
-				var charSide:Array<Dynamic> = resolveCharAnimSide(noteData, secMustHit);
+				var charSide:Array<Dynamic> = resolveCharAnimSide(Std.int(note.songData[1]), secMustHit);
 				var targetChar:Character = charSide[0] ? boyfriend : dad;
 				var direction:Int = charSide[1];
 				if(targetChar != null && targetChar.visible)
@@ -2884,10 +2886,11 @@ if(_shouldReset) Conductor.songPosition = 0;
 			var noteStrumTime:Float = note.strumTime;
 			if(noteStrumTime > lilLastStrumCheckTime && noteStrumTime <= lilNow)
 			{
-				// 双侧：按所属小节 mustHit 解析侧与侧内列（同主角色逻辑），避免非 mustHit 玩家音符 % 玩家键数算错列
+				// 双侧：按所属小节 mustHit 解析侧与侧内列（同主角色逻辑），避免非 mustHit 玩家音符 % 玩家键数算错列；
+				// 同样传原始 songData[1]，不能传 note.noteData（%cols 折叠会误判侧）
 				var noteSec:Int = (note.editorSection >= 0) ? note.editorSection : curSec;
 				var secMustHit:Bool = (PlayState.SONG.notes[noteSec] != null) ? (PlayState.SONG.notes[noteSec].mustHitSection == true) : getCurrentSectionMustHit();
-				var charSide:Array<Dynamic> = resolveCharAnimSide(Std.int(note.noteData), secMustHit);
+				var charSide:Array<Dynamic> = resolveCharAnimSide(Std.int(note.songData[1]), secMustHit);
 				playLilSing(charSide[0], charSide[1]);
 			}
 		}
