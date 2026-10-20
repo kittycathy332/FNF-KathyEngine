@@ -3092,11 +3092,10 @@ tempScore += '${lblScore}: ${songScore}';
 							oldNote.resizeByRatio(curStepCrochet / Conductor.stepCrochet);
 						}
 
-						// Extra Keys：多键下 sustain 与 strum 同布局（Psych 原版 +W/2 公式在列>=4 时会越出屏幕右缘）
+						// Extra Keys：多键下 sustain 与 strum 同布局（按布局风格取间距/组左缘）
 						if (totalColumns > 4) {
-							var susSide:Int = sustainNote.mustPress ? 1 : 0;
-							var susCX:Float = ClientPrefs.data.middleScroll ? (FlxG.width * 0.5) : (susSide == 1 ? (FlxG.width * 0.75) : (FlxG.width * 0.25));
-							sustainNote.x = susCX - (totalColumns - 1) * (Note.swagWidth * strumScale) / 2 + (Note.swagWidth * strumScale) * sustainNote.noteData;
+							var susSpacing:Float = sideSpacing(totalColumns, strumScale);
+							sustainNote.x = sideGroupLeftX(totalColumns, susSpacing, sustainNote.mustPress) + susSpacing * sustainNote.noteData;
 						} else if (gottaHitNote) sustainNote.x += FlxG.width / 2; // general offset（按演出侧摆放）
 						else if(ClientPrefs.data.middleScroll)
 						{
@@ -3122,11 +3121,10 @@ tempScore += '${lblScore}: ${songScore}';
 					}
 				}
 
-				// Extra Keys：多键下普通音符与 strum 同布局（Psych 原版 +W/2 公式在列>=4 时会越出屏幕右缘）
+				// Extra Keys：多键下普通音符与 strum 同布局（按布局风格取间距/组左缘）
 				if (totalColumns > 4) {
-					var side:Int = gottaHitNote ? 1 : 0;
-					var cX:Float = ClientPrefs.data.middleScroll ? (FlxG.width * 0.5) : (side == 1 ? (FlxG.width * 0.75) : (FlxG.width * 0.25));
-					swagNote.x = cX - (totalColumns - 1) * (Note.swagWidth * strumScale) / 2 + (Note.swagWidth * strumScale) * noteColumn;
+					var noteSpacing:Float = sideSpacing(totalColumns, strumScale);
+					swagNote.x = sideGroupLeftX(totalColumns, noteSpacing, gottaHitNote) + noteSpacing * noteColumn;
 				} else if (gottaHitNote)
 				{
 					swagNote.x += FlxG.width / 2; // general offset（按演出侧摆放）
@@ -3276,11 +3274,11 @@ tempScore += '${lblScore}: ${songScore}';
 				unspawnNotes.push(swagNote);
 				ghostNoteMap.set('${noteColumn}_${mustPress}_${noteType}_$spawnTime', swagNote);
 
-				// 双侧 x 布局：按 mustPress 侧 + 该侧当前键数居中，间距按该侧 strumScale（LE LTS 双侧：两侧独立缩放）
+				// 双侧 x 布局：按 mustPress 侧 + 该侧当前键数排布，间距按布局风格与该侧 strumScale（LE LTS 双侧：两侧独立缩放）
 				var sideCols:Int = mustPress ? curPlr : curOpp;
-				var side:Int = mustPress ? 1 : 0;
 				var sideScale:Float = mustPress ? playerStrumScale : opponentStrumScale;
-				var cX:Float = ClientPrefs.data.middleScroll ? (FlxG.width * 0.5) : (side == 1 ? (FlxG.width * 0.75) : (FlxG.width * 0.25));
+				var noteSpacing:Float = sideSpacing(sideCols, sideScale);
+				var groupLeftX:Float = sideGroupLeftX(sideCols, noteSpacing, mustPress);
 				if (sideCols == 4)
 				{
 					if (mustPress) swagNote.x += FlxG.width / 2;
@@ -3290,7 +3288,7 @@ tempScore += '${lblScore}: ${songScore}';
 						if (noteColumn > 1) swagNote.x += FlxG.width / 2 + 25;
 					}
 				}
-				else swagNote.x = cX - (sideCols - 1) * (Note.swagWidth * sideScale) / 2 + (Note.swagWidth * sideScale) * noteColumn;
+				else swagNote.x = groupLeftX + noteSpacing * noteColumn;
 
 				var curStepCrochet:Float = 60 / daBpm * 1000 / 4.0;
 				final roundSus:Int = Math.round(swagNote.sustainLength / curStepCrochet);
@@ -3349,7 +3347,7 @@ tempScore += '${lblScore}: ${songScore}';
 								if (noteColumn > 1) sustainNote.x += FlxG.width / 2 + 25;
 							}
 						}
-						else sustainNote.x = cX - (sideCols - 1) * (Note.swagWidth * sideScale) / 2 + (Note.swagWidth * sideScale) * sustainNote.noteData;
+						else sustainNote.x = groupLeftX + noteSpacing * sustainNote.noteData;
 					}
 
 					// 尾条判定优化（同 legacy）
@@ -3583,6 +3581,57 @@ tempScore += '${lblScore}: ${songScore}';
 		return (note.mustPress != playOpponent);
 
 	/**
+	 * 多键布局风格辅助（ClientPrefs.data.multiKeyLayoutStyle）：
+	 * 'PsychEK' = 自适应收缩贴合屏幕（默认）；'Leather' = 照搬 LeatherEngine 表驱动
+	 * （箭头尺寸 maniasize / 列距 maniagap / 居中补偿 maniaoffset，无自适应，按 1280x720 手调）。
+	 * 表值与 LeatherEngine assets/data/ui skins/default/maniasize|maniagap|maniaoffset.txt 一致，
+	 * 索引 = keyCount-1（1K 起），超出 21K 钳制到末位。
+	 */
+	static final LEATHER_MANIA_SIZE:Array<Float> = [0, 0, 0, 0, 0.06, 0.12, 0.15, 0.20, 0.22, 0.27, 0.31, 0.33, 0.35, 0.36, 0.37, 0.39, 0.41, 0.42, 0.43, 0.44, 0.45];
+	static final LEATHER_MANIA_GAP:Array<Float> = [0, 0, 0, 0, -8, -11, -11, -12, -12, -12, -12, -12, -12, -12, -12, -12, -11, -11, -10, -10, -10];
+	static final LEATHER_MANIA_OFFSET:Array<Float> = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 40, 40, 50, 50, 55, 70, 90, 105, 120, 135, 150];
+
+	public static inline function isLeatherLayout():Bool
+		return ClientPrefs.data.multiKeyLayoutStyle == 'Leather';
+
+	static inline function leatherTableVal(table:Array<Float>, cols:Int):Float
+	{
+		var idx = cols - 1;
+		if (idx < 0) idx = 0;
+		if (idx >= table.length) idx = table.length - 1;
+		return table[idx];
+	}
+
+	// Leather 箭头缩放系数（相对 0.7 基准）：(0.7 - maniasize) / 0.7。
+	// LE 原始尺寸 = rawW * (0.7 - ms)，本项目基准 = rawW * 0.7，故比值即 scale。
+	public static inline function leatherSizeScale(cols:Int):Float
+		return (0.7 - leatherTableVal(LEATHER_MANIA_SIZE, cols)) / 0.7;
+
+	// 该侧列间距：PsychEK = 等距（swagWidth × scale）；Leather = 箭头宽 + (2 + gap)
+	// （负 gap = 相邻包围盒重叠，靠贴图透明边距不穿帮，LE 原样）。
+	public static inline function sideSpacing(cols:Int, sideScale:Float):Float
+	{
+		if (!isLeatherLayout()) return Note.swagWidth * sideScale;
+		return Note.swagWidth * sideScale + 2 + leatherTableVal(LEATHER_MANIA_GAP, cols);
+	}
+
+	// 该侧第 0 列 x（组左缘）。PsychEK = 按侧中心居中；Leather = LE 手调居中公式
+	// x = (W/2)*侧 + 100 - (cols-4)*16 + (cols>=10 ? 30 : 0) + maniaoffset。
+	// middleScroll 无对应 LE 布局，回退按 0.5W 居中排布（仍用 Leather 间距/尺寸）。
+	public static function sideGroupLeftX(cols:Int, spacing:Float, mustPress:Bool):Float
+	{
+		var middleScroll:Bool = ClientPrefs.data.middleScroll;
+		if (!isLeatherLayout() || middleScroll)
+		{
+			var cX:Float = middleScroll ? (FlxG.width * 0.5) : (mustPress ? (FlxG.width * 0.75) : (FlxG.width * 0.25));
+			return cX - (cols - 1) * spacing / 2;
+		}
+		return (FlxG.width / 2) * (mustPress ? 1 : 0)
+			+ (100 - (cols - 4) * 16) + (cols >= 10 ? 30 : 0)
+			+ leatherTableVal(LEATHER_MANIA_OFFSET, cols);
+	}
+
+	/**
 	 * Extra Keys：多键时计算 strum 收缩系数并写回 static strumScale。
 	 * 必须在 generateSong() 之前调用（Note 构造时读取），generateStaticArrows() 直接复用结果。
 	 *
@@ -3601,9 +3650,11 @@ tempScore += '${lblScore}: ${songScore}';
 	}
 
 	// 单侧 strum 缩放：按该侧列数与中心比例计算（边缘留 24px 观感留白）。4 键侧恒为 1（保留原布局）。
+	// Leather 布局风格：直接查 LE maniasize 表（非自适应），4 键仍恒为 1。
 	function calcSideStrumScale(cols:Int, centerFrac:Float):Float
 	{
 		if (cols <= 4) return 1;
+		if (isLeatherLayout()) return leatherSizeScale(cols);
 		var centerX:Float = FlxG.width * centerFrac;
 		var edge:Float = Math.min(centerX, FlxG.width - centerX) - 24;
 		var maxSpacing:Float = 2 * edge / (cols + 2);
@@ -3678,11 +3729,10 @@ tempScore += '${lblScore}: ${songScore}';
 			return;
 		}
 
-		// 多键：居中分布 + 按侧 strumScale 缩放（LE LTS 双侧：玩家/对手各自独立缩放，非双侧同值）
+		// 多键：按布局风格（PsychEK 居中 / Leather LE 公式）分布 + 按侧 strumScale 缩放（LE LTS 双侧：玩家/对手各自独立缩放，非双侧同值）
 		var sideScale:Float = (player == 1) ? playerStrumScale : opponentStrumScale;
-		var spacing:Float = Note.swagWidth * sideScale;
-		var groupWidth:Float = (sideCols - 1) * spacing;
-		var centerX:Float = ClientPrefs.data.middleScroll ? (FlxG.width * 0.5) : (player == 1 ? (FlxG.width * 0.75) : (FlxG.width * 0.25));
+		var spacing:Float = sideSpacing(sideCols, sideScale);
+		var groupLeft:Float = sideGroupLeftX(sideCols, spacing, player == 1) - legacyOffset;
 
 		for (i in 0...sideCols)
 		{
@@ -3720,7 +3770,7 @@ tempScore += '${lblScore}: ${songScore}';
 				opponentStrums.add(babyArrow);
 
 			strumLineNotes.add(babyArrow);
-			babyArrow.x = (centerX - groupWidth / 2) - legacyOffset + spacing * i;
+			babyArrow.x = groupLeft + spacing * i;
 		}
 		/*trace('[EK] strums side=' + player + ' cols=' + totalColumns + ' centerX=' + centerX + ' spacing=' + spacing
 			+ ' groupW=' + groupWidth + ' firstX=' + ((centerX - groupWidth / 2) - legacyOffset)
@@ -4217,16 +4267,18 @@ tempScore += '${lblScore}: ${songScore}';
 	private function relayoutNoteX(n:Note):Void
 	{
 		var cols:Int = n.mustPress ? totalColumns : opponentColumns;
-		var side:Int = n.mustPress ? 1 : 0;
 		var sideScale:Float = n.mustPress ? playerStrumScale : opponentStrumScale;
-		var cX:Float = ClientPrefs.data.middleScroll ? (FlxG.width * 0.5) : (side == 1 ? (FlxG.width * 0.75) : (FlxG.width * 0.25));
 		if (cols == 4)
 		{
 			if (n.mustPress) n.x = STRUM_X + 50 + Note.swagWidth * n.noteData + FlxG.width / 2;
 			else if (ClientPrefs.data.middleScroll) n.x = STRUM_X + 50 + Note.swagWidth * n.noteData + 310 + (n.noteData > 1 ? FlxG.width / 2 + 25 : 0);
 			else n.x = STRUM_X + 50 + Note.swagWidth * n.noteData;
 		}
-		else n.x = cX - (cols - 1) * (Note.swagWidth * sideScale) / 2 + (Note.swagWidth * sideScale) * n.noteData;
+		else
+		{
+			var spacing:Float = sideSpacing(cols, sideScale);
+			n.x = sideGroupLeftX(cols, spacing, n.mustPress) + spacing * n.noteData;
+		}
 	}
 
 	override function openSubState(SubState:FlxSubState)

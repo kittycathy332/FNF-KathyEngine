@@ -104,6 +104,13 @@ class VisualsSettingsSubState extends BaseOptionsMenu
 			addOption(option);
 		}
 
+		var option:Option = new Option(Language.get('multi_key_layout'),
+			Language.get("multi_key_layout_desc"),
+			'multiKeyLayoutStyle',
+			STRING,
+			['PsychEK', 'Leather']);
+		addOption(option);
+
 		var option:Option = new Option(Language.get('note_splash_opacity'),
 			Language.get("notesplashopacity_desc"),
 			'splashAlpha',

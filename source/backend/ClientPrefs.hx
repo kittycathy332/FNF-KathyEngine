@@ -398,6 +398,7 @@ import haxe.io.BytesInput;
 	public var noteTimerLayer:String = 'Above Notes'; // 箭头倒计时图层：'Above Notes' 压在箭头之上（默认），'Below Notes' 在箭头之下
 	public var noteTimerDisplay:String = 'Seconds'; // 箭头倒计时数字显示：'Seconds' 按秒取整（默认），'Beats' 按 Beat 取整
 	public var noteTimerStepped:Bool = false; // 圆环裁剪动效：true = 按 beat/秒 离散跳变（脉冲感），false = 丝滑连续裁剪（默认）
+	public var multiKeyLayoutStyle:String = 'PsychEK'; // 多键（>4K）箭头布局风格：'PsychEK' 自适应收缩贴合屏幕（默认），'Leather' 照搬 Leather 引擎表驱动尺寸/间距（无自适应）
 
 	// Simple Info Display (Leather风格) 设置
 	public var fpsLayer:String = "Stage"; // FPS计数器所在图层: "Stage" 或 "Game"
