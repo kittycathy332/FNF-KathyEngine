@@ -36,7 +36,7 @@ class MainMenuState extends MusicBeatState
 	 * 发版时改这里 + Project.xml version/versionName 两处。
 	 * 不用 lime 的 Application.current.meta 是因为 lime 8.3.2 不解析 Project.xml 的 versionName 属性。
 	 */
-	private static final _DISPLAY_VERSION:String = '1.1.1-rc.5';
+	private static final _DISPLAY_VERSION:String = '1.1.1-rc.5.2';
 
 	public static var kathyEngineVersion(get, never):String;
 	static function get_kathyEngineVersion():String
