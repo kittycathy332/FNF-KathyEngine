@@ -4197,6 +4197,10 @@ tempScore += '${lblScore}: ${songScore}';
 		// 音符只改 scale 会保留旧 scale 的 offset/origin，多键缩放下箭头/长条相对 strum 整体偏移）。
 		n.centerOffsets();
 		n.centerOrigin();
+		// sustain 的 offsetX 在构造时按生成时 scale 一次性算出（正比于 scale.x），
+		// followStrumNote 每帧用 x = strumX + offsetX 定位长条；改键改了 scale.x 却不重算 offsetX，
+		// 会导致长条（含 holdend）整体横向偏移，而 holdcover/滚动箭头不依赖 offsetX 故正常。
+		if (n.isSustainNote) n.offsetX = n.baseOffsetX / n.genStrumScale * want;
 	}
 
 	// 重排场上/待生成音符的 x 位置（change keycount 事件后调用）

@@ -186,10 +186,18 @@ class NoteSplash extends FlxSprite
 			}
 		}
 
+		// 飞溅动画固定按 4 方向（purple/blue/green/red）组织：playDefaultAnim 已把多键列
+		// 映射回 4 方向取动画，故探测/注册绝不能依赖 Note.colArray——多键档位（6K+）下
+		// colArray 含 rombus/circle 等扩展色名，自定义皮肤没有这些帧时
+		// 探测失败 maxAnims=0 → 动画完全未注册 → 飞溅显示为贴图首帧静止（"卡住不动"）；
+		// 即便探测侥幸通过，注册步长（colArray.length）与查询步长（4）不一致还会播错方向。
+		// 4K 时 colArray 恰为本数组，行为与旧版完全一致（向后兼容）。
+		var splashDirs:Array<String> = ['purple', 'blue', 'green', 'red'];
+
 		var failedToFind:Bool = false;
 		while (true)
 		{
-			for (v in Note.colArray)
+			for (v in splashDirs)
 			{
 				if (!checkForAnim('$anim $v ${maxAnims+1}'))
 				{
@@ -205,7 +213,7 @@ class NoteSplash extends FlxSprite
 		var forceSingle = ClientPrefs.data.forceSingleSplashAnim;
 		if (!forceSingle) { // 只有不强制单动画时才检查多个动画
 			while (true) {
-				for (v in Note.colArray) {
+				for (v in splashDirs) {
 					if (!checkForAnim('$anim $v ${maxAnims+1}')) {
 						failedToFind = true;
 						break;
@@ -220,8 +228,8 @@ class NoteSplash extends FlxSprite
 	
 		// 生成动画配置时添加强制单动画处理
 		for (animNum in 0...maxAnims) {
-			for (i => col in Note.colArray) {
-				var data:Int = i % Note.colArray.length + (animNum * Note.colArray.length);
+			for (i => col in splashDirs) {
+				var data:Int = i % splashDirs.length + (animNum * splashDirs.length);
 				// 强制单动画时使用统一名称
 				var name:String = forceSingle ? col : (animNum > 0 ? '$col${animNum+1}' : col);
 				var prefix:String = forceSingle ? '$anim $col 1' : '$anim $col ${animNum + 1}';
@@ -395,17 +403,25 @@ class NoteSplash extends FlxSprite
 
 		var minFps:Int = 22;
 		var maxFps:Int = 26;
-		if (conf != null)
+		if (conf != null && conf.fps != null)
 		{
-			minFps = conf.fps[0];
-			if (minFps < 0) minFps = 0;
-
-			maxFps = conf.fps[1];
-			if (maxFps < 0) maxFps = 0;
+			// json 配置可能缺项/畸形（Reflect 解析出的 Dynamic 数组元素可为 null），
+			// 用 Null<Int> 承接后再回退默认值，避免空引用与 0 帧率卡死。
+			var f0:Null<Int> = conf.fps.length > 0 ? conf.fps[0] : null;
+			var f1:Null<Int> = conf.fps.length > 1 ? conf.fps[1] : null;
+			minFps = (f0 == null || f0 < 0) ? 0 : f0;
+			maxFps = (f1 == null || f1 < 0) ? 0 : f1;
+			if (maxFps < minFps) maxFps = minFps;
 		}
 
 		if (animation.curAnim != null)
-			animation.curAnim.frameRate = FlxG.random.int(minFps, maxFps);
+		{
+			var fr:Int = FlxG.random.int(minFps, maxFps);
+			// fps 缺失/为 0 的畸形配置会让动画永不推进且 curAnim 非空，
+			// update 的 buggedKillTime 兜底（仅 curAnim==null 时触发）救不了 → 飞溅永久卡帧。
+			// 这里钳到至少 1，保证动画总能推进并正常结束。
+			animation.curAnim.frameRate = fr > 0 ? fr : 24;
+		}
 
 		spawned = true;
 	}
@@ -523,10 +539,15 @@ class NoteSplash extends FlxSprite
 			var key:String = i.name;
 			if (i.prefix.length > 0 && key != null && key.length > 0)
 			{
+				// 畸形 json 可能缺 fps 数组或含 null/0 项：0 帧率注册的动画永不推进，
+				// 飞溅会永久卡帧（buggedKillTime 只清理 curAnim==null 的情况），此处钳为默认 24。
+				var fpsVal:Null<Int> = (i.fps != null && i.fps.length > 1) ? i.fps[1] : null;
+				if (fpsVal == null || fpsVal <= 0) fpsVal = 24;
+
 				if (i.indices != null && i.indices.length > 0)
-					animation.addByIndices(key, i.prefix, i.indices, "", i.fps[1], false);
+					animation.addByIndices(key, i.prefix, i.indices, "", fpsVal, false);
 				else
-					animation.addByPrefix(key, i.prefix, i.fps[1], false);
+					animation.addByPrefix(key, i.prefix, fpsVal, false);
 
 				noteDataMap.set(i.noteData, key);
 			}

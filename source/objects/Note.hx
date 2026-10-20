@@ -93,6 +93,8 @@ class Note extends FlxSprite
 	// 记录 construct/reloadNote 后普通音符的基准 scale，供对象池 prepareForReuse 复位
 	// （避免被前驱 sustain 改过的 scale.y 在复用普通音符时累积错乱）。
 	public var baseScaleX:Float = 1;
+	/** sustain 构造时的 offsetX 基准（正比于生成时 scale.x），改键重缩时按新 scale 同步重算 */
+	public var baseOffsetX:Float = 0;
 	public var baseScaleY:Float = 1;
 
 	public var mustPress:Bool = false;
@@ -230,10 +232,20 @@ class Note extends FlxSprite
 		if (!isSustainNote) animation.play(colAt(noteData) + 'Scroll');
 		else
 		{
-			animation.play(colAt(noteData) + 'holdend');
+			// 自身动画按"是否为 hold 最后一段"判定，不依赖外部遍历顺序：
+			// 改键重映射（remapNotesToNewKeyCount）遍历 unspawnNotes/notes 的先后与组内顺序
+			// 不保证时间序（noteOptimization=false 时 notes 头部插入为逆序；head 已生成、
+			// 尾段未生成的长条跨两数组），若像原先那样"无条件播 holdend、靠后一段回写 hold"，
+			// 顺序一乱中段就会残留 holdend 贴图（改键后短时间内长条中段显示末端帽）。
+			// nextNote 为存活的长条段 → 本段是中段，播 'hold'；否则（末段/后继已销毁/生成期
+			// nextNote 尚未链接）播 'holdend'，由后一段构造/刷新时回写 'hold'。
+			var isLastSeg:Bool = (nextNote == null || !nextNote.isSustainNote || nextNote.animation == null);
+			animation.play(colAt(noteData) + (isLastSeg ? 'holdend' : 'hold'));
 			// prevNote 可能已被 removeNote 销毁（FlxSprite.destroy 会置 animation=null）而本 tail 仍残留
 			// （改键事件在 hold 进行中/刚结束时触发），此时只更新自身，跳过已销毁的 head。
-			if (prevNote != null && prevNote.animation != null)
+			// 仅当前驱也是长条段才回写 'hold'（head 箭头无 hold 动画；pixel 皮肤 head 也注册了
+			// hold 帧，不加守卫会把箭头刷成长条贴图）。
+			if (prevNote != null && prevNote.animation != null && prevNote.isSustainNote)
 			{
 				prevNote.ensureAnimForColor();
 				prevNote.animation.play(prevNote.colAt(prevNote.noteData) + 'hold');
@@ -600,6 +612,7 @@ class Note extends FlxSprite
 			updateHitbox();
 
 			offsetX -= width / 2;
+			baseOffsetX = offsetX;
 
 			if (PlayState.isPixelStage)
 				offsetX += 30;
@@ -944,6 +957,7 @@ class Note extends FlxSprite
 			// 注：construct 中此处为 `offsetX += width/2` 后 `offsetX -= width/2`（净 0），
 			// 但这里为了与 construct 视觉结果严格一致，仍保留该对称操作。
 			offsetX -= width / 2;
+			baseOffsetX = offsetX;
 
 			if (PlayState.isPixelStage)
 				offsetX += 30;
