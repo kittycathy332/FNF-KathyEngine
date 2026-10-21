@@ -126,6 +126,12 @@ class MusicBeatSubstate extends FlxSubState
 		// （其 touchPad 在进入 subState 时已被 removeTouchPad 清掉）。
 		// 这里先把 instance 置 null，让父级 closeSubState 重建自己的 instance 引用。
 		if (instance == this) instance = null;
+
+		// 构造函数里置了 controls.isInSubstate = true，必须对称清 false。
+		// 之前分散在各子类（OptionsState、NotesColorSubStateLegacy、OutdatedSubState 等）
+		// 手动重置，容易漏（BasePrompt 就没重置导致取消后父界面卡死）。
+		// 统一在基类 destroy 里处理，子类手动重置的幂等无冲突。
+		controls.isInSubstate = false;
 		
 		removeTouchPad();
 		removeMobileControls();

@@ -985,7 +985,7 @@ class FreeplayState extends MusicBeatState
 		if ((FlxG.keys.pressed.SHIFT || touchPad.buttonZ.pressed) && !player.playingMusic)
 			shiftMult = 3;
 
-		if (!player.playingMusic && !typingSearch && songs.length > 0)
+		if (!player.playingMusic && !typingSearch && songs.length > 0 && !Controls.instance.isInSubstate)
 		{
 			// scoreText.text = LanguageBasic.getPhrase('personal_best', 'PERSONAL BEST: {1} ({2}%)', [lerpScore, ratingSplit.join('.')]);
 			// 值未变化时不要重设 text，避免每帧重建 FlxText 位图（主要 GC / 重绘来源）
@@ -1330,7 +1330,7 @@ class FreeplayState extends MusicBeatState
 				player.pauseOrResume(!player.playing);
 			}
 		}
-		else if (controls.ACCEPT && !player.playingMusic && !typingSearch && songs.length > 0)
+		else if (controls.ACCEPT && !player.playingMusic && !typingSearch && songs.length > 0 && !Controls.instance.isInSubstate)
 		{
 			persistentUpdate = false;
 			
@@ -1401,7 +1401,7 @@ class FreeplayState extends MusicBeatState
 			DiscordClient.loadModRPC();
 			#end
 		}
-		else if ((controls.RESET || touchPad.buttonY.justPressed) && !player.playingMusic && !typingSearch && songs.length > 0)
+		else if ((controls.RESET || touchPad.buttonY.justPressed) && !player.playingMusic && !typingSearch && songs.length > 0 && !Controls.instance.isInSubstate)
 		{
 			persistentUpdate = false;
 			openSubState(new ResetScoreSubState(songs[curSelected].songName, curDifficulty, songs[curSelected].songCharacter));
