@@ -1452,7 +1452,8 @@ isReplaying = false;
 			default: // Kathy
 				watermarkContent = 'KYE v${MainMenuState.kathyEngineVersion}';
 		}
-		if (ClientPrefs.data.watermarkType == 'OS' || ClientPrefs.data.watermarkType == 'Kathy' || ClientPrefs.data.watermarkType == 'Psych' || ClientPrefs.data.watermarkType == 'Kade')
+		var isLeatherBar:Bool = ClientPrefs.data.timebarStyle == 'Leather' || ClientPrefs.data.timebarStyle == 'Leather (Legacy)';
+		if (!isLeatherBar && (ClientPrefs.data.watermarkType == 'OS' || ClientPrefs.data.watermarkType == 'Kathy' || ClientPrefs.data.watermarkType == 'Psych' || ClientPrefs.data.watermarkType == 'Kade'))
 			watermarkContent = '${SONG.song}-${Difficulty.getString().toUpperCase()} | ' + watermarkContent;
 		
 		watermarkTxt = new FlxText(20, FlxG.height - 20, 0, watermarkContent, 14);
