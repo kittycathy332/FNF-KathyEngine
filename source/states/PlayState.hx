@@ -388,6 +388,7 @@ class PlayState extends MusicBeatState
 	public var gfSpeed:Int = 1;
 	public var health(default, set):Float = 1;
 	public var combo:Int = 0;
+	public var maxCombo:Int = 0; // 本局最大连击，用于回放 meta 展示
 	public var comboJustBroke:Bool = false; // 断连(失手)后首次命中标记，供 OG Funkin 显示模式强制显示 000
 
 	public var healthBar:Bar;
@@ -8048,6 +8049,7 @@ tempScore += '${lblScore}: ${songScore}';
 			if (!note.isSustainNote)
 			{
 				combo++;
+				if (combo > maxCombo) maxCombo = combo;
 				//if(combo > 9999) combo = 9999;
 				notesHitArray.unshift(haxe.Timer.stamp() * 1000);
 				popUpScore(note);
@@ -8058,6 +8060,7 @@ tempScore += '${lblScore}: ${songScore}';
 			{
 				var tailLeniencyMs:Float = (holdTailLeniency) ? holdTailLeniencyMs : 0;
 				combo++;
+				if (combo > maxCombo) maxCombo = combo;
 				notesHitArray.unshift(haxe.Timer.stamp() * 1000);
 				popUpScore(note, false, tailLeniencyMs); // scoreGain=false：只显示评级/计入准度，不加 songScore
 			}
@@ -8246,6 +8249,7 @@ tempScore += '${lblScore}: ${songScore}';
 		if (!note.isSustainNote)
 		{
 			combo++;
+			if (combo > maxCombo) maxCombo = combo;
 			notesHitArray.unshift(haxe.Timer.stamp() * 1000);
 		}
 		// 特性2：长条尾音命中同样计入一次有效命中（连击 + 准度），但不加分
@@ -8253,6 +8257,7 @@ tempScore += '${lblScore}: ${songScore}';
 			&& note.parent.tail[note.parent.tail.length - 1] == note)
 		{
 			combo++;
+			if (combo > maxCombo) maxCombo = combo;
 			notesHitArray.unshift(haxe.Timer.stamp() * 1000);
 		}
 

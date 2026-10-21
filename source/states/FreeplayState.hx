@@ -1048,7 +1048,7 @@ class FreeplayState extends MusicBeatState
 			}
 		}
 
-		if (controls.BACK)
+		if (controls.BACK && !Controls.instance.isInSubstate)
 		{
 			var wasTyping:Bool = typingSearch || (FlxG.game.ticks - lastTypingTick) < 250;
 			if (wasTyping)
@@ -1478,7 +1478,9 @@ class FreeplayState extends MusicBeatState
 										else
 											m = Std.parseFloat(Std.string(mt));
 									}
-									matchedList.push({path: p, mtime: m, name: f});
+									matchedList.push({path: p, mtime: m, name: f, meta: meta,
+										replayVersion: (obj != null && Reflect.hasField(obj, 'replayVersion')) ? Reflect.field(obj, 'replayVersion') : null,
+										kathyVersion: (obj != null && Reflect.hasField(obj, 'kathyVersion')) ? Reflect.field(obj, 'kathyVersion') : null});
 									if (m > latestM)
 									{
 										latestM = m;
@@ -1664,62 +1666,19 @@ class FreeplayState extends MusicBeatState
 	#end
 
 	/**
-	 * 当一首曲目存在多个回放时，弹出选择框让玩家挑选要播放的回放
+	 * 当一首曲目存在多个回放时，弹出选择框让玩家挑选要播放的回放。
+	 * 实际 UI 在 substates/ReplayPickerSubState.hx。
 	 */
 	private function openReplayPicker(matchedList:Array<Dynamic>):Void
 	{
 		if (matchedList == null || matchedList.length == 0)
 			return;
-
-		var juncDisplay:Array<String> = [];
-		for (it in matchedList)
-		{
-			var name:String = Std.string(Reflect.field(it, 'name'));
-			// 去掉 .replay.json 后缀，只保留 <song>-<timestamp> 部分
-			// 命名格式: <song>-<timestamp>.replay.json
-			juncDisplay.push(name);
-		}
-
-		var maxItems:Int = Std.int(Math.min(5, juncDisplay.length));
-		var radioGrp:PsychUIRadioGroup = new PsychUIRadioGroup(0, 0, juncDisplay, 25, maxItems, false, 300);
-		radioGrp.checked = 0;
-
-		var hei:Float = radioGrp.height + 170;
-		openSubState(new BasePrompt(480, hei, Language.get('freeplay_replay_picker_title'),
-			function(state:BasePrompt) {
-				radioGrp.screenCenter(X);
-				radioGrp.y = state.bg.y + 80;
-				radioGrp.cameras = state.cameras;
-				state.add(radioGrp);
-
-				var btn:PsychUIButton = new PsychUIButton(0, radioGrp.y + radioGrp.height + 20, Language.get('freeplay_replay_play'), function()
-				{
-					var selected = matchedList[radioGrp.checked];
-					var path:String = Std.string(Reflect.field(selected, 'path'));
-					state.close();
-					// 交由 playReplay 统一处理（含谱面变更的二次确认）
-					playReplay(path);
-				}, 200, 40);
-				btn.cameras = state.cameras;
-				btn.screenCenter(X);
-				btn.x -= 110;
-				state.add(btn);
-
-				// 取消按钮：移动端无 ESC 键盘，必须有可点的退出途径，否则界面关不掉
-				var cancelBtn:PsychUIButton = new PsychUIButton(0, radioGrp.y + radioGrp.height + 20, Language.get('freeplay_replay_cancel'), function()
-				{
-					state.close();
-				}, 200, 40);
-				cancelBtn.normalStyle.bgColor = FlxColor.RED;
-				cancelBtn.normalStyle.textColor = FlxColor.WHITE;
-				cancelBtn.cameras = state.cameras;
-				cancelBtn.screenCenter(X);
-				cancelBtn.x += 110;
-				state.add(cancelBtn);
-			}
-		));
+		openSubState(new substates.ReplayPickerSubState(matchedList, function(path:String) {
+			playReplay(path);
+		}));
 	}
 	#end
+
 
 	function getVocalFromCharacter(char:String)
 	{

@@ -11,6 +11,7 @@ import sys.io.File;
 import states.StoryMenuState;
 import states.FreeplayState;
 import states.PlayState;
+import states.MainMenuState;
 import backend.Mods;
 import backend.Song;
 import backend.Rating;
@@ -426,12 +427,52 @@ class ResultsScreen extends FlxSubState
 			var saveTime:String = Date.now().format('%Y-%m-%d_%H-%M-%S');
 			var saveName:String = Paths.formatToSongPath(PlayState.SONG.song) + '-' + saveTime + '.replay.json';
 			var savePath:String = replayFolder + '/' + saveName;
+
+			// 统计判定分布（与结算页一致），写入 meta 供回放选择界面展示
+			var judgePerfects:Int = 0;
+			var judgeSicks:Int = 0;
+			var judgeGoods:Int = 0;
+			var judgeBads:Int = 0;
+			var judgeShits:Int = 0;
+			if (PlayState.instance != null && PlayState.instance.ratingsData != null)
+			{
+				for (r in PlayState.instance.ratingsData)
+				{
+					switch (r.name)
+					{
+						case "perfect": judgePerfects = r.hits;
+						case "sick": judgeSicks = r.hits;
+						case "good": judgeGoods = r.hits;
+						case "bad": judgeBads = r.hits;
+						case "shit": judgeShits = r.hits;
+					}
+				}
+			}
+
 			var outObj:Dynamic = {
+				// 文件格式版本：回放协议版本 + 写入时的引擎版本。
+				// 旧文件没有这两个字段，视为 v1.0（无统计字段）；未来 replay 数组结构变更时可在此做兼容判断。
+				replayVersion: "2.0",
+				kathyVersion: MainMenuState.kathyEngineVersion,
 				meta: {
 					song: PlayState.SONG.song,
 					chartPath: chartPath,
 					chartMTime: statMTime,
 					difficulty: Difficulty.getString(PlayState.storyDifficulty, false),
+					// 保存时的本机时区偏移（分钟，UTC 以东为负），供回放选择界面显示 "UTC+8" 这类地区信息
+					tzOffset: Date.now().getTimezoneOffset(),
+					// 回放选择界面展示用统计（旧版本回放无这些字段，选择界面会以 — 占位）
+					accuracyPercent: (PlayState.instance != null) ? PlayState.instance.ratingPercent : 0,
+					score: (PlayState.instance != null) ? PlayState.instance.songScore : 0,
+					maxCombo: (PlayState.instance != null) ? PlayState.instance.maxCombo : 0,
+					misses: (PlayState.instance != null) ? PlayState.instance.songMisses : 0,
+					judgeBreakdown: {
+						perfect: judgePerfects,
+						sick: judgeSicks,
+						good: judgeGoods,
+						bad: judgeBads,
+						shit: judgeShits
+					},
 					judgmentSettings: {
 						rmPerfect: ClientPrefs.data.rmPerfect,
 						perfectWindow: ClientPrefs.data.perfectWindow,
