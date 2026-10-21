@@ -162,6 +162,30 @@ class KeyViewer extends FlxGroup
 		if (keyViewerSave == null) initKeyViewerTotal();
 		totalKeys = keyViewerTotal;
 
+		rebuild();
+	}
+
+	/**
+	 * 重建 KeyViewer 全部视觉元素（背景、图标、名字、按键、统计文本）。
+	 * changekeycount 中途触发时，PlayState.keysArray.length 变化，update() 检测到后调用此方法，
+	 * dispose 旧布局后按新键数重建，保持与谱面当前键数一致。
+	 * new() 里调一次，之后 update() 里按需自动调。
+	 */
+	private function rebuild():Void
+	{
+		// 先 dispose 全部旧成员（FlxSprite / FlxText / Shape 等），防止 GPU 纹理泄漏；
+		// FlxGroup.dispose 会把 members 里的 FlxBasic 全部 destroy 并 dispose，但不清空 members，
+		// 后续 add() 会追加到新数组。为安全起见同时清空按键相关缓存数组。
+		for (m in members) { if (m != null) m.destroy(); }
+		members = [];
+		keyCaps = []; keyBorders = []; keyGlows = []; keyLabels = []; keyPressGlow = [];
+		particles = []; particleStretch = []; particleDrift = [];
+		particleHolding = []; particleAnchorY = []; particleDown = [];
+		if (bgSprite != null) { bgSprite = null; }
+		if (statsText != null) { statsText = null; }
+		if (iconSprite != null) { iconSprite = null; }
+		if (nameText != null) { nameText = null; }
+
 		// 读取玩家实际键位（固定 4 键 action 列表）；位置校准/预览态无 PlayState 时用默认 4K 布局
 		keysArray = (PlayState.instance != null)
 			? PlayState.instance.keysArray.copy()
@@ -479,6 +503,15 @@ class KeyViewer extends FlxGroup
 	override public function update(elapsed:Float):Void
 	{
 		super.update(elapsed);
+
+		// changekeycount 中途触发时，PlayState.keysArray.length 会变；
+		// 检测到变化后重建整个布局（背景/图标/按键/统计全部按新键数重建），
+		// 保证 KeyViewer 与谱面当前键数保持一致。纯 4K / 纯多K 谱面（无 changekeycount 事件）无额外开销。
+		if (PlayState.instance != null && PlayState.instance.keysArray.length != keysArray.length)
+		{
+			rebuild();
+			return; // 本帧已重建，跳过后续按键状态更新（下一帧正常渲染）
+		}
 
 		var now:Float = FlxG.game.ticks;
 		// 校准/预览态无 PlayState 时（无 controls），跳过按键交互逻辑，避免空引用

@@ -3556,6 +3556,11 @@ tempScore += '${lblScore}: ${songScore}';
 	// 改为 static：Note.update() 需要据此判断"当前 CPU 自动演奏侧"，以便把自动命中逻辑绑定到真正的控制侧。
 	public static var playOpponent:Bool = false;
 
+	// 玩家实际操作侧的键数（playOpponent 时操作对手侧，键数取 opponentColumns；否则 totalColumns）
+	// replay 系统全程操作这个侧的键数，确保取模与 remapNote 用的 sideCols 一致。
+	inline function sideCols():Int
+		return playOpponent ? opponentColumns : totalColumns;
+
 	// 玩家实际操作侧的箭头组（playOpponent 时为对手侧箭头）
 	inline public function playerSideStrums():FlxTypedGroup<StrumNote>
 		return playOpponent ? opponentStrums : playerStrums;
@@ -3950,9 +3955,11 @@ tempScore += '${lblScore}: ${songScore}';
 		keyPressIndices = [for (i in 0...laneCount) -1];
 		replayNoteDelays = [for (i in 0...laneCount) []];
 		if (isReplaying && replayData != null)
+			// 预填延迟时对 action.key 取模对齐 laneCount（remapNote 折叠规则相同），
+			// 避免 changekeycount 后 noteData 被折叠但延迟数据仍落在旧索引槽导致读不到。
 			for (action in replayData)
-				if (action.noteTime != null && action.late != null && action.key >= 0 && action.key < laneCount)
-					replayNoteDelays[action.key].push({strumTime: action.noteTime, late: action.late});
+				if (action.noteTime != null && action.late != null && action.key >= 0 && action.key < NON_NOTE_KEY_OFFSET)
+					replayNoteDelays[action.key % laneCount].push({strumTime: action.noteTime, late: action.late});
 	}
 
 	public function applyMania(mania:Int):Void
@@ -3990,12 +3997,14 @@ tempScore += '${lblScore}: ${songScore}';
 		var newColArray:Array<String> = [];
 		var newSingAnims:Array<String> = [];
 		var newKeysArray:Array<String> = [];
-		var mode:EKManiaMode = ek.keys[mania];
-		var laneCount:Int = (mode != null && mode.notes != null) ? mode.notes.length : 4;
+			var mode:EKManiaMode = ek.keys[mania];
+			// 键数以预期键数为准（applyMania=totalColumns / applyOpponentMania=opponentColumns），
+			// 而非 EK notes 数组长度。EK 只管贴图动画（缺失列 fallback），保证 keysArray 始终与 strums 数量对齐。
+			var laneCount:Int = totalColumns;
 
-		for (i in 0...laneCount)
-		{
-			var globalIdx:Int = (mode.notes != null && i < mode.notes.length) ? mode.notes[i] : i;
+			for (i in 0...laneCount)
+			{
+				var globalIdx:Int = (mode != null && mode.notes != null && i < mode.notes.length) ? mode.notes[i] : i;
 			var anim:EKAnimation = (ek.animations != null && globalIdx >= 0 && globalIdx < ek.animations.length)
 				? ek.animations[globalIdx] : null;
 
@@ -4005,11 +4014,11 @@ tempScore += '${lblScore}: ${songScore}';
 		}
 
 		Note.colArray = newColArray;
-		singAnimations = newSingAnims;
-		keysArray = newKeysArray;
-		rebuildReplayKeyArrays(laneCount); // 回放状态数组按当前键数重建（多键适配）
+			singAnimations = newSingAnims;
+			keysArray = newKeysArray;
+			rebuildReplayKeyArrays(laneCount); // 回放状态数组按当前键数重建（多键适配）
 
-		// Extra Keys：进游戏时兜底把 arrowRGB/arrowRGBPixel/arrowHSV 补齐到 18 色
+			// Extra Keys：进游戏时兜底把 arrowRGB/arrowRGBPixel/arrowHSV 补齐到 18 色
 		// （loadPrefs 启动早期 ExtraKeysHandler 可能加载失败导致多键列取色越界→染色失效）
 		ClientPrefs.ensureEKArrowColors();
 		/*trace('[EK] applyMania(' + mania + ') -> columns=' + laneCount
@@ -4039,11 +4048,13 @@ tempScore += '${lblScore}: ${songScore}';
 		var newColArray:Array<String> = [];
 		var newSingAnims:Array<String> = [];
 		var mode:EKManiaMode = ek.keys[mania];
-		var laneCount:Int = (mode != null && mode.notes != null) ? mode.notes.length : 4;
+			// 键数以预期键数为准（applyMania=totalColumns / applyOpponentMania=opponentColumns），
+			// 而非 EK notes 数组长度。EK 只管贴图动画（缺失列 fallback），保证 keysArray 始终与 strums 数量对齐。
+			var laneCount:Int = opponentColumns;
 
-		for (i in 0...laneCount)
-		{
-			var globalIdx:Int = (mode.notes != null && i < mode.notes.length) ? mode.notes[i] : i;
+			for (i in 0...laneCount)
+			{
+				var globalIdx:Int = (mode != null && mode.notes != null && i < mode.notes.length) ? mode.notes[i] : i;
 			var anim:EKAnimation = (ek.animations != null && globalIdx >= 0 && globalIdx < ek.animations.length)
 				? ek.animations[globalIdx] : null;
 
@@ -4080,13 +4091,16 @@ tempScore += '${lblScore}: ${songScore}';
 	public function showKeyPreview():Void
 	{
 		clearKeyPreview();
-		if (!ClientPrefs.data.showKeyPreview || playOpponent) return;
-		if (ClientPrefs.data.keyPreviewStyle == 'le' && playerStrums.length != 4)
+		if (!ClientPrefs.data.showKeyPreview) return;
+		// playOpponent 下用操作侧 strums（对手侧）显示键位预览，让玩家知道自己控制的箭头是哪些
+		var sideStrums:FlxTypedGroup<StrumNote> = playerSideStrums();
+		var previewKeys:Int = Std.int(Math.min(sideStrums.members.length, keysArray.length));
+		if (ClientPrefs.data.keyPreviewStyle == 'le' && sideStrums.members.length != 4)
 		{
-			for (i in 0...playerStrums.members.length)
+			for (i in 0...previewKeys)
 			{
-				var st:StrumNote = playerStrums.members[i];
-				var keyCodes:Array<FlxKey> = (i < keysArray.length) ? ClientPrefs.keyBinds.get(keysArray[i]) : null;
+				var st:StrumNote = sideStrums.members[i];
+				var keyCodes:Array<FlxKey> = ClientPrefs.keyBinds.get(keysArray[i]);
 				if (keyCodes == null || keyCodes.length < 1) continue;
 				var coolWidth:Int = Math.ceil(st.width / 2.83684);
 				if (coolWidth < 4) coolWidth = 4;
@@ -4116,10 +4130,10 @@ tempScore += '${lblScore}: ${songScore}';
 		}
 		else
 		{
-			for (i in 0...playerStrums.members.length)
+			for (i in 0...previewKeys)
 			{
-				var st:StrumNote = playerStrums.members[i];
-				var keyCodes:Array<FlxKey> = (i < keysArray.length) ? ClientPrefs.keyBinds.get(keysArray[i]) : null;
+				var st:StrumNote = sideStrums.members[i];
+				var keyCodes:Array<FlxKey> = ClientPrefs.keyBinds.get(keysArray[i]);
 				if (keyCodes == null || keyCodes.length < 1) continue;
 				var kc:KeybindShowcase = new KeybindShowcase(st.x,
 					ClientPrefs.data.downScroll ? st.y - 30 : st.y + st.height + 5,
@@ -4143,10 +4157,44 @@ tempScore += '${lblScore}: ${songScore}';
 		if (curPlr == playerKeyCount && curOpp == oppKeyCount) return;
 
 		isLeDualChart = true; // 事件显式进入双侧模式
+
+		// 回放模式：changekeycount 期间 heldKeys 有三次风险：
+		// 1) applyMania 内部 rebuildReplayKeyArrays 按玩家侧键数重建——playOpponent 下操作侧是对手侧，长度不对
+		// 2) rebuildReplayKeyArrays 会全清 heldKeys，进行中长条 sustain 丢失
+		// 3) 操作侧键数与玩家侧不同时，取模基数必须对齐
+		// 解法：先快照 heldKeys → applyMania/opp 正常执行 → 用 sideCols() 覆盖重建操作侧的数组 → 按操作侧目标键数迁移快照
+		var savedHeldBefore:Array<Bool> = null;
+		if (isReplaying)
+			savedHeldBefore = replayHeldKeys.copy();
+
 		// 注意：不写 SONG.playerKeyCount/keyCount——SONG 保持谱面原始键数，
-		// 供重玩（restartSong/重进）恢复初始配置；运行键数由 applyMania/applyOpponentMania 维护。
-		applyMania(playerKeyCount - 1);
-		applyOpponentMania(oppKeyCount - 1);
+			// 供重玩（restartSong/重进）恢复初始配置；运行键数由 applyMania/applyOpponentMania 维护。
+			applyMania(playerKeyCount - 1);
+			applyOpponentMania(oppKeyCount - 1);
+
+			// playOpponent 下，玩家键盘事件应全部映射到对手侧 mania 档位的 action 名（"{oppMania}_key_{i}"）。
+			// applyMania 先把 keysArray 设成玩家侧档位（"{curMania}_key_{i}"），导致混档——
+			// 前 N 列是玩家侧 action 名，pad 出来的才是对手侧。全部重建确保统一用操作侧档位。
+			if (playOpponent)
+			{
+				var oppPadKeys:Array<String> = [];
+				for (i in 0...opponentColumns)
+					oppPadKeys.push(Std.string(oppMania) + '_key_' + i);
+				keysArray = oppPadKeys;
+			}
+
+			// 回放模式：applyMania 内部 rebuildReplayKeyArrays 按玩家侧重建了 heldKeys，
+		// playOpponent 下操作侧是对手侧，键数不对。这里用 sideCols() 覆盖重建，确保数组长度对齐。
+		// 然后按同样的取模规则把快照中的按下状态迁移到新数组，保持进行中长条不因改键丢失持续按住状态。
+		if (savedHeldBefore != null)
+		{
+			// 操作侧的目标键数（changeKeyCounts 还未返回，sideCols() 读到的还是旧值，显式计算）
+			var targetCols:Int = playOpponent ? oppKeyCount : playerKeyCount;
+			rebuildReplayKeyArrays(targetCols);
+			for (oldIdx in 0...savedHeldBefore.length)
+				if (savedHeldBefore[oldIdx])
+					replayHeldKeys[oldIdx % targetCols] = true;
+		}
 		if (totalColumns > 4 || opponentColumns > 4) computeMultiKeyStrumScale();
 		else { playerStrumScale = 1; opponentStrumScale = 1; strumScale = 1; }
 
@@ -4170,10 +4218,25 @@ tempScore += '${lblScore}: ${songScore}';
 		createHoldCovers();
 		// 改键后按当前样式重显键位预览（LE extraKeyReminders / EK KeybindShowcase），让玩家知道新键位；
 		// 事件 value3 = 0/false 时跳过，且不会清掉当前已显示的预览（showKeyPreview 内部才做清理）
-		if (showPreviewAfter) showKeyPreview();
+			if (showPreviewAfter) showKeyPreview();
 
-		trace('[LE DUAL] changeKeyCounts -> player=${playerKeyCount}K opponent=${oppKeyCount}K');
-	}
+			trace('[LE DUAL] changeKeyCounts -> player=${playerKeyCount}K opponent=${oppKeyCount}K | keysArray.len=' + keysArray.length
+				+ ' total=' + totalColumns + ' opp=' + opponentColumns + ' oppMania=' + oppMania + ' playOpp=' + playOpponent);
+
+			// 兜底：playOpponent 下如果 keysArray 长度 < 操作侧键数，补全缺失 action 名。
+			// 常见原因：EK 配置里某档位的 notes 数组长度 < 档位预期键数，导致 applyMania 生成的 keysArray 比预期短。
+			// 补全的 action 名按操作侧当前 mania 档位格式 "{mania}_key_{i}" 生成——若玩家未在该档位绑键，
+			// 则需要在设置里补上；但至少保证 strums 重建、showKeyPreview、keyPressed 边界检查全对齐。
+			var needKeys:Int = sideCols();
+			if (keysArray.length < needKeys)
+			{
+				var padMania:Int = playOpponent ? oppMania : curMania;
+				for (i in keysArray.length...needKeys)
+					keysArray.push(Std.string(padMania) + '_key_' + i);
+				trace('[LE DUAL] keysArray padded from ' + (needKeys - (needKeys - keysArray.length))
+					+ ' to ' + keysArray.length + ' (padMania=' + padMania + ')');
+			}
+		}
 
 	// —— 改键后音符折叠重映射（与新建 strums 匹配） ——
 	public function remapNotesToNewKeyCount():Void
@@ -4459,25 +4522,27 @@ tempScore += '${lblScore}: ${songScore}';
 					// 如果是音符按键
 					if(action.key < NON_NOTE_KEY_OFFSET)
 					{
-						replayHeldKeys[action.key] = false;
+						// replayData.key 存录制时的绝对值；当前谱面键数变化时动态取模（与 remapNote 规则一致）
+						var rkeyR:Int = action.key % sideCols();
+						replayHeldKeys[rkeyR] = false;
 
 						// 特性1：回放中同样在松手时立刻判定 miss，保持与实时游玩一致
 						if(guitarHeroSustains && holdReleaseInstantMiss)
-							tryInstantSustainMiss(action.key);
+							tryInstantSustainMiss(rkeyR);
 
 						// 特性2：回放中同样在松手时判定长条尾部
 						if(guitarHeroSustains && holdTailJudge)
-							tryTailJudgeOnRelease(action.key);
+							tryTailJudgeOnRelease(rkeyR);
 
 						// 同步虚拟输入状态到Controls，让模组能够检测到按键释放
-						var keyName = keysArray[action.key];
-						Controls.instance.setVirtualKeyState(keyName, false);
+						var keyNameR = keysArray[rkeyR];
+						Controls.instance.setVirtualKeyState(keyNameR, false);
 						// 播放static动画
-						var spr:StrumNote = playerSideStrums().members[action.key];
-						if(spr != null)
+						var sprR:StrumNote = playerSideStrums().members[rkeyR];
+						if(sprR != null)
 						{
-							spr.playAnim('static');
-							spr.resetAnim = 0;
+							sprR.playAnim('static');
+							sprR.resetAnim = 0;
 						}
 					}
 					else
@@ -4535,26 +4600,27 @@ tempScore += '${lblScore}: ${songScore}';
 					{
 						if(replayAction.judge == 'ghost')
 						{
+							var rkey:Int = replayAction.key % sideCols();
 							// 标记按键为按下状态
-							replayHeldKeys[replayAction.key] = true;
+							replayHeldKeys[rkey] = true;
 							
 							// 同步虚拟输入状态到Controls，让模组能够检测到按键
-							var keyName = keysArray[replayAction.key];
+							var keyName = keysArray[rkey];
 							Controls.instance.setVirtualKeyState(keyName, true);
 
 							// 空按 - 播放pressed动画
-							var spr:StrumNote = playerSideStrums().members[replayAction.key];
-							if(spr != null && strumsBlocked[replayAction.key] != true && (spr.animation.curAnim == null || spr.animation.curAnim.name != 'confirm'))
+							var spr:StrumNote = playerSideStrums().members[rkey];
+							if(spr != null && strumsBlocked[rkey] != true && (spr.animation.curAnim == null || spr.animation.curAnim.name != 'confirm'))
 							{
 								spr.playAnim('pressed');
 								spr.resetAnim = 0; // 不自动重置，由按键释放时重置
 							}
 
 							// 根据当前的ghostTapping设置决定是否调用noteMissPress和onGhostTap
-							handleGhostTap(replayAction.key);
+							handleGhostTap(rkey);
 
 							// 调用onKeyPress回调（与正常模式保持一致）
-							callOnScripts('onKeyPress', [replayAction.key]);
+							callOnScripts('onKeyPress', [rkey]);
 						}
 						else if(replayAction.judge == 'miss')
 						{
@@ -4563,15 +4629,16 @@ tempScore += '${lblScore}: ${songScore}';
 							else
 							{
 								// 标记按键为按下状态
-								replayHeldKeys[replayAction.key] = true;
+								var rkey:Int = replayAction.key % sideCols();
+								replayHeldKeys[rkey] = true;
 								
 								// 同步虚拟输入状态到Controls，让模组能够检测到按键
-								var keyName = keysArray[replayAction.key];
+								var keyName = keysArray[rkey];
 								Controls.instance.setVirtualKeyState(keyName, true);
 						
 								// 播放pressed动画（会在goodNoteHit中被confirm覆盖）
-							var spr:StrumNote = playerSideStrums().members[replayAction.key];
-							if(spr != null && strumsBlocked[replayAction.key] != true)
+							var spr:StrumNote = playerSideStrums().members[rkey];
+							if(spr != null && strumsBlocked[rkey] != true)
 							{
 								spr.playAnim('pressed');
 								spr.resetAnim = 0;
@@ -4580,7 +4647,7 @@ tempScore += '${lblScore}: ${songScore}';
 							// 正常按键，找到对应的音符并打击
 							var targetNotes:Array<Note> = notes.members.filter(function(n:Note):Bool {
 								// 使用小容差（5ms）来匹配音符，避免浮点数精度问题
-								return n != null && n.exists && isPlayerNote(n) && n.noteData == replayAction.key && !n.wasGoodHit
+								return n != null && n.exists && isPlayerNote(n) && n.noteData == rkey && !n.wasGoodHit
 								&& Math.abs(n.strumTime - replayAction.noteTime) < 5;
 							});
 							for(note in targetNotes)
@@ -6952,7 +7019,7 @@ tempScore += '${lblScore}: ${songScore}';
 
 	private function keyPressed(key:Int)
 	{
-		if(cpuControlled || paused || inCutscene || key < 0 || key >= playerStrums.length || !generatedMusic || endingSong || playerSideChar().stunned || isReplaying) return;
+		if(cpuControlled || paused || inCutscene || key < 0 || key >= playerSideStrums().length || !generatedMusic || endingSong || playerSideChar().stunned || isReplaying) return;
 
 		var ret:Dynamic = callOnScripts('onKeyPressPre', [key]);
 		if(ret == LuaUtils.Function_Stop) return;
@@ -7115,7 +7182,7 @@ tempScore += '${lblScore}: ${songScore}';
 
 	private function keyReleased(key:Int)
 	{
-		if(cpuControlled || !startedCountdown || paused || key < 0 || key >= playerStrums.length || isReplaying) return;
+		if(cpuControlled || !startedCountdown || paused || key < 0 || key >= playerSideStrums().length || isReplaying) return;
 
 		var ret:Dynamic = callOnScripts('onKeyReleasePre', [key]);
 		if(ret == LuaUtils.Function_Stop) return;
