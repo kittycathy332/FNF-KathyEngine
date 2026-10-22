@@ -5362,25 +5362,14 @@ tempScore += '${lblScore}: ${songScore}';
     }
     else if (ClientPrefs.data.iconbopstyle == "Dave")
     {
-        if (ClientPrefs.data.iconbopNormalize)
-        {
-            // 归一化：把原版"每帧保留 0.88"的几何回缩转成帧率无关
-            // （每秒收敛率 -ln(0.88)·60 ≈ 7.67/s），任意刷新率/倍速手感一致
-            var daveK:Float = -Math.log(0.88) * 60;
-            var daveFactor:Float = FlxMath.bound(Math.exp(-daveK * elapsed * playbackRate), 0, 1);
-            iconP1.setGraphicSize(Std.int(FlxMath.lerp(iconP1.frameWidth, iconP1.width, daveFactor)),
-                                  Std.int(FlxMath.lerp(iconP1.frameHeight, iconP1.height, daveFactor)));
-            iconP2.setGraphicSize(Std.int(FlxMath.lerp(iconP2.frameWidth, iconP2.width, daveFactor)),
-                                  Std.int(FlxMath.lerp(iconP2.frameHeight, iconP2.height, daveFactor)));
-        }
-        else
-        {
-            // 原生逐帧：每帧保留 0.88（几何衰减，帧率越高回缩越快，与原版 Dave Engine 保持一致）
-            iconP1.setGraphicSize(Std.int(FlxMath.lerp(iconP1.frameWidth, iconP1.width, 0.88)),
-                                  Std.int(FlxMath.lerp(iconP1.frameHeight, iconP1.height, 0.88)));
-            iconP2.setGraphicSize(Std.int(FlxMath.lerp(iconP2.frameWidth, iconP2.width, 0.88)),
-                                  Std.int(FlxMath.lerp(iconP2.frameHeight, iconP2.height, 0.88)));
-        }
+        // 直接传浮点：Std.int 截断会在压扁方向制造死区，浮点 lerp 自然收敛
+        var daveFactor:Float = ClientPrefs.data.iconbopNormalize
+            ? FlxMath.bound(Math.exp(-(-Math.log(0.88) * 60) * elapsed * playbackRate), 0, 1)
+            : 0.88;
+        iconP1.setGraphicSize(FlxMath.lerp(iconP1.frameWidth, iconP1.width, daveFactor),
+                             FlxMath.lerp(iconP1.frameHeight, iconP1.height, daveFactor));
+        iconP2.setGraphicSize(FlxMath.lerp(iconP2.frameWidth, iconP2.width, daveFactor),
+                             FlxMath.lerp(iconP2.frameHeight, iconP2.height, daveFactor));
     }
     // Kathy 专属缩放逻辑
     else if (ClientPrefs.data.iconbopstyle == "Kathy") {
