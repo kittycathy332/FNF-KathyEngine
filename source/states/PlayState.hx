@@ -1625,7 +1625,14 @@ isReplaying = false;
 			}
 		#end
 		
+		// Extra Keys：非 4 键谱面强制使用 Hitbox 预设。
+		// TouchPad 预设（RIGHT_FULL/LEFT_FULL/CUSTOM/DOUBLE）只绑定 NOTE_LEFT..NOTE_RIGHT 四列，
+		// 多出来的轨道在触屏上无法按下；这里仅对本次进曲生效，不改动用户保存的设置。
+		var prevForcedMode:Null<Int> = MobileData.forcedMode;
+		if (mobileLaneCount() > 4)
+			MobileData.forcedMode = 3;
 		addMobileControls();
+		MobileData.forcedMode = prevForcedMode;
 		mobileControls.instance.visible = true;
 		mobileControls.onButtonDown.add(onButtonPress);
 		mobileControls.onButtonUp.add(onButtonRelease);
@@ -3561,6 +3568,20 @@ tempScore += '${lblScore}: ${songScore}';
 	// replay 系统全程操作这个侧的键数，确保取模与 remapNote 用的 sideCols 一致。
 	inline function sideCols():Int
 		return playOpponent ? opponentColumns : totalColumns;
+
+	/**
+	 * Extra Keys：移动端触屏轨道的键数。
+	 * touchLaneMode = '4k' 时固定 4 键；否则按谱面档位（与 Hitbox 构造时的列数计算保持一致）。
+	 * 用于判断是否需要强制使用 Hitbox 预设（TouchPad 预设只支持 4 列）。
+	 */
+	public function mobileLaneCount():Int
+	{
+		if (ClientPrefs.data.touchLaneMode == '4k' || SONG == null)
+			return 4;
+
+		var mania:Null<Int> = SONG.mania;
+		return ((mania != null) ? mania : 3) + 1;
+	}
 
 	// 玩家实际操作侧的箭头组（playOpponent 时为对手侧箭头）
 	inline public function playerSideStrums():FlxTypedGroup<StrumNote>
