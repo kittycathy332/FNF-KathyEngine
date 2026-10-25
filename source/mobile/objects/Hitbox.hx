@@ -96,9 +96,10 @@ class Hitbox extends MobileInputManager implements IMobileControls
 			totalCols = ((mania != null) ? mania : 3) + 1;
 		var maniaIdx:Int = (mania != null) ? mania : 3;
 
-		// 标准 4 键且无额外键：轨道占满全屏高度；其余情况（含额外键 / 多键谱面）占上方 3/4
-		if (count == 0 && totalCols <= 4)
-			createLaneHints(4, maniaIdx, 0, FlxG.height);
+		// 无额外键：轨道占满全屏（4 键与多键一致，不预留空档）；
+		// 有额外键：轨道占 3/4，另一侧 1/4 留给额外键（按 hitboxPos 决定上下）
+		if (count == 0)
+			createLaneHints(totalCols, maniaIdx, 0, FlxG.height);
 		else
 			createLaneHints(totalCols, maniaIdx, offsetSec, Std.int(FlxG.height / 4) * 3);
 
