@@ -110,6 +110,11 @@ class MobileData
 
 	public static function setButtonsColors(buttonsInstance:Dynamic):Dynamic
 	{
+		// Hitbox 各列颜色已在构造时按 arrowRGB[styleIndex] 取好（多键下列索引 != 样式索引），
+		// 这里若再按列 0..3 覆盖，会改错非 4 键谱面/自定义样式列的配色，故直接返回。
+		if (Std.isOfType(buttonsInstance, Hitbox))
+			return buttonsInstance;
+
 		// Dynamic Controls Color
 		var data:Dynamic;
 		if (ClientPrefs.data.dynamicColors)

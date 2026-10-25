@@ -89,86 +89,21 @@ class Hitbox extends MobileInputManager implements IMobileControls
 			default: count = 0;
 		}
 
-		// Extra Keys：当前谱面键数（touchLaneMode='4k' 时强制 4 键；谱面未加载时 4 键）
+		// Extra Keys：当前谱面档位/键数（touchLaneMode='4k' 时强制 4 键；谱面未加载时 4 键）
+		var mania:Null<Int> = (PlayState.SONG != null) ? PlayState.SONG.mania : null;
 		var totalCols:Int = 4;
 		if (ClientPrefs.data.touchLaneMode != '4k' && PlayState.SONG != null)
-		{
-			var mania:Null<Int> = PlayState.SONG.mania;
 			totalCols = ((mania != null) ? mania : 3) + 1;
-		}
+		var maniaIdx:Int = (mania != null) ? mania : 3;
 
-		if (count == 0)
-		{
-			if (totalCols <= 4)
-			{
-				// 标准 4 键
-				add(buttonLeft = createHint(0, 0, Std.int(FlxG.width / 4), FlxG.height, 0xFFC24B99));
-				add(buttonDown = createHint(FlxG.width / 4, 0, Std.int(FlxG.width / 4), FlxG.height, 0xFF00FFFF));
-				add(buttonUp = createHint(FlxG.width / 2, 0, Std.int(FlxG.width / 4), FlxG.height, 0xFF12FA05));
-				add(buttonRight = createHint((FlxG.width / 2) + (FlxG.width / 4), 0, Std.int(FlxG.width / 4), FlxG.height, 0xFFF9393F));
-			}
-			else
-			{
-				// Extra Keys：按谱面键数等分底部轨道，每列映射 NOTE_X 枚举，颜色取自 extrakeys.json
-				var bottomH:Int = Std.int(FlxG.height / 4) * 3;
-				var noteCols:Array<Int> = null;
-				var mania:Int = (PlayState.SONG != null && PlayState.SONG.mania != null) ? PlayState.SONG.mania : 3;
-				ExtraKeysHandler.ensure();
-				var ek = ExtraKeysHandler.instance.data;
-				if (ek != null && ek.keys != null && ek.keys.length > mania && ek.keys[mania].notes != null)
-					noteCols = ek.keys[mania].notes;
-				for (i in 0...totalCols)
-				{
-					var zoneW:Int = Std.int(FlxG.width / totalCols);
-					var colColor:Int = 0xFF999999;
-					if (noteCols != null && i < noteCols.length && ek.colors != null && noteCols[i] < ek.colors.length)
-						colColor = FlxColor.fromString('#${ek.colors[noteCols[i]].inner}');
-					var ids:Array<MobileInputID> = [noteIDForIndex(i)];
-					var btn:TouchButton = createHint(i * zoneW, offsetSec, zoneW, bottomH, colColor);
-					btn.IDs = ids;
-					if (i < 4)
-					{
-						// 前 4 列复用标准字段（兼容原有 hitbox 字段引用）
-						switch (i)
-						{
-							case 0: buttonLeft = btn;
-							case 1: buttonDown = btn;
-							case 2: buttonUp = btn;
-							default: buttonRight = btn;
-						}
-					}
-					else
-					{
-						dynamicNoteButtons.push(btn);
-					}
-					add(btn);
-				}
-
-				// 顶部 1/4 区域等分为 count 个额外键
-				var extraColors:Array<Int> = [0xFF0066FF, 0xA6FF00, 0xFF00A6FF, 0xFFFFA600];
-				for (i in 0...count)
-				{
-					var zoneW:Int = Std.int(FlxG.width / count);
-					var btn:TouchButton = createHint(i * zoneW, offsetFir, zoneW, Std.int(FlxG.height / 4), extraColors[i]);
-					switch (i)
-					{
-						case 0: buttonExtra = btn;
-						case 1: buttonExtra2 = btn;
-						case 2: buttonExtra3 = btn;
-						default: buttonExtra4 = btn;
-					}
-					add(btn);
-				}
-			}
-		}
+		// 标准 4 键且无额外键：轨道占满全屏高度；其余情况（含额外键 / 多键谱面）占上方 3/4
+		if (count == 0 && totalCols <= 4)
+			createLaneHints(4, maniaIdx, 0, FlxG.height);
 		else
-		{
-			add(buttonLeft = createHint(0, offsetSec, Std.int(FlxG.width / 4), Std.int(FlxG.height / 4) * 3, 0xFFC24B99));
-			add(buttonDown = createHint(FlxG.width / 4, offsetSec, Std.int(FlxG.width / 4), Std.int(FlxG.height / 4) * 3, 0xFF00FFFF));
-			add(buttonUp = createHint(FlxG.width / 2, offsetSec, Std.int(FlxG.width / 4), Std.int(FlxG.height / 4) * 3, 0xFF12FA05));
-			add(buttonRight = createHint((FlxG.width / 2) + (FlxG.width / 4), offsetSec, Std.int(FlxG.width / 4), Std.int(FlxG.height / 4) * 3,
-				0xFFF9393F));
+			createLaneHints(totalCols, maniaIdx, offsetSec, Std.int(FlxG.height / 4) * 3);
 
+		if (count > 0)
+		{
 			// 顶部 1/4 区域等分为 count 个额外键
 			var extraColors:Array<Int> = [0xFF0066FF, 0xA6FF00, 0xFF00A6FF, 0xFFFFA600];
 			for (i in 0...count)
@@ -197,6 +132,106 @@ class Hitbox extends MobileInputManager implements IMobileControls
 		updateTrackedButtons();
 
 		instance = this;
+	}
+
+	/**
+	 * Extra Keys：生成音符轨道按钮。
+	 * 4 键等分四列；多键谱面按键数等分，每列映射 NOTE_X 枚举并记录动态按钮。
+	 * 颜色统一取自 getLaneColor，跟随游戏内箭头 RGB。
+	 */
+	function createLaneHints(totalCols:Int, maniaIdx:Int, y:Float, h:Int):Void
+	{
+		if (totalCols <= 4)
+		{
+			var zoneW:Int = Std.int(FlxG.width / 4);
+			add(buttonLeft = createHint(0, y, zoneW, h, getLaneColor(0, maniaIdx)));
+			add(buttonDown = createHint(zoneW, y, zoneW, h, getLaneColor(1, maniaIdx)));
+			add(buttonUp = createHint(zoneW * 2, y, zoneW, h, getLaneColor(2, maniaIdx)));
+			add(buttonRight = createHint(zoneW * 3, y, zoneW, h, getLaneColor(3, maniaIdx)));
+			return;
+		}
+
+		var zoneW:Int = Std.int(FlxG.width / totalCols);
+		for (i in 0...totalCols)
+		{
+			var btn:TouchButton = createHint(i * zoneW, y, zoneW, h, getLaneColor(i, maniaIdx));
+			btn.IDs = [noteIDForIndex(i)];
+			if (i < 4)
+			{
+				// 前 4 列复用标准字段（兼容原有 hitbox 字段引用）
+				switch (i)
+				{
+					case 0: buttonLeft = btn;
+					case 1: buttonDown = btn;
+					case 2: buttonUp = btn;
+					default: buttonRight = btn;
+				}
+			}
+			else
+			{
+				dynamicNoteButtons.push(btn);
+			}
+			add(btn);
+		}
+	}
+
+	/**
+	 * Extra Keys：按列取箭头配色，使 Hitbox 各列颜色与游戏内箭头一致。
+	 * 索引与 Note/StrumNote 同源：arrowRGB[globalIndex(mania, column)][0]（多键下列索引 != 样式索引）。
+	 * 像素舞台优先 arrowRGBPixel；dynamicColors 关闭时用出厂色表；越界回退 EK 全局色表。
+	 * HSV 模式：箭头实际显示为「贴图原色 + H/S/B 偏移」，这里用 arrowRGB 底色套用同一套偏移近似。
+	 */
+	static function getLaneColor(column:Int, mania:Int):Int
+	{
+		var cfg = ClientPrefs.data.dynamicColors ? ClientPrefs.data : ClientPrefs.defaultData;
+		var style:Int = column;
+		if (ExtraKeysHandler.instance != null && ExtraKeysHandler.instance.data != null)
+			style = ExtraKeysHandler.instance.globalIndex(mania, column);
+
+		var arr:Array<FlxColor> = null;
+		if (cfg != null && cfg.arrowRGB != null && style > -1 && style < cfg.arrowRGB.length)
+			arr = cfg.arrowRGB[style];
+		if (PlayState.isPixelStage && cfg != null && cfg.arrowRGBPixel != null && style > -1 && style < cfg.arrowRGBPixel.length)
+			arr = cfg.arrowRGBPixel[style];
+
+		var base:Int = 0xFF999999;
+		if (arr != null && arr.length > 0)
+			base = arr[0];
+		else
+		{
+			var ek = (ExtraKeysHandler.instance != null) ? ExtraKeysHandler.instance.data : null;
+			if (ek != null && ek.colors != null && style > -1 && style < ek.colors.length)
+			{
+				var c = ek.colors[style];
+				if (c != null && c.inner != null)
+					base = FlxColor.fromString('#' + c.inner);
+			}
+		}
+
+		if (ClientPrefs.data.arrowColorMode == 'HSV')
+			base = applyArrowHSV(base, style);
+		return base;
+	}
+
+	/**
+	 * 与 ColorSwap 着色器同样的 HSV 偏移：色相相加、饱和度相加后 clamp、亮度相乘。
+	 * 偏移值取自 arrowHSV[style]（H 为度数，S/B 为 -100..100 的百分比）。
+	 */
+	static function applyArrowHSV(color:Int, style:Int):Int
+	{
+		var arr:Array<Int> = null;
+		if (ClientPrefs.data.arrowHSV != null && style > -1 && style < ClientPrefs.data.arrowHSV.length)
+			arr = ClientPrefs.data.arrowHSV[style];
+		if (arr == null || (arr[0] == 0 && arr[1] == 0 && arr[2] == 0))
+			return color;
+
+		var c = new FlxColor(color);
+		var hue:Float = (c.hue + arr[0]) % 360;
+		if (hue < 0)
+			hue += 360;
+		var sat:Float = FlxMath.bound(c.saturation + arr[1] / 100, 0, 1);
+		var bri:Float = FlxMath.bound(c.brightness * (1 + arr[2] / 100), 0, 1);
+		return FlxColor.fromHSB(hue, sat, bri);
 	}
 
 	/** 音符列索引 -> 触屏 NOTE 枚举值（0..3 -> NOTE_LEFT..NOTE_RIGHT，4..17 -> NOTE_4..NOTE_17） */
