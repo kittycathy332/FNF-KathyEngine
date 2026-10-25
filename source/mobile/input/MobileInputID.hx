@@ -112,6 +112,21 @@ enum abstract MobileInputID(Int) from Int to Int
 		return fromStringMap.exists(s) ? fromStringMap.get(s) : NONE;
 	}
 
+	/**
+	 * 音符列索引 -> 触屏 NOTE 枚举值（0..3 -> NOTE_LEFT..NOTE_RIGHT，4..17 -> NOTE_4..NOTE_17）。
+	 * 与 Hitbox 动态轨道按钮的 ID 分配保持一致。
+	 */
+	public static function noteForLane(lane:Int):MobileInputID
+	{
+		if (lane < 4)
+			return lane; // NOTE_LEFT = 0 .. NOTE_RIGHT = 3
+		if (lane <= 8)
+			return Std.int(NOTE_4) + (lane - 4); // 44..48
+		if (lane <= 17)
+			return Std.int(NOTE_9) + (lane - 9); // 51..59
+		return NONE;
+	}
+
 	@:to
 	public inline function toString():String
 	{

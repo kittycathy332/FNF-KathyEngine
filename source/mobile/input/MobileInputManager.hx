@@ -33,8 +33,10 @@ class MobileInputManager extends FlxTypedSpriteGroup<TouchButton>
 {
 	/**
 	 * A map to keep track of all the buttons using it's ID
+	 * 同一个 ID 可能绑定多个按钮（如双 Pad 模式左右两套方向键都绑定 NOTE_LEFT），
+	 * 因此这里保存数组，任何其中一个按钮处于目标状态即视为该 ID 生效。
 	 */
-	public var trackedButtons:Map<MobileInputID, TouchButton> = new Map<MobileInputID, TouchButton>();
+	public var trackedButtons:Map<MobileInputID, Array<TouchButton>> = new Map<MobileInputID, Array<TouchButton>>();
 
 	public function new()
 	{
@@ -73,6 +75,17 @@ class MobileInputManager extends FlxTypedSpriteGroup<TouchButton>
 	public inline function buttonJustReleased(button:MobileInputID):Bool
 	{
 		return anyJustReleased([button]);
+	}
+
+	/**
+	 * Check to see if the button is being held (no temporary array allocation).
+	 *
+	 * @param	button 	A button ID
+	 * @return	Whether the button is pressed.
+	 */
+	public inline function buttonHeld(button:MobileInputID):Bool
+	{
+		return checkStatus(button, PRESSED);
 	}
 
 	/**
@@ -177,13 +190,38 @@ class MobileInputManager extends FlxTypedSpriteGroup<TouchButton>
 
 	function checkStatusUnsafe(button:MobileInputID, state:ButtonsStates = JUST_PRESSED):Bool
 	{
-		return switch (state)
+		var buttons:Array<TouchButton> = trackedButtons.get(button);
+		if (buttons == null || buttons.length == 0)
+			return false;
+
+		// RELEASED 语义为「整组都未被按住」：同一 ID 绑定多个按钮时，
+		// 只要还有任意一个按钮保持按住就不算释放，避免长条被误判为松手。
+		if (state == RELEASED)
 		{
-			case RELEASED: trackedButtons.get(button).released;
-			case JUST_RELEASED: trackedButtons.get(button).justReleased;
-			case PRESSED: trackedButtons.get(button).pressed;
-			case JUST_PRESSED: trackedButtons.get(button).justPressed;
+			for (btn in buttons)
+				if (btn != null && btn.pressed)
+					return false;
+			return true;
 		}
+
+		for (btn in buttons)
+		{
+			if (btn == null)
+				continue;
+
+			var result:Bool = switch (state)
+			{
+				case JUST_RELEASED: btn.justReleased;
+				case PRESSED: btn.pressed;
+				case JUST_PRESSED: btn.justPressed;
+				case RELEASED: false; // 已在上面处理
+			};
+
+			if (result)
+				return true;
+		}
+
+		return false;
 	}
 
 	public function updateTrackedButtons()
@@ -195,10 +233,14 @@ class MobileInputManager extends FlxTypedSpriteGroup<TouchButton>
 			{
 				for (id in button.IDs)
 				{
-					if (!trackedButtons.exists(id))
+					var buttons:Array<TouchButton> = trackedButtons.get(id);
+					if (buttons == null)
 					{
-						trackedButtons.set(id, button);
+						buttons = [];
+						trackedButtons.set(id, buttons);
 					}
+					if (buttons.indexOf(button) == -1)
+						buttons.push(button);
 				}
 			}
 		});

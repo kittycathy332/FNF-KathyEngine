@@ -193,6 +193,11 @@ class TypedTouchButton<T:FlxSprite> extends FlxSprite implements IFlxInput
 	 */
 	var currentInput:IFlxInput;
 
+	/**
+	 * 本帧检测到的、仍按在按钮上的任意触摸（用于多指场景下判断是否可以真正松开）。
+	 */
+	var _pressedOverlapInput:IFlxInput = null;
+
 	public var canChangeLabelAlpha:Bool = true;
 
 	/**
@@ -306,8 +311,13 @@ class TypedTouchButton<T:FlxSprite> extends FlxSprite implements IFlxInput
 
 		if (tempCurrentInput != null && tempCurrentInput.justReleased)
 		{
-			// 释放时的处理
-			if (overlapFound)
+			// 同一按钮上还有其它手指保持按住时，把当前输入切换到那根手指，
+			// 避免误判松手（多指操作时会导致长条断连）
+			if (_pressedOverlapInput != null && _pressedOverlapInput != tempCurrentInput)
+			{
+				currentInput = _pressedOverlapInput;
+			}
+			else if (overlapFound)
 			{
 				onUpHandler();
 			}
@@ -316,7 +326,7 @@ class TypedTouchButton<T:FlxSprite> extends FlxSprite implements IFlxInput
 				onOutHandler();
 			}
 		}
-		else if (status != TouchButton.NORMAL)
+		else if (status == TouchButton.PRESSED)
 		{
 			if (!overlapFound)
 			{
@@ -324,11 +334,11 @@ class TypedTouchButton<T:FlxSprite> extends FlxSprite implements IFlxInput
 				onOutHandler();
 			}
 		}
-		else if (overlapFound && status == TouchButton.NORMAL)
+		else if (status == TouchButton.HIGHLIGHT && !overlapFound)
 		{
-			// 正在滑动进入 hitbox，并且当前状态是 NORMAL
-			// 这个情况在 checkTouchOverlap 调用 checkInput 时会通过 updateStatus 处理
-			// 不需要额外的操作
+			// 仅高亮（从未按下）时离开按钮：静默恢复，不触发 onOut/onUp。
+			// 否则触摸出现的第一帧会向 PlayState 误发 keyReleased。
+			status = TouchButton.NORMAL;
 		}
 	}
 
@@ -338,6 +348,7 @@ class TypedTouchButton<T:FlxSprite> extends FlxSprite implements IFlxInput
 	function checkTouchOverlap():Bool
 	{
 		var overlap = false;
+		_pressedOverlapInput = null;
 
 		// cameras 在对象尚未加入任何状态、或状态正在销毁时可能为 null
 		if (cameras == null)
@@ -396,6 +407,10 @@ class TypedTouchButton<T:FlxSprite> extends FlxSprite implements IFlxInput
 		}
 		else if (overlaps)
 		{
+			// 记录仍按住的触摸，供 updateButton 在多指场景下做按住归属切换
+			if (input.pressed)
+				_pressedOverlapInput = input;
+
 			updateStatus(input);
 			
 			// 如果是首次按下或者允许滑动，并且没有 currentInput，设置 currentInput
@@ -416,6 +431,10 @@ class TypedTouchButton<T:FlxSprite> extends FlxSprite implements IFlxInput
 	{
 		if (input.justPressed)
 		{
+			// 已经按下时不重复触发 onDown：同一按钮上的第二根手指会导致重复 keyPressed
+			if (status == TouchButton.PRESSED)
+				return;
+
 			currentInput = input;
 			onDownHandler();
 		}

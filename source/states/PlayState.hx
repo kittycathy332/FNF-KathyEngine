@@ -7282,7 +7282,7 @@ tempScore += '${lblScore}: ${songScore}';
 		{
 			if(cpuControlled) _heldBuffer.push(true);
 			else if(isReplaying) _heldBuffer.push(replayHeldKeys[i]);
-			else _heldBuffer.push(controls.pressed(keysArray[i]));
+			else _heldBuffer.push(controls.pressed(keysArray[i]) || mobileHoldPressed(i));
 		}
 
 		// 统计当前正在被有效按住的长条列数（每列只计一次，避免同列多个尾音重复计分）
@@ -7362,7 +7362,9 @@ tempScore += '${lblScore}: ${songScore}';
 		var buttonCode:Int = (button.IDs[0].toString().startsWith('NOTE')) ? button.IDs[0] : button.IDs[1];
 		buttonCode = noteCodeToIndex(buttonCode); // 多键 NOTE_4..NOTE_17 -> 音符索引 4..17
 		callOnScripts('onButtonReleasePre', [buttonCode]);
-		if(buttonCode > -1) keyReleased(buttonCode);
+		// 同一音符列可能绑定多个触屏按钮（双 Pad 模式左右两套方向键都绑定 NOTE_LEFT）：
+		// 只有该列所有按钮都已松开时才触发释放，避免另一根手指仍按住时长条被误判断开
+		if(buttonCode > -1 && !mobileHoldPressed(buttonCode)) keyReleased(buttonCode);
 		callOnScripts('onButtonRelease', [buttonCode]);
 	}
 
@@ -7373,6 +7375,19 @@ tempScore += '${lblScore}: ${songScore}';
 		if (code >= Std.int(MobileInputID.NOTE_9)) return 9 + (code - Std.int(MobileInputID.NOTE_9)); // 51..59 -> 9..17
 		if (code >= Std.int(MobileInputID.NOTE_4)) return 4 + (code - Std.int(MobileInputID.NOTE_4)); // 44..48 -> 4..8
 		return code;
+	}
+
+	/**
+	 * 触屏按住判定：多键档位的 action 名（如 "4_key_4"）没有注册到 Controls.mobileBinds，
+	 * 仅靠 controls.pressed() 轮询不到触屏按键，导致长条头段命中后无法续上。
+	 * 这里按列索引直接查询当前触屏控件的 NOTE_* 按钮。
+	 */
+	private function mobileHoldPressed(lane:Int):Bool
+	{
+		if (mobileControls == null || mobileControls.instance == null)
+			return false;
+
+		return mobileControls.instance.buttonHeld(MobileInputID.noteForLane(lane));
 	}
 
 	// Hold notes
@@ -7393,7 +7408,7 @@ tempScore += '${lblScore}: ${songScore}';
 			}
 			else
 			{
-				_holdBuffer.push(controls.pressed(keysArray[i]));
+				_holdBuffer.push(controls.pressed(keysArray[i]) || mobileHoldPressed(i));
 				_pressBuffer.push(controls.justPressed(keysArray[i]));
 				_releaseBuffer.push(controls.justReleased(keysArray[i]));
 			}
