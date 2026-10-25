@@ -469,8 +469,13 @@ class NotesColorSubState extends MusicBeatSubstate
 						modeBG.visible = notesBG.visible = false;
 						curSelectedNote = note.ID;
 						onModeColumn = false;
-						bigNote.rgbShader.parent = Note.globalRgbShaders[note.ID];
-						bigNote.shader = Note.globalRgbShaders[note.ID].shader;
+						// Extra Keys：note.ID 是列索引，而 globalRgbShaders 按样式索引（globalIndex）存放，
+						// 多键下二者不同（如 6K 映射 0,2,3,5,1,8）。直接拿列索引取表会读到未初始化的空位
+						//（索引 4/6/7 为 null）导致空引用崩溃，也会让大箭头取到错误的配色。
+						var style:Int = Note.styleIndex(note.ID);
+						var rgb = Note.initializeGlobalRGBShader(style);
+						bigNote.rgbShader.parent = rgb;
+						bigNote.shader = rgb.shader;
 						updateNotes();
 						FlxG.sound.play(Paths.sound('scrollMenu'), 0.6);
 					}
