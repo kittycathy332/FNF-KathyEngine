@@ -4258,7 +4258,29 @@ tempScore += '${lblScore}: ${songScore}';
 				trace('[LE DUAL] keysArray padded from ' + (needKeys - (needKeys - keysArray.length))
 					+ ' to ' + keysArray.length + ' (padMania=' + padMania + ')');
 			}
-		}
+
+		// 移动端 Hitbox：按新操作侧键数重建触屏 lane 按钮（列数/列宽/配色/多键 NOTE 映射）。
+		// 进曲时 Hitbox 只按 SONG.mania 生成一次，中途 changeKeyCounts 后不重建会停留在旧样式，
+		// 且多出的轨道因 trackedButtons 缺映射而按不到。
+		refreshMobileHitbox();
+	}
+
+	/**
+	 * Extra Keys：changeKeyCounts 后刷新移动端 Hitbox 的 lane 按钮布局。
+	 * touchLaneMode='4k' 时触屏固定 4 列（与进曲时 Hitbox 构造函数的列数判定一致）；
+	 * 否则按玩家操作侧当前键数（playOpponent 时为对手侧）。
+	 */
+	private function refreshMobileHitbox():Void
+	{
+		if (mobileControls == null) return;
+		var hb:Hitbox = cast mobileControls.instance;
+		if (hb == null) return;
+
+		var newCols:Int = sideCols();
+		if (ClientPrefs.data.touchLaneMode == '4k') newCols = 4;
+		if (newCols < 1) newCols = 4;
+		hb.rebuildLanes(newCols, newCols - 1);
+	}
 
 	// —— 改键后音符折叠重映射（与新建 strums 匹配） ——
 	public function remapNotesToNewKeyCount():Void

@@ -53,6 +53,9 @@ class Hitbox extends MobileInputManager implements IMobileControls
 	// Extra Keys：多键谱面动态生成的第 5 列及以后音符按钮（不入字段，需手动管理生命周期）
 	public var dynamicNoteButtons:Array<TouchButton> = [];
 
+	// 记录构造时的 extra 键数量（决定 lane 区域占全屏还是 3/4），changeKeyCounts 重建 lane 时复用
+	private var _extraCount:Int = 0;
+
 	public var instance:MobileInputManager;
 	public var onButtonDown:FlxTypedSignal<TouchButton->Void> = new FlxTypedSignal<TouchButton->Void>();
 	public var onButtonUp:FlxTypedSignal<TouchButton->Void> = new FlxTypedSignal<TouchButton->Void>();
@@ -88,6 +91,7 @@ class Hitbox extends MobileInputManager implements IMobileControls
 			case FOUR: count = 4;
 			default: count = 0;
 		}
+		_extraCount = count;
 
 		// Extra Keys：当前谱面档位/键数（touchLaneMode='4k' 时强制 4 键；谱面未加载时 4 键）
 		var mania:Null<Int> = (PlayState.SONG != null) ? PlayState.SONG.mania : null;
@@ -174,6 +178,77 @@ class Hitbox extends MobileInputManager implements IMobileControls
 			}
 			add(btn);
 		}
+	}
+
+	/**
+	 * Extra Keys：销毁当前所有 lane 按钮（前 4 列字段按钮 + 动态多键按钮）。
+	 * 保留 extra 功能键（buttonExtra 等）与外部 insert 进来的 pause 按钮，避免误伤。
+	 * 同时清理动画状态缓存里对旧按钮的引用。
+	 */
+	private function clearLaneButtons():Void
+	{
+		var laneFields:Array<String> = ['buttonLeft', 'buttonDown', 'buttonUp', 'buttonRight'];
+		for (fieldName in laneFields)
+		{
+			var btn:TouchButton = cast Reflect.field(this, fieldName);
+			if (btn != null && btn.exists)
+			{
+				remove(btn);
+				Reflect.setField(this, fieldName, FlxDestroyUtil.destroy(btn));
+			}
+			if (btn != null)
+			{
+				_animatingButtons.remove(btn);
+				_targetAlphas.remove(btn);
+				_targetLabelAlphas.remove(btn);
+			}
+		}
+
+		for (btn in dynamicNoteButtons)
+		{
+			if (btn != null && btn.exists)
+			{
+				remove(btn);
+				FlxDestroyUtil.destroy(btn);
+			}
+			if (btn != null)
+			{
+				_animatingButtons.remove(btn);
+				_targetAlphas.remove(btn);
+				_targetLabelAlphas.remove(btn);
+			}
+		}
+		dynamicNoteButtons = [];
+	}
+
+	/**
+	 * Extra Keys：changeKeyCounts 事件后按新操作侧键数重建触屏 lane 按钮。
+	 * 进曲时 Hitbox 构造函数只按 SONG.mania 生成一次 lane；中途改键（4k↔6k↔9k）后
+	 * 列数/列宽/配色/trackedButtons 都会过期，导致多出来的轨道按不到、旧轨道宽度不对。
+	 * @param newCols      玩家操作侧的新键数（touchLaneMode='4k' 时由调用方钳到 4）
+	 * @param newManiaIdx  新键数对应的 mania 档位索引（= newCols - 1），用于取列配色
+	 */
+	public function rebuildLanes(newCols:Int, newManiaIdx:Int):Void
+	{
+		if (newCols < 1) newCols = 4;
+
+		clearLaneButtons();
+
+		// lane 区域的 y/h 与构造函数保持一致：无 extra 键占满全屏，有 extra 键占 3/4
+		var y:Float = (_extraCount == 0) ? 0 : offsetSec;
+		var h:Int = (_extraCount == 0) ? FlxG.height : Std.int(FlxG.height / 4) * 3;
+		createLaneHints(newCols, newManiaIdx, y, h);
+
+		// createLaneHints 在 >4 分支里已给每列按钮设好 [noteIDForIndex(i)]；
+		// <=4 分支未设 IDs（createHint 不碰 IDs）。这里无论哪种分支，都把前 4 列统一恢复成
+		// [HITBOX_X, NOTE_X] 双键绑定——与进曲时构造函数末尾 storedButtonsIDs 写回后的最终状态一致，
+		// onButtonPress 的 IDs[0]/IDs[1] 判定逻辑即可对齐。
+		if (buttonLeft != null) buttonLeft.IDs = [MobileInputID.HITBOX_LEFT, MobileInputID.NOTE_LEFT];
+		if (buttonDown != null) buttonDown.IDs = [MobileInputID.HITBOX_DOWN, MobileInputID.NOTE_DOWN];
+		if (buttonUp != null) buttonUp.IDs = [MobileInputID.HITBOX_UP, MobileInputID.NOTE_UP];
+		if (buttonRight != null) buttonRight.IDs = [MobileInputID.HITBOX_RIGHT, MobileInputID.NOTE_RIGHT];
+
+		updateTrackedButtons();
 	}
 
 	/**
