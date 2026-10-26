@@ -162,6 +162,21 @@ class NotesColorSubState extends MusicBeatSubstate
 		updateNotes(true, true);
 		FlxG.sound.play(Paths.sound('scrollMenu'), 0.6);
 
+		// 顶部三个箭头是同一音符的 R/G/B 三个颜色分量（arrowRGB 三元组），
+		// 在每个箭头中央标注，方便区分当前编辑的是哪个分量。
+		// 注意：setFormat(null, ...) 会落到 Flixel 默认字体 "Nokia Cellphone FC Small"，
+		// 项目未嵌入该字体（embedFonts=true）会导致文字完全不可见，因此必须指定实际字体文件。
+		var rgbTags:Array<String> = ['R', 'G', 'B'];
+		for (i in 0...3)
+		{
+			var tag:FlxText = new FlxText(230 + (100 * i), 100, 85, rgbTags[i], 24);
+			tag.setFormat(Paths.font('nokiafc22-1.ttf'), 24, FlxColor.WHITE, CENTER, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
+			tag.antialiasing = false; // 强制关闭抗锯齿，保持像素字体清晰
+			tag.borderSize = 2;
+			tag.y = 100 + (85 - tag.height) / 2;
+			add(tag);
+		}
+
 		var tipX = 20;
 		var tipY = 660;
 		var reset:String;
