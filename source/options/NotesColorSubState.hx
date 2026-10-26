@@ -28,6 +28,9 @@ class NotesColorSubState extends MusicBeatSubstate
 	// 按 Q/E 切换，每次只显示该键数对应的箭头列（复用 ControlsSubState 的分页思路）
 	var curEKPage:Int = 3;
 	var ekTipTxt:FlxText;
+	// Extra Keys：移动端 Q/E 虚拟键（切换键数档位页）
+	var prevPageBtn:TouchButton;
+	var nextPageBtn:TouchButton;
 	var savedColArray:Array<String> = []; // 退出时恢复 Note.colArray，避免影响后续游戏
 
 	var hexTypeLine:FlxSprite;
@@ -181,15 +184,15 @@ class NotesColorSubState extends MusicBeatSubstate
 		add(tipTxt);
 		updateTip();
 
-		// Extra Keys：键数档位翻页提示（仅键盘/手柄，移动端无 Q/E）
+		// Extra Keys：键数档位翻页提示（桌面端键盘 Q/E，移动端左下角虚拟 Q/E）
+		ekTipTxt = new FlxText(tipX, tipY + 48, 0, '', 16);
+		ekTipTxt.setFormat(Paths.font(tipFont), 16, FlxColor.WHITE, LEFT, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
+		ekTipTxt.borderSize = 2;
+		add(ekTipTxt);
+		updateEKTip();
+
 		if (!controls.mobileC)
 		{
-			ekTipTxt = new FlxText(tipX, tipY + 48, 0, '', 16);
-			ekTipTxt.setFormat(Paths.font(tipFont), 16, FlxColor.WHITE, LEFT, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
-			ekTipTxt.borderSize = 2;
-			add(ekTipTxt);
-			updateEKTip();
-
 			// 桌面端：左下角三行基于文本实际高度从屏幕底部向上堆叠，
 			// 避免中文字体行高较大时固定 y=660 导致最后一行超出屏幕。
 			var cursorY:Float = FlxG.height - 6;
@@ -199,6 +202,19 @@ class NotesColorSubState extends MusicBeatSubstate
 			tipTxt.y = cursorY;
 			cursorY -= tip.height;
 			tip.y = cursorY;
+		}
+		else
+		{
+			// 移动端：左上角从上往下依次排列提示（tipTxt 在移动端为空，不占位）
+			var cursorY:Float = tipY;
+			tip.y = cursorY;
+			cursorY += tip.height + 4;
+			if (tipTxt.text != '')
+			{
+				tipTxt.y = cursorY;
+				cursorY += tipTxt.height + 4;
+			}
+			ekTipTxt.y = cursorY;
 		}
 
 		controllerPointer = new FlxShapeCircle(0, 0, 20, {thickness: 0}, FlxColor.WHITE);
@@ -214,8 +230,24 @@ class NotesColorSubState extends MusicBeatSubstate
 		addTouchPad('NONE', 'B_C');
 		controls.isInSubstate = true;
 		touchPad.buttonB.x = FlxG.width - 132;
-		touchPad.buttonC.x = 0;
 		touchPad.buttonC.y = FlxG.height - 135;
+
+		// Extra Keys：移动端补上 Q/E 虚拟键（Q/E 紧贴放在画面左侧，C 在下方且 x 位于两者之间）
+		if (controls.mobileC)
+		{
+			prevPageBtn = touchPad.createButton(0, FlxG.height - 270, 'q', 0xFF00A6FF, [MobileInputID.Q]);
+			nextPageBtn = touchPad.createButton(prevPageBtn.width, FlxG.height - 270, 'e', 0xFF00A6FF, [MobileInputID.E]);
+			prevPageBtn.parentAlpha = nextPageBtn.parentAlpha = touchPad.alpha;
+			touchPad.add(prevPageBtn);
+			touchPad.add(nextPageBtn);
+
+			// C 的 x 取 Q/E 两按钮中心点的中点（两按钮等宽，即两者交界处）
+			var qCenter:Float = prevPageBtn.x + prevPageBtn.width / 2;
+			var eCenter:Float = nextPageBtn.x + nextPageBtn.width / 2;
+			touchPad.buttonC.x = (qCenter + eCenter) / 2 - touchPad.buttonC.width / 2;
+		}
+		else
+			touchPad.buttonC.x = 0;
 	}
 
 	function updateTip()
@@ -227,8 +259,10 @@ class NotesColorSubState extends MusicBeatSubstate
 
 	function updateEKTip()
 	{
-		if (ekTipTxt != null)
-			ekTipTxt.text = '按 Q/E 切换键数档位（当前 ' + (curEKPage + 1) + ' 键）';
+		if (ekTipTxt == null) return;
+		// 移动端是屏幕左下角的虚拟 Q/E 按钮，桌面端是键盘
+		var prefix:String = controls.mobileC ? '点击左下角 Q/E' : '按 Q/E';
+		ekTipTxt.text = prefix + ' 切换键数档位（当前 ' + (curEKPage + 1) + ' 键）';
 	}
 
 	/** 当前页键数（= mania+1） */
@@ -377,9 +411,10 @@ class NotesColorSubState extends MusicBeatSubstate
 		}
 		else
 		{
-			// Extra Keys：Q/E 切换键数档位页（hex 输入模式不响应，避免与 A-F 输入冲突）
-			if (FlxG.keys.justPressed.Q) changeEKPage(-1);
-			else if (FlxG.keys.justPressed.E) changeEKPage(1);
+			// Extra Keys：Q/E 切换键数档位页（hex 输入模式不响应，避免与 A-F 输入冲突）；
+			// 移动端用虚拟键，桌面端用键盘 Q/E
+			if (FlxG.keys.justPressed.Q || (prevPageBtn != null && prevPageBtn.justPressed)) changeEKPage(-1);
+			else if (FlxG.keys.justPressed.E || (nextPageBtn != null && nextPageBtn.justPressed)) changeEKPage(1);
 
 			var add:Int = 0;
 			if(analogX == 0 && !changedToController)

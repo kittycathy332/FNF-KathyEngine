@@ -198,6 +198,14 @@ class TypedTouchButton<T:FlxSprite> extends FlxSprite implements IFlxInput
 	 */
 	var _pressedOverlapInput:IFlxInput = null;
 
+	/**
+	 * 按钮创建瞬间就已经按住、直到松开前都应被忽略的输入。
+	 * 典型场景：在父菜单按 A 打开子状态，而子状态的 B 恰好与 A 同位置，
+	 * 同一根手指会被 B 当作“新按下”，导致刚进入就被取消。
+	 */
+	var _preExistingInputs:Array<IFlxInput> = [];
+	var _firstUpdate:Bool = true;
+
 	public var canChangeLabelAlpha:Bool = true;
 
 	/**
@@ -259,6 +267,22 @@ class TypedTouchButton<T:FlxSprite> extends FlxSprite implements IFlxInput
 	override public function update(elapsed:Float):Void
 	{
 		super.update(elapsed);
+
+		// 首帧记录创建时已经按住的输入，之后到松开前都忽略它们（见 _preExistingInputs）
+		if (_firstUpdate)
+		{
+			_firstUpdate = false;
+			if (visible)
+			{
+				for (touch in FlxG.touches.list)
+					if (touch.pressed)
+						_preExistingInputs.push(touch);
+				#if mac
+				if (FlxG.mouse.pressed)
+					_preExistingInputs.push(FlxG.mouse);
+				#end
+			}
+		}
 
 		// 性能优化：只在可见且存在活动触摸时检测
 		if (visible && FlxG.touches.list.length > 0)
@@ -396,6 +420,10 @@ class TypedTouchButton<T:FlxSprite> extends FlxSprite implements IFlxInput
 		if (pointer == null || camera == null)
 			return false;
 
+		// 打开本状态那次点击残留的输入：松开前一律不参与判定
+		if (isPreExistingInput(input))
+			return false;
+
 		var overlaps = overlapsPoint(pointer.getWorldPosition(camera, _point), true, camera);
 
 		if (maxInputMovement != Math.POSITIVE_INFINITY
@@ -421,6 +449,26 @@ class TypedTouchButton<T:FlxSprite> extends FlxSprite implements IFlxInput
 			return true;
 		}
 
+		return false;
+	}
+
+	/**
+	 * 判断输入是否属于“按钮创建时已按住”的那批输入。
+	 * 仍按住 → 忽略；已松开 → 移出忽略列表（触摸对象会被池复用，之后可正常使用）。
+	 */
+	function isPreExistingInput(input:IFlxInput):Bool
+	{
+		if (_preExistingInputs.length == 0)
+			return false;
+
+		var idx:Int = _preExistingInputs.indexOf(input);
+		if (idx == -1)
+			return false;
+
+		if (input.pressed)
+			return true;
+
+		_preExistingInputs.splice(idx, 1);
 		return false;
 	}
 

@@ -292,7 +292,7 @@ class TouchPad extends MobileInputManager implements IMobileControls
 		}
 	}
 
-	private function createButton(X:Float, Y:Float, Graphic:String, ?Color:FlxColor = 0xFFFFFF, ?IDs:Array<MobileInputID>):TouchButton
+	public function createButton(X:Float, Y:Float, Graphic:String, ?Color:FlxColor = 0xFFFFFF, ?IDs:Array<MobileInputID>):TouchButton
 	{
 		var button = new TouchButton(X, Y, IDs);
 		button.label = new FlxSprite();
