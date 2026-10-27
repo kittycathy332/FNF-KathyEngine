@@ -142,6 +142,12 @@ class VisualsSettingsSubState extends BaseOptionsMenu
 			['default', 'leather', 'os']);
 		addOption(option);
 
+		var option:Option = new Option(Language.get('dynamic_health_icons'),
+			Language.get("dynamic_health_icons_desc"),
+			'dynamicHealthIcons',
+			BOOL);
+		addOption(option);
+
 		var option:Option = new Option(Language.get('opponent_splashes'),
 			Language.get("opponent_splashes_desc"),
 			'opponentSplashes',

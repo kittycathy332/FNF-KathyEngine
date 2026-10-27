@@ -50,6 +50,7 @@ import haxe.io.BytesInput;
 	public var gcOnResume:Bool = true;
 	public var antialiasing:Bool = true;
 	public var threeIcons:Bool = false; // 三态图标（正常 / 输 / 赢）：开启后图标图片按宽矩形横向均分为 3 个状态
+	public var dynamicHealthIcons:Bool = false; // 动态血量图标（png+xml Sparrow Atlas）：仅当图标存在配套 xml 且含 default 帧前缀时生效。默认关闭以保持旧图标行为
 	public var noteSkin:String = 'Default';
 	public var splashSkin:String = 'Psych';
 	public var holdCoverSkin:String = 'Default'; // Hold Cover 皮肤（后缀，如 -Psych），Default 表示使用默认 holdCover{Color} 素材
