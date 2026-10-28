@@ -685,6 +685,8 @@
     "hold_note_behind": "Hold Notes Behind Arrows",
     "legacy_main_menu_ui": "Legacy Main Menu UI",
     "fake_window_title": "Fake Window Title",
+    "use_custom_window_title": "Use Custom Window Title",
+    "use_custom_window_title_desc": "Use the fake window title selected below. When disabled, the game leaves the window title alone, so mods can change it freely.",
     "fake_os_version": "Fake 'OS Engine' Version",
     "fake_psych_version": "Fake 'Psych Engine' Version",
     "dynamic_window_title": "Dynamic Window Title",

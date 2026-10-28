@@ -329,6 +329,8 @@
   "charting_charter": "Charter:",
   "charting_difficulties": "Difficulties:",
   "graphics_menu_title": "Graphics Settings",
+  "borderless_name": "In-Game Window Frame",
+  "borderless_desc": "Replace the native title bar and window border with an in-game title bar and frame. Supports dragging, edge resizing, minimize/maximize/close. Desktop only.",
   "graphics_menu_rpc": "Graphics Settings Menu",
   "low_quality_name": "Low Quality",
   "antialiasing_name": "Anti-Aliasing",

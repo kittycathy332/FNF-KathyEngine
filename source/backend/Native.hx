@@ -618,6 +618,322 @@ class Native
 	}
 
 	/**
+	 * 使用 Windows 原生非客户区拖动（仅Windows）。
+	 * 调用后会阻塞直到拖动结束，之后返回 true。
+	 */
+	public static function startWindowDrag():Bool
+	{
+		#if (cpp && windows)
+		var result:Bool = false;
+		untyped __cpp__('
+			getHandle();
+			if (curHandle != (HWND)0 && !IsWindow(curHandle)) {
+				curHandle = (HWND)0;
+				getHandle();
+			}
+			if (curHandle != (HWND)0) {
+				ReleaseCapture();
+				SendMessageW(curHandle, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+				{0} = true;
+			}
+		', result);
+		return result;
+		#else
+		return false;
+		#end
+	}
+
+	/** Re-resolves the main window handle (Windows only). */
+	public static function resetWindowHandle():Void
+	{
+		#if (cpp && windows)
+		untyped __cpp__('
+			curHandle = (HWND)0;
+			getHandle();
+		');
+		#end
+	}
+
+	/** Windows mouse capture, used while dragging a custom resize edge. */
+	public static function setMouseCapture(enabled:Bool):Void
+	{
+		#if (cpp && windows)
+		untyped __cpp__('
+			getHandle();
+			if (curHandle != (HWND)0) {
+				if ({0}) SetCapture(curHandle);
+				else ReleaseCapture();
+			}
+		', enabled);
+		#end
+	}
+
+	public static function getCursorScreenX():Int
+	{
+		#if (cpp && windows)
+		var result:Int = 0;
+		untyped __cpp__('
+			POINT point;
+			GetCursorPos(&point);
+			{0} = point.x;
+		', result);
+		return result;
+		#else
+		return 0;
+		#end
+	}
+
+	public static function getCursorScreenY():Int
+	{
+		#if (cpp && windows)
+		var result:Int = 0;
+		untyped __cpp__('
+			POINT point;
+			GetCursorPos(&point);
+			{0} = point.y;
+		', result);
+		return result;
+		#else
+		return 0;
+		#end
+	}
+
+	/** Windows desktop work area of the current monitor (Windows only). */
+	public static function getWorkAreaX():Int
+	{
+		#if (cpp && windows)
+		var result:Int = 0;
+		untyped __cpp__('
+			getHandle();
+			RECT workArea;
+			workArea.left = 0; workArea.top = 0; workArea.right = 0; workArea.bottom = 0;
+			if (curHandle != (HWND)0) {
+				HMONITOR monitor = MonitorFromWindow(curHandle, MONITOR_DEFAULTTONEAREST);
+				MONITORINFO info;
+				info.cbSize = sizeof(MONITORINFO);
+				if (monitor && GetMonitorInfoW(monitor, &info)) {
+					workArea = info.rcWork;
+				}
+			}
+			{0} = workArea.left;
+		', result);
+		return result;
+		#else
+		return 0;
+		#end
+	}
+
+	public static function getWorkAreaY():Int
+	{
+		#if (cpp && windows)
+		var result:Int = 0;
+		untyped __cpp__('
+			getHandle();
+			RECT workArea;
+			workArea.left = 0; workArea.top = 0; workArea.right = 0; workArea.bottom = 0;
+			if (curHandle != (HWND)0) {
+				HMONITOR monitor = MonitorFromWindow(curHandle, MONITOR_DEFAULTTONEAREST);
+				MONITORINFO info;
+				info.cbSize = sizeof(MONITORINFO);
+				if (monitor && GetMonitorInfoW(monitor, &info)) {
+					workArea = info.rcWork;
+				}
+			}
+			{0} = workArea.top;
+		', result);
+		return result;
+		#else
+		return 0;
+		#end
+	}
+
+	public static function getWorkAreaWidth():Int
+	{
+		#if (cpp && windows)
+		var result:Int = 0;
+		untyped __cpp__('
+			getHandle();
+			RECT workArea;
+			workArea.left = 0; workArea.top = 0; workArea.right = 0; workArea.bottom = 0;
+			if (curHandle != (HWND)0) {
+				HMONITOR monitor = MonitorFromWindow(curHandle, MONITOR_DEFAULTTONEAREST);
+				MONITORINFO info;
+				info.cbSize = sizeof(MONITORINFO);
+				if (monitor && GetMonitorInfoW(monitor, &info)) {
+					workArea = info.rcWork;
+				}
+			}
+			{0} = workArea.right - workArea.left;
+		', result);
+		return result;
+		#else
+		return 0;
+		#end
+	}
+
+	public static function getWorkAreaHeight():Int
+	{
+		#if (cpp && windows)
+		var result:Int = 0;
+		untyped __cpp__('
+			getHandle();
+			RECT workArea;
+			workArea.left = 0; workArea.top = 0; workArea.right = 0; workArea.bottom = 0;
+			if (curHandle != (HWND)0) {
+				HMONITOR monitor = MonitorFromWindow(curHandle, MONITOR_DEFAULTTONEAREST);
+				MONITORINFO info;
+				info.cbSize = sizeof(MONITORINFO);
+				if (monitor && GetMonitorInfoW(monitor, &info)) {
+					workArea = info.rcWork;
+				}
+			}
+			{0} = workArea.bottom - workArea.top;
+		', result);
+		return result;
+		#else
+		return 0;
+		#end
+	}
+
+	/**
+	 * 当前窗口图标的原生句柄（Windows only）。
+	 * 返回 0 表示没有可用的图标/不是 Windows。
+	 */
+	public static function getWindowIconHandle():Float
+	{
+		#if (cpp && windows)
+		var result:Float = 0;
+		untyped __cpp__('
+			getHandle();
+			if (curHandle != (HWND)0 && !IsWindow(curHandle)) {
+				curHandle = (HWND)0;
+				getHandle();
+			}
+			if (curHandle != (HWND)0) {
+				HICON icon = (HICON)SendMessage(curHandle, WM_GETICON, ICON_BIG, 0);
+				if (icon == NULL) icon = (HICON)GetClassLongPtr(curHandle, GCLP_HICON);
+				{0} = (double)(INT_PTR)icon;
+			}
+		', result);
+		return result;
+		#else
+		return 0;
+		#end
+	}
+
+	/**
+	 * 读取当前窗口图标的 ARGB 像素。
+	 * 返回数组前两个元素为宽、高，之后依次是 ARGB。
+	 * Windows only；其他平台返回 false。
+	 */
+	public static function readWindowIcon(pixels:Array<Int>):Bool
+	{
+		#if (cpp && windows)
+		var result:Bool = false;
+		untyped __cpp__('
+			getHandle();
+			if (curHandle != (HWND)0 && !IsWindow(curHandle)) {
+				curHandle = (HWND)0;
+				getHandle();
+			}
+			if (curHandle == (HWND)0) return false;
+
+			HICON icon = (HICON)SendMessage(curHandle, WM_GETICON, ICON_BIG, 0);
+			if (icon == NULL) icon = (HICON)GetClassLongPtr(curHandle, GCLP_HICON);
+			if (icon == NULL) return false;
+
+			ICONINFO info;
+			if (!GetIconInfo(icon, &info)) return false;
+
+			BITMAP bm;
+			if (!GetObject(info.hbmColor, sizeof(BITMAP), &bm)) {
+				DeleteObject(info.hbmColor);
+				DeleteObject(info.hbmMask);
+				return false;
+			}
+
+			int w = bm.bmWidth;
+			int h = bm.bmHeight;
+			if (w <= 0 || h <= 0) {
+				DeleteObject(info.hbmColor);
+				DeleteObject(info.hbmMask);
+				return false;
+			}
+
+			BITMAPINFO bi;
+			ZeroMemory(&bi, sizeof(BITMAPINFO));
+			bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+			bi.bmiHeader.biWidth = w;
+			bi.bmiHeader.biHeight = -h;
+			bi.bmiHeader.biPlanes = 1;
+			bi.bmiHeader.biBitCount = 32;
+			bi.bmiHeader.biCompression = BI_RGB;
+
+			unsigned char* data = new unsigned char[w * h * 4];
+			HDC hdc = GetDC(NULL);
+			int lines = GetDIBits(hdc, info.hbmColor, 0, h, data, &bi, DIB_RGB_COLORS);
+			ReleaseDC(NULL, hdc);
+			if (lines == 0) {
+				delete[] data;
+				DeleteObject(info.hbmColor);
+				DeleteObject(info.hbmMask);
+				return false;
+			}
+
+			BITMAP maskBm;
+			unsigned char* mask = NULL;
+			int maskStride = 0;
+			int maskHeight = 0;
+			if (info.hbmMask != NULL && GetObject(info.hbmMask, sizeof(BITMAP), &maskBm)) {
+				maskStride = maskBm.bmWidthBytes;
+				maskHeight = maskBm.bmHeight;
+				if (maskStride > 0 && maskHeight > 0) {
+					mask = new unsigned char[maskStride * maskHeight];
+					GetBitmapBits(info.hbmMask, maskStride * maskHeight, mask);
+				}
+			}
+
+			auto out = {1};
+			out->push(w);
+			out->push(h);
+
+			for (int y = 0; y < h; y++) {
+				for (int x = 0; x < w; x++) {
+					int index = (y * w + x) * 4;
+					int b = data[index];
+					int g = data[index + 1];
+					int r = data[index + 2];
+					int a = data[index + 3];
+
+					bool transparent = false;
+					if (mask != NULL && maskHeight == h) {
+						int my = maskHeight - 1 - y;
+						int mx = x >> 3;
+						if (mx < maskStride) {
+							transparent = ((mask[my * maskStride + mx] >> (7 - (x & 7))) & 1) != 0;
+						}
+					}
+
+					if (transparent) a = 0;
+					else if (a == 0) a = 255;
+
+					out->push((a << 24) | (r << 16) | (g << 8) | b);
+				}
+			}
+
+			delete[] data;
+			if (mask != NULL) delete[] mask;
+			DeleteObject(info.hbmColor);
+			DeleteObject(info.hbmMask);
+			{0} = true;
+		', result, pixels);
+		return result;
+		#else
+		return false;
+		#end
+	}
+
+	/**
 	 * 渐隐关闭窗口（仅Windows平台）
 	 * @param durationMs 渐隐持续时间（毫秒），默认500ms
 	 * @return 是否成功启动渐隐动画

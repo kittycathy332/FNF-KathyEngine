@@ -376,6 +376,9 @@ import haxe.io.BytesInput;
 	public var fakeOSVersion:String = "1.5.1";
 	public var watermarkType:String = 'Kathy';
 
+	// 伪窗口边框（桌面端）：去掉系统标题栏/边框，改用游戏内标题栏和边框
+	public var borderless:Bool = false;
+
 	// Fake Psych 版本伪装
 	public var fakePsychVersion:String = "1.0.4";
 
@@ -388,6 +391,7 @@ import haxe.io.BytesInput;
 	public var windowTitleShowMod:Bool = true; // 标题中显示当前模组名称
 	public var windowTitleShowSong:Bool = true; // 标题中显示当前游玩曲目
 	public var windowTitleShowDifficulty:Bool = false; // 标题中显示当前曲目难度
+	public var useCustomWindowTitle:Bool = true; // 使用自定义（伪）窗口标题；关闭后保留游戏/模组原始标题
 
 	// Leather 风格相关
 	public var biggerInfoText:Bool = false; // 更大的信息文本

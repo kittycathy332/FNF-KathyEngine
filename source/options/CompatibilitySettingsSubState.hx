@@ -69,7 +69,18 @@ class CompatibilitySettingsSubState extends BaseOptionsMenu
 		addOption(option);
 
 		#if !mobile
-		// 窗口标题
+		// 是否使用自定义（伪）窗口标题
+		option = new Option(Language.get('use_custom_window_title'),
+			Language.get("use_custom_window_title_desc"),
+			'useCustomWindowTitle',
+			BOOL);
+		option.onChange = function()
+		{
+			Main.updateWindowTitle(true);
+		};
+		addOption(option);
+
+		// 伪窗口标题预设
 		option = new Option(Language.get('fake_window_title'),
 			Language.get("fake_window_title_desc"),
 			'windowTitlePreset',

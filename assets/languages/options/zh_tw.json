@@ -648,6 +648,8 @@
     "hold_note_behind": "長音置於箭頭之下",
     "legacy_main_menu_ui": "舊版主選單介面",
     "fake_window_title": "偽視窗標題",
+    "use_custom_window_title": "使用自訂視窗標題",
+    "use_custom_window_title_desc": "開啟後使用下方選擇的偽視窗標題；關閉後不修改視窗標題，保留遊戲原始標題，模組也可以自由修改。",
     "fake_os_version": "僞”OS引擎”版本",
     "fake_psych_version": "僞”Psych引擎”版本",
     "dynamic_window_title": "動態視窗標題",

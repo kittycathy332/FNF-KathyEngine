@@ -690,6 +690,8 @@
     "hold_note_behind": "长音置于箭头之下",
     "legacy_main_menu_ui": "旧版主菜单界面",
     "fake_window_title": "伪窗口标题",
+    "use_custom_window_title": "使用自定义窗口标题",
+    "use_custom_window_title_desc": "开启后使用下方选择的伪窗口标题；关闭后不修改窗口标题，保留游戏原始标题，模组也可以自由修改。",
     "fake_os_version": "伪”OS引擎”版本",
     "fake_psych_version": "伪”Psych引擎”版本",
     "dynamic_window_title": "动态窗口标题",

@@ -33,6 +33,9 @@ import backend.Highscore;
 import flixel.tweens.FlxTween;
 import flixel.tweens.FlxEase;
 import backend.ClientPrefs;
+#if desktop
+import backend.PseudoTitleBar;
+#end
 import openfl.ui.Keyboard;
 
 // NATIVE API STUFF, YOU CAN IGNORE THIS AND SCROLL //
@@ -55,6 +58,9 @@ class Main extends Sprite
 	public static var fpsLayer:Sprite;
 	public static var fpsVar:FPSCounter;
 	public static var gameLogVar:GameLogDisplay;
+	#if desktop
+	public static var titleBar:PseudoTitleBar;
+	#end
 
 	/** 强制隐藏 FPS 计数器（如进入制谱器时临时隐藏，不受 showFPS 设置与窗口缩放影响）。
 	 * 设为 false 或调用 updateFPSCounterVisibility 可恢复。 */
@@ -150,6 +156,13 @@ class Main extends Sprite
 
 		FlxG.save.bind('funkin', CoolUtil.getSavePath());
 
+		#if desktop
+		// Apply the borderless flag before the FlxGame is created, so the
+		// native title bar does not flash during startup.
+		if (FlxG.save.data != null && Reflect.field(FlxG.save.data, 'borderless') == true)
+			PseudoTitleBar.applyStartupBorderless(true);
+		#end
+
 		#if HSCRIPT_ALLOWED
 		Iris.warn = function(x, ?pos:haxe.PosInfos)
 		{
@@ -243,6 +256,9 @@ class Main extends Sprite
 		FlxG.signals.postGameStart.addOnce(() ->
 		{
 			ClientPrefs.loadPrefs();
+			#if desktop
+			PseudoTitleBar.applySettings();
+			#end
 			// 加载完设置后再按保存值启用/关闭原生GC
 			applyGarbageCollectorSetting();
 		});
@@ -317,6 +333,27 @@ class Main extends Sprite
 		gameLogVar = new GameLogDisplay();
 		gameLogVar.setEnabled(ClientPrefs.data.enableGameLog);
 		Lib.current.stage.addChild(gameLogVar);
+
+		#if desktop
+		// 无边框模式下替代系统标题栏的游戏内伪标题栏
+		titleBar = new PseudoTitleBar();
+		titleBar.onExit = function() {
+			requestExit();
+		};
+		titleBar.onFrameChanged = function() {
+			updateFPSLayer();
+		};
+		Lib.current.stage.addChild(titleBar);
+		// postGameStart may already have fired before this overlay existed.
+		// Mirror the saved flag so the immediate apply below does not undo the
+		// startup borderless state when ClientPrefs has not finished loading.
+		if (FlxG.save.data != null)
+		{
+			var savedBorderless:Dynamic = Reflect.field(FlxG.save.data, 'borderless');
+			if (savedBorderless != null) ClientPrefs.data.borderless = (savedBorderless == true);
+		}
+		PseudoTitleBar.applySettings();
+		#end
 
 		Language.load();
 
@@ -504,6 +541,37 @@ class Main extends Sprite
 	}
 	#end
 
+	/** Shared quit path for the in-game title bar and other UI entry points. */
+	public static var isExitRequested:Bool = false;
+
+	public static function requestExit():Void
+	{
+		if (isExitRequested) return;
+		isExitRequested = true;
+
+		try
+		{
+			ClientPrefs.saveSettings();
+		}
+		catch (e:Dynamic)
+		{
+			trace('Failed to save settings before exit: $e');
+		}
+
+		#if (cpp && windows && !mobile)
+		startFadeOutAndExit();
+		#else
+		#if DISCORD_ALLOWED
+		try
+		{
+			if (DiscordClient.isInitialized) DiscordClient.shutdown();
+		}
+		catch (e:Dynamic) {}
+		#end
+		LimeSystem.exit(0);
+		#end
+	}
+
 	// 应用进入后台时调用
 	private function onAppDeactivate(e:Event):Void
 	{
@@ -581,12 +649,32 @@ class Main extends Sprite
 	#end
 
 	/**
-	 * 根据管理员权限更新窗口标题（支持Fake OS伪装）
+	 * 更新窗口标题。
+	 *
+	 * useCustomWindowTitle=true  ：使用“伪窗口标题”设置，并接管动态标题。
+	 * useCustomWindowTitle=false ：完全不修改窗口标题，保留游戏/模组原始标题。
 	 */
-	public static function updateWindowTitle():Void
+	public static function updateWindowTitle(force:Bool = true):Void
 	{
 		if (Lib.current.stage != null && Lib.current.stage.window != null)
 		{
+			var window = Lib.current.stage.window;
+
+			if (!ClientPrefs.data.useCustomWindowTitle)
+			{
+				// 关闭自定义标题时，如果当前标题仍是引擎上一次写入的伪标题，
+				// 恢复成应用原始标题；如果已被模组改成别的值，则不要覆盖它。
+				if (force && _lastAppliedWindowTitle != null && window.title == _lastAppliedWindowTitle)
+				{
+					var originalTitle:String = Application.current.meta.get('title');
+					if (originalTitle == null) originalTitle = "Kathy Engine";
+					window.title = originalTitle;
+				}
+
+				_lastAppliedWindowTitle = null;
+				return;
+			}
+
 			var baseTitle:String = ClientPrefs.data.windowTitle != null ? ClientPrefs.data.windowTitle : Application.current.meta.get('title');
 			if (baseTitle == null) baseTitle = "Kathy Engine";
 
@@ -598,7 +686,9 @@ class Main extends Sprite
 			// 未启用动态窗口标题时，仅显示基础标题
 			if (!ClientPrefs.data.dynamicWindowTitle)
 			{
-				Lib.current.stage.window.title = baseTitle + adminSuffix;
+				var title:String = baseTitle + adminSuffix;
+				window.title = title;
+				_lastAppliedWindowTitle = title;
 				return;
 			}
 
@@ -630,20 +720,23 @@ class Main extends Sprite
 				parts.push("Screen: " + stateName);
 			}
 
-			Lib.current.stage.window.title = parts.join(" | ");
+			var title:String = parts.join(" | ");
+			window.title = title;
+			_lastAppliedWindowTitle = title;
 		}
 	}
 
 
 	// 每帧检测状态切换（仅在状态实例变化时刷新窗口标题，避免重复设置）
 	private static var _lastWindowTitleState:Dynamic = null;
+	private static var _lastAppliedWindowTitle:String = null;
 	private static function onWindowTitleFrame(_):Void
 	{
 		var cur = FlxG.state;
 		if (cur != _lastWindowTitleState)
 		{
 			_lastWindowTitleState = cur;
-			updateWindowTitle();
+			updateWindowTitle(false);
 		}
 	}
 
@@ -665,25 +758,38 @@ class Main extends Sprite
 				fpsLayer.parent.removeChild(fpsLayer);
 			}
 			Lib.current.stage.addChild(fpsLayer);
+			#if desktop
+			if (titleBar != null) titleBar.bringFrameAbove(fpsLayer);
+			#end
 		}
 
 		var screenWidth:Float = Lib.current.stage.stageWidth;
 		var screenHeight:Float = Lib.current.stage.stageHeight;
 
+		#if desktop
+		var frameBorder = PseudoTitleBar.getFrameBorder();
+		var content = PseudoTitleBar.getGameContentRect();
+		#else
+		var frameBorder = 0.0;
+		var content = {x: 0.0, y: 0.0, width: screenWidth, height: screenHeight};
+		#end
+
+		if (content.width <= 0 || content.height <= 0)
+			content = {x: 0.0, y: 0.0, width: screenWidth, height: screenHeight};
+
 		// 先更新可见性（applySettings 会被调用，可能覆盖位置）
 		updateFPSCounterVisibility();
 
 		if(ClientPrefs.data.fpsLayer == "Game") {
-			// Game 模式：与游戏画面对齐 —— 缩放 + 居中偏移
+			// Game 模式：与游戏画面对齐 —— 等比缩放 + 居中偏移
 			var gameWidth:Float = 1280;
 			var gameHeight:Float = 720;
-			var scale:Float = Math.min(screenWidth / gameWidth, screenHeight / gameHeight);
+			var scale:Float = Math.min(content.width / gameWidth, content.height / gameHeight);
 
-			// 设置 fpsLayer 的缩放和偏移（全局）
 			fpsLayer.scaleX = scale;
 			fpsLayer.scaleY = scale;
-			fpsLayer.x = (screenWidth - gameWidth * scale) / 2;
-			fpsLayer.y = (screenHeight - gameHeight * scale) / 2;
+			fpsLayer.x = content.x + (content.width - gameWidth * scale) / 2;
+			fpsLayer.y = content.y + (content.height - gameHeight * scale) / 2;
 
 			// fpsVar 在 fpsLayer 内部，使用 1280x720 坐标（无额外缩放）
 			if(fpsVar != null) {
@@ -697,11 +803,21 @@ class Main extends Sprite
 				fpsVar.y = isBottom ? (gameHeight - 40 - spacing) : spacing;
 			}
 		} else {
-			// Stage 模式：不缩放 fpsLayer，使用屏幕像素坐标
-			fpsLayer.scaleX = 1;
-			fpsLayer.scaleY = 1;
-			fpsLayer.x = 0;
-			fpsLayer.y = 0;
+			// Stage 模式：不缩放 fpsLayer，使用屏幕像素坐标。
+			// 伪边框开启时，把整个 stage 坐标空间等比缩进到游戏区域内部，
+			// 这样所有 FPS 样式都会自动避开边框。
+			if (frameBorder > 0) {
+				var scale:Float = Math.min(content.width / screenWidth, content.height / screenHeight);
+				fpsLayer.scaleX = scale;
+				fpsLayer.scaleY = scale;
+				fpsLayer.x = content.x + (content.width - screenWidth * scale) / 2;
+				fpsLayer.y = content.y + (content.height - screenHeight * scale) / 2;
+			} else {
+				fpsLayer.scaleX = 1;
+				fpsLayer.scaleY = 1;
+				fpsLayer.x = 0;
+				fpsLayer.y = 0;
+			}
 
 			// Stage 模式下，positionFPS 使用 stage 坐标逻辑
 			if(fpsVar != null) {

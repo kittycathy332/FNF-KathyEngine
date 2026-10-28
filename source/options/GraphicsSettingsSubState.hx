@@ -34,6 +34,19 @@ class GraphicsSettingsSubState extends BaseOptionsMenu
 			title = Language.get('graphics_menu');
 			rpcTitle = 'Graphics Settings Menu';
 
+			#if desktop
+			// 伪窗口边框：去掉系统标题栏和边框，改用游戏内标题栏/边框
+			var option:Option = new Option(Language.get('borderless_name'),
+				Language.get('borderless_desc'),
+				'borderless',
+				BOOL);
+			option.onChange = function()
+			{
+				backend.PseudoTitleBar.applySettings();
+			};
+			addOption(option);
+			#end
+
 			// 图形设置选项
 			var option:Option = new Option(Language.get('low_quality'),
 				Language.get("low_quality_desc"),

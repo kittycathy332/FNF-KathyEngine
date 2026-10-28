@@ -305,6 +305,8 @@
   "charting_charter": "製譜者：",
   "charting_difficulties": "難度：",
   "graphics_menu_title": "圖形設定",
+  "borderless_name": "偽視窗邊框",
+  "borderless_desc": "用遊戲內偽標題列和偽視窗邊框取代系統視窗邊框；支援拖動、邊緣縮放、最小化/最大化/關閉。僅桌面端生效。",
   "graphics_menu_rpc": "圖形設定選單",
   "low_quality_name": "低品質",
   "antialiasing_name": "抗鋸齒",
