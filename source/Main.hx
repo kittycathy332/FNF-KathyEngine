@@ -313,6 +313,10 @@ class Main extends Sprite
 		}
 		addChild(game);
 
+		// HaxeUI 焦点清理钩子：必须在 HaxeUI Toolkit 首次初始化之前注册，
+		// 保证切换 state 时我们的清理先于 HaxeUI ScreenImpl 的组件移除执行（见 FreeplayState.initHaxeUIFocusCleanup）。
+		FreeplayState.initHaxeUIFocusCleanup();
+
 		// 创建 fpsLayer 作为 FPS 计数器的统一容器
 		fpsLayer = new Sprite();
 		fpsLayer.x = 0;

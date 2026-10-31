@@ -1,0 +1,30 @@
+{
+  "_comment": "Freeplay 分区配置模板。复制并改名为 freeplay_categories.json，放到 mods/freeplay_categories.json（全局生效）或 mods/<模组文件夹>/freeplay_categories.json（仅该模组）。categories 推荐写成数组；也兼容单个分区对象或顶层直接写数组。同名 id 的分区会自动合并：名称以后读到的（全局）为准，匹配规则取并集。_comment 字段会被忽略。匹配字段：folders（模组文件夹）、weeks（周目文件名或 weekName）、songs（曲名，可写字符串或 {song, folder}，folder 留空表示不限文件夹）。",
+  "categories": [
+    {
+      "id": "my-mod",
+      "name": "我的模组",
+      "folders": ["my-mod"]
+    },
+    {
+      "id": "classic",
+      "name": "经典周目",
+      "weeks": ["week1", "week2", "week3"]
+    },
+    {
+      "id": "favorites",
+      "name": "精选曲目",
+      "songs": [
+        "Bopeebo",
+        { "song": "Ugh", "folder": "my-mod" },
+        { "song": "Guns", "folder": "" }
+      ]
+    },
+    {
+      "id": "extra",
+      "name": "额外关卡",
+      "folders": ["extra-songs"],
+      "weeks": ["week-extra"]
+    }
+  ]
+}

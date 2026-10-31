@@ -230,6 +230,7 @@ import haxe.io.BytesInput;
 	public var loadingScreen:Bool = true;
 	public var basiclanguage:String = 'en-US';
 	public var language:String = 'zh_cn';
+	public var freeplayCategory:String = ''; // 上次停留的 Freeplay 分区 id，空表示“全部”
 	public var keyViewer:Bool = false; // 游戏内按键显示覆盖层（复刻 JKPS 效果）
 	public var keyViewerProfile:Bool = false; // KeyViewer 左侧图标 + 底部自定义名字（关闭时按键垂直居中）
 	public var keyViewerName:String = ''; // KeyViewer 底部显示的自定义名字（留空则读取 images/keyviewer/name.txt）
