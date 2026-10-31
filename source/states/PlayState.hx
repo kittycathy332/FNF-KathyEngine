@@ -5345,6 +5345,18 @@ tempScore += '${lblScore}: ${songScore}';
 	var vsliceBopTweenP1:FlxTween = null;
 	var vsliceBopTweenP2:FlxTween = null;
 
+	// GoldenApple 复刻用的补间引用（缩放 / 角度各两个），连续 beat 时先取消旧的，避免补间叠加
+	var goldenAppleScaleTweenP1:FlxTween = null;
+	var goldenAppleScaleTweenP2:FlxTween = null;
+	var goldenAppleAngleTweenP1:FlxTween = null;
+	var goldenAppleAngleTweenP2:FlxTween = null;
+	// 锚点风格共用：图标 y 的锚点基准（默认初始安装位置，外部改动会并入基准）
+	// 与上一帧我们写入的 y。用于在钉住上缘的同时兼容模组 / 脚本的飞入动画。
+	var anchorBaseYP1:Float = Math.NaN;
+	var anchorBaseYP2:Float = Math.NaN;
+	var anchorLastYP1:Float = Math.NaN;
+	var anchorLastYP2:Float = Math.NaN;
+
 	// 图标缩放回弹的插值因子：
 	// - 归一化(iconbopNormalize=true)：1 - e^(-k·dt·playbackRate)，任意刷新率/倍速下表现一致（高刷屏不再偏快/偏慢）
 	// - 关闭：沿用旧版逐帧线性公式 k·dt·playbackRate，保留旧手感（低帧下可能偏离）
@@ -5368,6 +5380,101 @@ tempScore += '${lblScore}: ${songScore}';
 		return FlxTween.tween(icon.scale, {x: 1, y: 1}, Math.min(Conductor.stepCrochet * 0.002, 0.175), {
 			ease: FlxEase.linear
 		});
+	}
+
+	/**
+	 * Golden Apple 的"一压一拉"姿态：偶数拍左侧压扁、右侧拉高，奇数拍反过来
+	 * （与原引擎 curBeat % (gfSpeed * 2) 判定等价），横向恒为 1.1，并附带 ±15° 甩头。
+	 * 供补间版与 lerp 版共用，两者只有回弹方式不同。
+	 */
+	function goldenAppleApplyPose():Void
+	{
+		var baseP1:Float = iconP1.startSize > 0 ? iconP1.startSize : 1;
+		var baseP2:Float = iconP2.startSize > 0 ? iconP2.startSize : 1;
+
+		if (curBeat % 2 == 0)
+		{
+			iconP1.scale.set(baseP1 * 1.1, baseP1 * 0.8);
+			iconP2.scale.set(baseP2 * 1.1, baseP2 * 1.3);
+			iconP1.angle = -15;
+			iconP2.angle = 15;
+		}
+		else
+		{
+			iconP1.scale.set(baseP1 * 1.1, baseP1 * 1.3);
+			iconP2.scale.set(baseP2 * 1.1, baseP2 * 0.8);
+			iconP1.angle = 15;
+			iconP2.angle = -15;
+		}
+
+		// origin 已在 updateIconsPosition 设成"左边缘中点"，缩放 / ±15° 甩头都绕该点进行
+	}
+
+	/**
+	 * 纵向锚点（所有带锚点的风格共用）：把图标 y 钉在"锚点基准 + 偏移量"。
+	 * 写入前会对比上一帧的值，把外部（模组 / 脚本 / 补间）对 y 的改动并入锚点基准，
+	 * 因此开场前把图标移出画面、再补间飞入的动画不会被覆盖；
+	 * offset 为相对基准的目标偏移（0 = 钉在基准位置）。
+	 */
+	function anchorIconY(offsetP1:Float, offsetP2:Float):Void
+	{
+		// 首次调用直接以图标当前 y 作为基准（正常情况下即 iconP1InitialY），
+		// 这样即使模组 / 脚本在首帧之前就改过 y，也会被原样保留。
+		if (Math.isNaN(anchorLastYP1)) anchorBaseYP1 = iconP1.y;
+		else anchorBaseYP1 += iconP1.y - anchorLastYP1;
+		if (Math.isNaN(anchorLastYP2)) anchorBaseYP2 = iconP2.y;
+		else anchorBaseYP2 += iconP2.y - anchorLastYP2;
+
+		iconP1.y = anchorBaseYP1 + offsetP1;
+		iconP2.y = anchorBaseYP2 + offsetP2;
+		anchorLastYP1 = iconP1.y;
+		anchorLastYP2 = iconP2.y;
+	}
+
+	/**
+	 * Golden Apple Engine 复刻的图标跳动（补间版）：
+	 * 每拍瞬间改成"一压一拉"（左右反相，横向恒为 1.1），
+	 * 再用 quadOut 把缩放收回原尺寸、把 ±15° 甩头角度收回 0。
+	 * 时长由 Conductor.crochet 换算，随 BPM 自动缩放，并按 playbackRate 校正到真实时间。
+	 */
+	function iconBopGoldenApple():Void
+	{
+		var baseP1:Float = iconP1.startSize > 0 ? iconP1.startSize : 1;
+		var baseP2:Float = iconP2.startSize > 0 ? iconP2.startSize : 1;
+		var rate:Float = playbackRate > 0 ? playbackRate : 1;
+
+		goldenAppleScaleTweenP1?.cancel();
+		goldenAppleScaleTweenP2?.cancel();
+		goldenAppleAngleTweenP1?.cancel();
+		goldenAppleAngleTweenP2?.cancel();
+
+		goldenAppleApplyPose();
+
+		// 缩放约 0.8 拍、角度约 0.77 拍内归位，保证下一拍到来前已完全静止
+		var scaleTime:Float = Conductor.crochet / 1250 / rate;
+		var angleTime:Float = Conductor.crochet / 1300 / rate;
+
+		goldenAppleScaleTweenP1 = FlxTween.tween(iconP1.scale, {x: baseP1, y: baseP1}, scaleTime, {ease: FlxEase.quadOut});
+		goldenAppleScaleTweenP2 = FlxTween.tween(iconP2.scale, {x: baseP2, y: baseP2}, scaleTime, {ease: FlxEase.quadOut});
+		goldenAppleAngleTweenP1 = FlxTween.tween(iconP1, {angle: 0}, angleTime, {ease: FlxEase.quadOut});
+		goldenAppleAngleTweenP2 = FlxTween.tween(iconP2, {angle: 0}, angleTime, {ease: FlxEase.quadOut});
+
+		iconP1.updateHitbox();
+		iconP2.updateHitbox();
+		// updateHitbox() 会把 origin 重置回图标正中、把 offset 重置成居中补偿；
+		// GoldenApple 的轴心是"左边缘中点"，必须改回来，否则本帧的 ±15° 甩头会绕图标中心旋转。
+		iconP1.origin.set(0, iconP1.frameHeight / 2);  iconP2.origin.set(0, iconP2.frameHeight / 2);
+		iconP1.offset.set(0, 0);  iconP2.offset.set(0, 0);
+	}
+
+	/**
+	 * Golden Apple 的 lerp 驱动版：
+	 * beat 时摆出同样的"一压一拉 + ±15°"姿态，但不建补间，
+	 * 回弹交给 updateIconsScale 里 Dave and Bambi 风格的 0.88 lerp 逐帧收拢。
+	 */
+	function iconBopGoldenAppleLerp():Void
+	{
+		goldenAppleApplyPose();
 	}
 
 	public dynamic function updateIconsScale(elapsed:Float)
@@ -5433,6 +5540,27 @@ tempScore += '${lblScore}: ${songScore}';
     else if (ClientPrefs.data.iconbopstyle == "VSlice(New)")
     {
         // funkin 复刻：回弹完全由 beat 时启动的 linear 补间驱动，这里不再做指数衰减
+    }
+    else if (ClientPrefs.data.iconbopstyle == "GoldenApple")
+    {
+        // Golden Apple 复刻：回弹完全由 beat 时启动的 quadOut 补间驱动，这里不再逐帧衰减
+    }
+    else if (ClientPrefs.data.iconbopstyle == "GoldenApple (Lerp)")
+    {
+        // Dave and Bambi 式 lerp 衰减：每帧保留 0.88 的偏移（60fps 基准）；
+        // 开启"图标跳动归一化"后换算成与刷新率无关的指数衰减，并跟随变速播放。
+        var f:Float = ClientPrefs.data.iconbopNormalize
+            ? Math.exp(-(-Math.log(0.88) * 60) * elapsed * playbackRate)
+            : 0.88;
+        var baseP1:Float = iconP1.startSize > 0 ? iconP1.startSize : 1;
+        var baseP2:Float = iconP2.startSize > 0 ? iconP2.startSize : 1;
+
+        iconP1.scale.x = FlxMath.lerp(baseP1, iconP1.scale.x, f);
+        iconP1.scale.y = FlxMath.lerp(baseP1, iconP1.scale.y, f);
+        iconP2.scale.x = FlxMath.lerp(baseP2, iconP2.scale.x, f);
+        iconP2.scale.y = FlxMath.lerp(baseP2, iconP2.scale.y, f);
+        iconP1.angle = FlxMath.lerp(0, iconP1.angle, f);
+        iconP2.angle = FlxMath.lerp(0, iconP2.angle, f);
     }
     else if (ClientPrefs.data.iconbopstyle == "VSlice(Old)")
     {
@@ -5526,6 +5654,21 @@ tempScore += '${lblScore}: ${songScore}';
 	{
 		var iconOffset:Int = 26;
 
+		// 切换离开带锚点的风格时，把 y 还原到锚点基准并清空记录，避免图标停在偏移位置
+		var anchoredStyle:Bool = switch (ClientPrefs.data.iconbopstyle)
+		{
+			case "Kade" | "VSlice(Old)" | "Leather" | "Codename" | "Dave" | "Psych (Legacy)" | "Forever"
+				| "GoldenApple" | "GoldenApple (Lerp)": true;
+			default: false;
+		}
+		if (!anchoredStyle && !Math.isNaN(anchorLastYP1))
+		{
+			iconP1.y = anchorBaseYP1;
+			iconP2.y = anchorBaseYP2;
+			anchorLastYP1 = Math.NaN;
+			anchorLastYP2 = Math.NaN;
+		}
+
 	// Kathy专属动效
 	//不要了，不好看
 	/*if(ClientPrefs.data.iconbopstyle == "Kathy") 		{
@@ -5557,15 +5700,14 @@ tempScore += '${lblScore}: ${songScore}';
 			/*iconP1.y = iconP1InitialY;
 			iconP2.y = iconP2InitialY;*/
 			if (ClientPrefs.data.iconbopstyle == "Kade") {
-	        		iconP1.y = iconP1InitialY + (iconP1.scale.y - 1) * 80;
-	        		iconP2.y = iconP2InitialY + (iconP2.scale.y - 1) * 80;
+					// 纵向锚点改为增量式（基准 + 偏移），保留模组 / 脚本的飞入动画对 icon.y 的控制
+					anchorIconY((iconP1.scale.y - 1) * 80, (iconP2.scale.y - 1) * 80);
 	    		}
 				else if (ClientPrefs.data.iconbopstyle == "VSlice(Old)") {
 					// 左上角缩放原点 + 原版 Funkin 复刻
 					iconP1.origin.set(0, 0);  iconP2.origin.set(0, 0);
 					iconP1.offset.set(0, 0);  iconP2.offset.set(0, 0);
-					iconP1.y = iconP1InitialY;
-					iconP2.y = iconP2InitialY;
+					anchorIconY(0, 0);
 					iconP1.x = healthBar.barCenter - iconOffset;
 					iconP2.x = healthBar.barCenter + (iconP2.frameHeight / 2) - iconOffset * 2 - iconP2.width;
 				}
@@ -5573,28 +5715,22 @@ tempScore += '${lblScore}: ${songScore}';
 				// 左上角缩放原点：与 Psych (Legacy) 同理，解除 flixel 居中缩放
 				iconP1.origin.set(0, 0);  iconP2.origin.set(0, 0);
 				iconP1.offset.set(0, 0);  iconP2.offset.set(0, 0);
-				// y 钉初始位置（无跳动偏移）
-				iconP1.y = iconP1InitialY;
-				iconP2.y = iconP2InitialY;
+				// y 钉初始位置（无跳动偏移），增量式以兼容模组飞入
+				anchorIconY(0, 0);
 				// x 只跟随血量，不随 scale 跳动（与 Psych Legacy / Dave 完全一致）
 				iconP1.x = healthBar.barCenter - iconOffset;
 				iconP2.x = healthBar.barCenter + (iconP2.frameHeight / 2) - iconOffset * 2 - iconP2.width;
 			}
 			else if (ClientPrefs.data.iconbopstyle == "Codename") {
-        		if(ClientPrefs.data.downScroll){
-				iconP1.y = iconP1InitialY - (iconP1.scale.y - 1) * 70;
-        		iconP2.y = iconP2InitialY - (iconP2.scale.y - 1) * 70;
-    			} else {
-				iconP1.y = iconP1InitialY + (iconP1.scale.y - 1) * 70;
-        		iconP2.y = iconP2InitialY + (iconP2.scale.y - 1) * 70;
+					// 纵向锚点改为增量式（基准 + 偏移），保留模组 / 脚本的飞入动画对 icon.y 的控制
+					var sign:Float = ClientPrefs.data.downScroll ? -70 : 70;
+					anchorIconY((iconP1.scale.y - 1) * sign, (iconP2.scale.y - 1) * sign);
 				}
-			}
 			else if (ClientPrefs.data.iconbopstyle == "Dave") {
 				// 左上角缩放原点：归零 origin/offset 解除 flixel 居中缩放，y 钉上边缘、x 钉外缘
 				iconP1.origin.set(0, 0);  iconP2.origin.set(0, 0);
 				iconP1.offset.set(0, 0);  iconP2.offset.set(0, 0);
-				iconP1.y = iconP1InitialY;
-				iconP2.y = iconP2InitialY;
+				anchorIconY(0, 0);
 				iconP1.x = healthBar.barCenter - iconOffset;
 				iconP2.x = healthBar.barCenter + (iconP2.frameHeight / 2) - iconOffset * 2 - iconP2.width;
 			}
@@ -5607,21 +5743,58 @@ tempScore += '${lblScore}: ${songScore}';
 					iconP1.origin.set(0, 0);  iconP2.origin.set(0, 0);
 					iconP1.offset.set(0, 0);  iconP2.offset.set(0, 0);
 
-					// 上边缘固定：y 钉在创建时的初始安装位置，放大只向下生长
-					iconP1.y = iconP1InitialY;
-					iconP2.y = iconP2InitialY;
+					// 上边缘固定：y 钉在锚点基准（初始安装位置），放大只向下生长，增量式兼容模组飞入
+					anchorIconY(0, 0);
 
 					// 外缘固定（向外扩张，避免居中缩放）：
 					// P1 锚左缘(左上角)向右长；P2 锚右缘向左长，静止时保持在血条各自原位置
 					iconP1.x = healthBar.barCenter - iconOffset;
 					iconP2.x = healthBar.barCenter + (iconP2.frameHeight / 2) - iconOffset * 2 - iconP2.width;
 					}
-				else if (ClientPrefs.data.iconbopstyle == "Forever") {
+				else if (ClientPrefs.data.iconbopstyle == "GoldenApple" || ClientPrefs.data.iconbopstyle == "GoldenApple (Lerp)") {
+				// GoldenApple 复刻：锚点 = "左边缘中点"（x 钉左顶点、y 钉垂直中线），
+				// 缩放与 ±15° 甩头都绕这个点进行。
+				// x 用静止缩放(base)算出默认布局的左缘；之前直接拿跳动中的 scale 做换算，
+				// 会让带 JSON 缩放(startSize ≠ 1)或非正方形帧的图标位置漂移，看起来"怪"。
+				var baseP1:Float = iconP1.startSize > 0 ? iconP1.startSize : 1;
+				var baseP2:Float = iconP2.startSize > 0 ? iconP2.startSize : 1;
+				var offYP1:Float = iconP1.offset.y;
+				var offYP2:Float = iconP2.offset.y;
+
+				// 先用通用公式在"静止缩放(base)"下算出静止左缘，再换算到左缘轴心坐标系；
+				// 这样非正方形帧、超大/超小图标、JSON 缩放过的图标归零 offset 后也不会跳位。
+				var restXP1:Float = healthBar.barCenter + (iconP1.frameHeight * baseP1 - iconP1.frameHeight) / 2 - iconOffset;
+				var restXP2:Float = healthBar.barCenter - (iconP2.frameHeight * baseP2) / 2 - iconOffset * 2;
+				// origin 在左缘时缩放天然绕左缘，x 不需要随 scale 变化；
+				// 只需把静止时（base 缩放）的默认布局左缘换算过来：+ (frameWidth/2)*(1 - base)
+				iconP1.x = restXP1 - iconP1.offset.x + (iconP1.frameWidth / 2) * (1 - baseP1);
+				iconP2.x = restXP2 - iconP2.offset.x + (iconP2.frameWidth / 2) * (1 - baseP2);
+
+				// 超满血溢出：通用公式里已加过一次，这里覆盖 x 后需要按同样规则补回
+				if (ClientPrefs.data.smoothHP && ClientPrefs.data.healthOverflow)
+				{
+					var overflowHP:Float = smoothHealth - healthBar.bounds.max;
+					if (overflowHP > 0.001)
+					{
+						var overshootHP:Float = FlxMath.bound(overflowHP, 0, 1) * 40;
+						iconP1.x += overshootHP;
+						iconP2.x += overshootHP * 0.5;
+					}
+				}
+
+				// 缩放 / 旋转轴心 = 左边缘中点（x = 0、y = frameHeight/2）
+				iconP1.origin.set(0, iconP1.frameHeight / 2);
+				iconP2.origin.set(0, iconP2.frameHeight / 2);
+				iconP1.offset.set(0, 0);  iconP2.offset.set(0, 0);
+
+				// 纵向：把垂直中点钉在锚点基准上（y = 基准 - 原居中偏移），增量式保留模组 / 脚本的飞入动画
+				anchorIconY(-offYP1, -offYP2);
+			}
+			else if (ClientPrefs.data.iconbopstyle == "Forever") {
 						// Forever Engine 复刻：左上角缩放原点，与 Psych (Legacy) 同理
 						iconP1.origin.set(0, 0);  iconP2.origin.set(0, 0);
 						iconP1.offset.set(0, 0);  iconP2.offset.set(0, 0);
-						iconP1.y = iconP1InitialY;
-						iconP2.y = iconP2InitialY;
+						anchorIconY(0, 0);
 						iconP1.x = healthBar.barCenter - iconOffset;
 						iconP2.x = healthBar.barCenter + (iconP2.frameHeight / 2) - iconOffset * 2 - iconP2.width;
 					}
@@ -8569,7 +8742,17 @@ tempScore += '${lblScore}: ${songScore}';
 
 		if (iconBopEnabled)
 		{
-			if (ClientPrefs.data.iconbopstyle != "NONE")
+			if (ClientPrefs.data.iconbopstyle == "GoldenApple")
+			{
+				// Golden Apple 复刻：一压一拉 + ±15° 甩头，quadOut 收回（角度已在 helper 内处理）
+				iconBopGoldenApple();
+			}
+			else if (ClientPrefs.data.iconbopstyle == "GoldenApple (Lerp)")
+			{
+				// 同样的姿态，但回弹交给 updateIconsScale 的 lerp 逐帧收拢
+				iconBopGoldenAppleLerp();
+			}
+			else if (ClientPrefs.data.iconbopstyle != "NONE")
 			{
 				switch (ClientPrefs.data.iconbopstyle)
 				{
@@ -8717,6 +8900,16 @@ tempScore += '${lblScore}: ${songScore}';
 
 	public function iconBopNow():Void
 	{
+		if (ClientPrefs.data.iconbopstyle == "GoldenApple")
+		{
+			iconBopGoldenApple();
+			return;
+		}
+		if (ClientPrefs.data.iconbopstyle == "GoldenApple (Lerp)")
+		{
+			iconBopGoldenAppleLerp();
+			return;
+		}
 		if (ClientPrefs.data.iconbopstyle != "NONE")
     	{
         	switch(ClientPrefs.data.iconbopstyle) {

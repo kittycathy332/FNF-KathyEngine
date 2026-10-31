@@ -394,7 +394,7 @@ class ExtraGameplaySettingSubState extends BaseOptionsMenu
 			Language.get("iconbop_style_desc"),
 			'iconbopstyle',
 			STRING,
-			['Psych', 'Psych (Legacy)', 'OS', 'Kathy', 'Leather', 'SB', 'Vanilla', 'VSlice(New)', 'VSlice(Old)', 'Codename', 'Dave', 'Squash', 'NovaFlare', 'Forever', 'NONE']);
+			['Psych', 'Psych (Legacy)', 'OS', 'Kathy', 'Leather', 'SB', 'Vanilla', 'VSlice(New)', 'VSlice(Old)', 'Codename', 'Dave', 'Squash', 'GoldenApple', 'GoldenApple (Lerp)', 'NovaFlare', 'Forever', 'NONE']);
 		addOption(option);
 
 		option = new Option(Language.get('iconbop_normalize'),
