@@ -10,9 +10,11 @@ import sys.io.File;
  * Freeplay 分区（歌曲分类）数据。
  *
  * 配置文件读取顺序：
- *   1. 每个模组自带的 mods/<模组文件夹>/freeplay_categories.json
- *   2. 全局 mods/freeplay_categories.json
- * 相同 id 的分区会被合并：名称以后读到的（全局）为准，匹配规则取并集。
+ *   1. 全局 mods/freeplay_categories.json（Tab 栏里排在最前面）
+ *   2. 各模组自带的 mods/<模组文件夹>/freeplay_categories.json，按模组列表（modsList.txt）顺序排在全局之后
+ * 相同 id 的分区会被合并：名称/颜色以先读到的（全局）为准，匹配规则取并集；
+ * 保存时以模组为准——模组里出现过的分区写回模组文件（全局里的同 id 条目会被移除），
+ * 这样编辑模组分类不会污染全局配置，模组目录可以直接打包分享。
  *
  * 格式：
  * {
@@ -54,20 +56,57 @@ class FreeplayCategory
 	 * 用 -1 / >= 0 判断会把它们误认成"未配置"。
 	 */
 	public var color:Int = 0;
+	/**
+	 * 该分区第一次被读到的配置文件路径（空字符串表示本次会话新建、还没落盘）。
+	 * 保存时按它"原地写回"，避免已存在的分区被挪到文件末尾打乱 Freeplay 的显示顺序。
+	 * 只是运行时状态，不会写进 JSON。
+	 */
+	public var sourceFile:String = '';
+	/**
+	 * 定义该分区的**模组**配置文件路径（全局文件定义的分区为空字符串）。
+	 *
+	 * 当一个 id 同时出现在全局和某个模组里时，内存里合并成一条、sourceFile 记的是先读到的全局；
+	 * 保存时以模组为准，写回 modSourceFile，这样编辑模组分类不会把内容搬进全局文件，
+	 * 整个模组目录可以直接打包分享。也只是运行时状态。
+	 */
+	public var modSourceFile:String = '';
 
 	public function new() {}
 
-	/** 读取所有分区配置（模组自带 + 全局），按 id 合并。 */
+	/** 读取所有分区配置（全局 + 模组自带），按 id 合并。 */
 	public static function loadAll():Array<FreeplayCategory>
 	{
 		var result:Array<FreeplayCategory> = [];
 		#if (FEATURE_FILESYSTEM && MODS_ALLOWED)
 		var byId:Map<String, FreeplayCategory> = new Map();
-		for (mod in Mods.getModDirectories())
-			readInto(Paths.mods(mod + '/freeplay_categories.json'), byId, result);
+		// 全局配置先读：这些分区在 Tab 栏里排在最前（同一 id 时名称/颜色以全局为准）
 		readInto(Paths.mods('freeplay_categories.json'), byId, result);
+		// 各模组随后：按模组列表（modsList.txt）里的顺序追加
+		for (mod in orderedModDirectories())
+			readInto(Paths.mods(mod + '/freeplay_categories.json'), byId, result);
 		#end
 		return result;
+	}
+
+	/**
+	 * 模组顺序：以 modsList.txt（模组菜单里看到的顺序）为准，
+	 * 还没写进列表的模组目录按扫描顺序补在末尾。
+	 *
+	 * loadAll / saveAll 都用它，保证 Freeplay 里「全局 → 模组1 → 模组2 …」的排列与模组列表一致。
+	 */
+	public static function orderedModDirectories():Array<String>
+	{
+		var out:Array<String> = [];
+		#if (FEATURE_FILESYSTEM && MODS_ALLOWED)
+		var scanned:Array<String> = Mods.getModDirectories();
+		for (mod in Mods.parseList().all)
+			if (mod != null && mod.length > 0 && !out.contains(mod) && scanned.contains(mod))
+				out.push(mod);
+		for (mod in scanned)
+			if (!out.contains(mod))
+				out.push(mod);
+		#end
+		return out;
 	}
 
 	/**
@@ -199,9 +238,10 @@ class FreeplayCategory
 
 	private function mergeFrom(other:FreeplayCategory):Void
 	{
-		if (other.name != null && other.name.length > 0)
+		// 名称/颜色：先读到的（全局）优先，后读到的模组配置只补空缺
+		if (name == null || name.length == 0)
 			name = other.name;
-		if (other.color != 0)
+		if (color == 0)
 			color = other.color;
 		for (f in other.folders)
 			if (!folders.contains(f))
@@ -273,8 +313,18 @@ class FreeplayCategory
 			var c:FreeplayCategory = fromJson(entry);
 			if (c == null)
 				continue;
+			c.sourceFile = path;
+			// 模组文件单独记一份：同一 id 在全局与模组里都出现时，保存要写回模组
+			var isModFile:Bool = (path != Paths.mods('freeplay_categories.json'));
+			if (isModFile)
+				c.modSourceFile = path;
 			if (byId.exists(c.id))
-				byId.get(c.id).mergeFrom(c);
+			{
+				var existing:FreeplayCategory = byId.get(c.id);
+				existing.mergeFrom(c);
+				if (isModFile && existing.modSourceFile.length == 0)
+					existing.modSourceFile = path;
+			}
 			else
 			{
 				byId.set(c.id, c);
@@ -367,14 +417,35 @@ class FreeplayCategory
 	// ==================== 写盘（分区编辑器） ====================
 
 	/**
+	 * 编辑器里对分区分组/排序所依据的"归属文件"。
+	 *
+	 * 用第一次读到它的配置文件（sourceFile）：Freeplay 的 Tab 顺序正是按这个文件里的条目顺序排的，
+	 * 所以同一组内的排序写回该文件后，Tab 顺序会跟着变。
+	 * 本次会话新建、还没落盘的分区返回空字符串（单独成组，保存时按选择的目标文件写入）。
+	 */
+	public static function groupFileOf(c:FreeplayCategory):String
+	{
+		if (c == null)
+			return '';
+		return (c.sourceFile == null) ? '' : c.sourceFile;
+	}
+
+	/**
 	 * 把分区编辑器的结果写回配置文件。
 	 * @param edited 被修改或新建的分区（未修改的不用传，保持原文件原样）
 	 * @param removedIds 被删除的分区 id
+	 * @param newCatTarget 新建分区的目标文件（编辑器保存时弹窗选择；null/空则用全局配置）
+	 * @param order 编辑器里分区的新顺序（仅排序有改动时传入）。每个文件里属于同一归属文件的分区
+	 *              会按这个顺序重排，从而让 Freeplay 的 Tab 顺序跟着变
 	 *
-	 * 做法：先把这些 id 从各模组的 freeplay_categories.json 里摘掉，
-	 * 再统一写入全局 mods/freeplay_categories.json，避免同一分区在两处合并后残留旧规则。
+	 * 原则是**原地更新、不打乱顺序**：
+	 *  - 已存在的分区写回它原本所在的那个文件；若它同时存在于某个模组配置里，以模组为准写回
+	 *    模组文件（方便整个模组打包分享），全局文件里的同 id 条目被移除；
+	 *  - 新建的分区写到 newCatTarget（默认全局 mods/freeplay_categories.json）；
+	 *  - 被删除的分区从所有配置文件里移除。
+	 * 其余文件里同 id 的条目会被清掉，避免同一个分区在两处合并出旧规则。
 	 */
-	public static function saveAll(edited:Array<FreeplayCategory>, removedIds:Array<String>):Void
+	public static function saveAll(edited:Array<FreeplayCategory>, removedIds:Array<String>, ?newCatTarget:String, ?order:Array<FreeplayCategory>):Void
 	{
 #if (FEATURE_FILESYSTEM && MODS_ALLOWED)
 		var changed:Array<String> = [];
@@ -384,82 +455,207 @@ class FreeplayCategory
 		for (c in edited)
 			if (c != null && c.id != null && c.id.length > 0 && !changed.contains(c.id))
 				changed.push(c.id);
-		if (changed.length == 0)
+		// 只调整了顺序（内容没改）时也要写盘
+		if (changed.length == 0 && order == null)
 			return;
 
-		// 先确认全局文件可解析：解析失败时直接放弃整次写入，
-		// 否则会带着"已从各模组文件删掉条目"的半截状态离开
 		var globalPath:String = Paths.mods('freeplay_categories.json');
-		var globalExists:Bool = FileSystem.exists(globalPath);
-		var parsed:Dynamic = null;
-		if (globalExists)
+		var targetForNew:String = (newCatTarget != null && newCatTarget.length > 0) ? newCatTarget : globalPath;
+		var files:Array<String> = [globalPath];
+		for (mod in orderedModDirectories())
 		{
-			try parsed = Json.parse(File.getContent(globalPath))
+			var path:String = Paths.mods(mod + '/freeplay_categories.json');
+			if (!files.contains(path))
+				files.push(path);
+		}
+		if (!files.contains(targetForNew))
+			files.push(targetForNew);
+
+		// 先把所有目标文件读进来；全局文件解析失败就整次放弃，模组文件解析失败则跳过（保持原样）
+		var parsedByFile:Map<String, Dynamic> = new Map();
+		var entriesByFile:Map<String, Array<Dynamic>> = new Map();
+		for (path in files)
+		{
+			if (!FileSystem.exists(path))
+				continue;
+			var parsed:Dynamic = null;
+			try parsed = Json.parse(File.getContent(path))
 			catch (e:Dynamic)
 			{
-				trace('[FREEPLAY] 分区配置解析失败，已取消写入: ' + globalPath + ' (' + e + ')');
-				return;
-			}
-		}
-
-		for (mod in Mods.getModDirectories())
-			removeIdsFromFile(Paths.mods(mod + '/freeplay_categories.json'), changed);
-
-		var entries:Array<Dynamic> = (parsed == null) ? [] : extractEntries(parsed);
-		var kept:Array<Dynamic> = [];
-		for (e in entries)
-		{
-			var id:String = entryId(e);
-			if (id.length > 0 && changed.contains(id))
+				if (path == globalPath)
+				{
+					trace('[FREEPLAY] 分区配置解析失败，已取消写入: ' + globalPath + ' (' + e + ')');
+					return;
+				}
+				trace('[FREEPLAY] 模组分区配置解析失败，已跳过: ' + path + ' (' + e + ')');
+				parsedByFile.set(path, null);
 				continue;
-			kept.push(e);
+			}
+			parsedByFile.set(path, parsed);
+			entriesByFile.set(path, extractEntries(parsed));
 		}
+
+		// 每个被改动的分区决定写到哪个文件：模组里的分类写回模组文件，新建的写到用户选的目标文件
+		var targetByCat:Map<String, String> = new Map();
 		for (c in edited)
-			kept.push(toJson(c));
-
-		if (kept.length == 0 && !FileSystem.exists(globalPath))
-			return;
-
-		try
 		{
-			var modsFolder:String = Paths.mods();
-			if (!FileSystem.exists(modsFolder))
-				FileSystem.createDirectory(modsFolder);
-			File.saveContent(globalPath, Json.stringify(buildRoot(parsed, kept), '\t'));
+			var target:String;
+			if (c.sourceFile == null || c.sourceFile.length == 0)
+				target = targetForNew; // 本次新建：写到保存时选择的位置
+			else if (c.modSourceFile != null && c.modSourceFile.length > 0 && FileSystem.exists(c.modSourceFile))
+				target = c.modSourceFile; // 全局与模组都有：以模组为准
+			else if (FileSystem.exists(c.sourceFile))
+				target = c.sourceFile;
+			else
+				target = globalPath; // 原文件已被删掉，退回全局
+			targetByCat.set(c.id, target);
 		}
-		catch (e:Dynamic)
-			trace('[FREEPLAY] 分区配置写入失败: ' + globalPath + ' (' + e + ')');
+
+		for (path in files)
+		{
+			var parsed:Dynamic = parsedByFile.get(path);
+			var oldEntries:Array<Dynamic> = (entriesByFile.exists(path) && entriesByFile.get(path) != null) ? entriesByFile.get(path) : [];
+
+			var newEntries:Array<Dynamic> = [];
+			var fileChanged:Bool = false;
+
+			// 原条目：命中的 id 原位置替换（或删除），其余保持原顺序
+			for (e in oldEntries)
+			{
+				var id:String = entryId(e);
+				if (id.length > 0 && changed.contains(id))
+				{
+					fileChanged = true;
+					var editedCat:FreeplayCategory = findEdited(edited, id);
+					if (editedCat != null && targetByCat.get(id) == path)
+						newEntries.push(toJson(editedCat));
+					continue;
+				}
+				newEntries.push(e);
+			}
+
+			// 目标文件里原本没有这个 id（新建分区、或原本在别的文件）→ 追加到末尾
+			for (c in edited)
+			{
+				if (targetByCat.get(c.id) != path)
+					continue;
+				var present:Bool = false;
+				for (e in oldEntries)
+				{
+					if (entryId(e) == c.id)
+					{
+						present = true;
+						break;
+					}
+				}
+				if (present)
+					continue;
+				newEntries.push(toJson(c));
+				fileChanged = true;
+			}
+
+			// 按编辑器里的新顺序重排本文件里"归属本文件"的条目（只动了顺序时也要写盘）
+			if (order != null)
+			{
+				var orderedIds:Array<String> = [];
+				for (c in order)
+				{
+					if (c == null || c.id == null || c.id.length == 0 || orderedIds.contains(c.id))
+						continue;
+					if (groupFileOf(c) == path)
+						orderedIds.push(c.id);
+				}
+				if (orderedIds.length > 1)
+				{
+					var reordered:Null<Array<Dynamic>> = applyOrder(newEntries, orderedIds);
+					if (reordered != null)
+					{
+						newEntries = reordered;
+						fileChanged = true;
+					}
+				}
+			}
+
+			if (!fileChanged)
+				continue;
+
+			try
+			{
+				var folder:String = Paths.mods();
+				if (!FileSystem.exists(folder))
+					FileSystem.createDirectory(folder);
+				// 新建分区选到某个模组时，确保该模组目录存在（正常情况下面已经存在）
+				if (path != globalPath)
+				{
+					var slash:Int = path.lastIndexOf('/');
+					if (slash > 0)
+					{
+						var dir:String = path.substr(0, slash);
+						if (!FileSystem.exists(dir))
+							FileSystem.createDirectory(dir);
+					}
+				}
+				File.saveContent(path, Json.stringify(buildRoot(parsed, newEntries), '\t'));
+			}
+			catch (e:Dynamic)
+				trace('[FREEPLAY] 分区配置写入失败: ' + path + ' (' + e + ')');
+		}
 #end
 	}
 
 #if (FEATURE_FILESYSTEM && MODS_ALLOWED)
-	/** 从单个配置文件中移除指定 id 的分区；文件不存在或解析失败时静默跳过。 */
-	private static function removeIdsFromFile(path:String, ids:Array<String>):Void
+	private static function findEdited(edited:Array<FreeplayCategory>, id:String):FreeplayCategory
 	{
-		if (!FileSystem.exists(path))
-			return;
+		for (c in edited)
+			if (c != null && c.id == id)
+				return c;
+		return null;
+	}
 
-		var parsed:Dynamic = null;
-		try parsed = Json.parse(File.getContent(path))
-		catch (e:Dynamic) return;
+	private static function findEntryById(entries:Array<Dynamic>, id:String):Dynamic
+	{
+		for (e in entries)
+			if (entryId(e) == id)
+				return e;
+		return null;
+	}
 
-		var kept:Array<Dynamic> = [];
+	/**
+	 * 按编辑器里的顺序重排文件条目。
+	 * 只重排 orderedIds 里出现过的条目，其它（无关的）条目留在原来的位置上。
+	 * 返回 null 表示顺序本来就一致，不需要写盘。
+	 */
+	private static function applyOrder(entries:Array<Dynamic>, orderedIds:Array<String>):Null<Array<Dynamic>>
+	{
+		var present:Array<String> = [];
+		for (id in orderedIds)
+			if (!present.contains(id) && findEntryById(entries, id) != null)
+				present.push(id);
+		if (present.length < 2)
+			return null;
+
+		var inOrder:Array<Dynamic> = [];
+		for (id in present)
+			inOrder.push(findEntryById(entries, id));
+
+		var out:Array<Dynamic> = [];
+		var cursor:Int = 0;
 		var changed:Bool = false;
-		for (e in extractEntries(parsed))
+		for (e in entries)
 		{
 			var id:String = entryId(e);
-			if (id.length > 0 && ids.contains(id))
+			if (present.contains(id))
 			{
-				changed = true;
-				continue;
+				var next:Dynamic = inOrder[cursor];
+				cursor++;
+				if (entryId(next) != id)
+					changed = true;
+				out.push(next);
 			}
-			kept.push(e);
+			else
+				out.push(e);
 		}
-		if (!changed)
-			return;
-
-		try File.saveContent(path, Json.stringify(buildRoot(parsed, kept), '\t'))
-		catch (e:Dynamic) trace('[FREEPLAY] 分区配置写入失败: ' + path + ' (' + e + ')');
+		return changed ? out : null;
 	}
 
 	private static function extractEntries(parsed:Dynamic):Array<Dynamic>

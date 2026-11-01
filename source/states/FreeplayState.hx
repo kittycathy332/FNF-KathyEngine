@@ -1333,6 +1333,14 @@ class FreeplayState extends MusicBeatState
 		if (haxeSearchField != null)
 			haxeSearchField.focus = false;
 		setHaxeTopBarVisible(false);
+		// 编辑器是整屏覆盖层：先隐藏虚拟按键，避免底部触控按钮盖住列表抢走触摸。
+		// 这里只隐藏不销毁——openCategoryEditor 可能在 update() 中途被 TAB 键触发，
+		// 销毁会让同一帧后续代码访问 touchPad 时崩溃（Null Object Reference）。
+		if (touchPad != null)
+		{
+			touchPad.visible = false;
+			touchPad.active = false;
+		}
 
 		#if desktop
 		FlxG.mouse.visible = true;
@@ -1353,6 +1361,12 @@ class FreeplayState extends MusicBeatState
 			return;
 		categoryEditor.destroy();
 		categoryEditor = null;
+		// 恢复被隐藏的虚拟按键
+		if (touchPad != null)
+		{
+			touchPad.visible = true;
+			touchPad.active = true;
+		}
 		if (!player.playingMusic)
 			setHaxeTopBarVisible(true);
 	}
@@ -1478,6 +1492,13 @@ class FreeplayState extends MusicBeatState
 		{
 			if (controls.BACK)
 			{
+				// 保存目标弹窗 / 系统软键盘展开时，BACK 只关最上层，不关整个编辑器
+				if (categoryEditor.cancelTargetPicker() || categoryEditor.cancelSoftKeyboard())
+				{
+					FlxG.sound.play(Paths.sound('cancelMenu'));
+					super.update(elapsed);
+					return;
+				}
 				closeCategoryEditor();
 				FlxG.sound.play(Paths.sound('cancelMenu'));
 				super.update(elapsed);
