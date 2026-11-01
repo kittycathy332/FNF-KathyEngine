@@ -279,7 +279,12 @@ class TypedTouchButton<T:FlxSprite> extends FlxSprite implements IFlxInput
 						_preExistingInputs.push(touch);
 				#if mac
 				if (FlxG.mouse.pressed)
-					_preExistingInputs.push(FlxG.mouse);
+				{
+					// FlxMouse 实现了 IFlxInputManager 而不是 IFlxInput，这里要记录实际参与判定的左键输入对象
+					var mouseButton = FlxMouseButton.getByID(FlxMouseButtonID.LEFT);
+					if (mouseButton != null)
+						_preExistingInputs.push(mouseButton);
+				}
 				#end
 			}
 		}
