@@ -22,12 +22,12 @@ import haxe.Json;
 import haxe.ui.Toolkit;
 import haxe.ui.core.Screen;
 import haxe.ui.components.Label;
-import haxe.ui.components.TabBar;
 import haxe.ui.components.TextField;
 import haxe.ui.containers.HBox;
 import haxe.ui.events.UIEvent;
 import backend.ui.PsychUIRadioGroup;
 import backend.ui.PsychUIButton;
+import backend.ui.FreeplayTabBar;
 import states.editors.content.Prompt;
 import flixel.ui.FlxButton;
 import flixel.graphics.frames.FlxTileFrames;
@@ -270,28 +270,26 @@ class FreeplayState extends MusicBeatState
 	private var categoryPrefsDirty:Bool = false; // 分区变动后延迟到离开 Freeplay 时再写存档
 	private var listFade:Float = 1; // 切区淡入（0→1），乘到列表与图标的透明度上
 
-	// 顶部 HaxeUI 分区 Tab 栏 + 搜索框（通过 Screen.instance 挂载，渲染在最上层）
-	// 第一行：全部/未分类（固定）+ 右侧搜索框；第二行：自定义分区
+	// 顶部：第一行固定分区（全部/未分类）+ 曲目筛选框，第二行自定义分区；高分面板占右上角
 	private static final TOP_BAR_X:Int = 12;
-	private static final TOP_BAR_Y:Int = 4;
-	private static final TOP_BAR_H:Int = 32;
+	private static final TAB_ROW_Y:Int = 6;
+	private static final TAB_ROW_H:Int = 34;
 	private static final TOP_ROW_GAP:Int = 6;
-	private static final SECOND_ROW_Y:Int = TOP_BAR_Y + TOP_BAR_H + TOP_ROW_GAP;
-	private static final SEARCH_AREA_W:Int = 440;
+	private static final CUSTOM_ROW_Y:Int = TAB_ROW_Y + TAB_ROW_H + TOP_ROW_GAP;
+	private static final SEARCH_ROW_Y:Int = TAB_ROW_Y + 3; // 与第一行卡片垂直居中
+	private static final SEARCH_BOX_H:Int = 28;
+	private static final SEARCH_GAP:Int = 10;
+	private static final PANEL_GAP:Int = 8;
 	private static final TOP_FONT_SIZE:Int = 16; // 顶部 Tab 栏与搜索框字号
-	private var haxeTabBar:TabBar = null; // 第一行：全部 / 未分类
-	private var haxeCustomTabBar:TabBar = null; // 第二行：自定义分区
+	private var fixedTabBar:FreeplayTabBar = null; // 第一行：全部 / 未分类
+	private var customTabBar:FreeplayTabBar = null; // 第二行：自定义分区
 	private var haxeSearchBox:HBox = null;
 	private var haxeSearchField:TextField = null;
-	private var haxeArrowsStyled:Bool = false;
+	private var topBarWidth:Float = 0; // 上次布局宽度，窗口尺寸变化后重新摆放
+	private var highscoreLeft:Float = -1000; // 高分面板左边界，自定义分区行按它避让
+	private var lastLayoutPanelLeft:Float = -1000;
 
-	// 移动端 Tab 栏横向拖动（分区过多时可滑动查看）
-	private var tabDragBar:TabBar = null;
-	private var tabDragActive:Bool = false;
-	private var tabDragMoved:Bool = false;
-	private var tabDragStartX:Float = 0;
-	private var tabDragStartLeft:Float = 0;
-	private var tabClickSuppressUntil:Int = 0;
+	// 移动端 Tab 栏横向拖动由 FreeplayTabBar 内部实现
 
 	var selector:FlxText;
 
@@ -528,13 +526,14 @@ class FreeplayState extends MusicBeatState
 		final control:String = (controls.mobileC) ? "C" : "CTRL";
 		final reset:String = (controls.mobileC) ? "Y" : "RESET";
 
-		var leText:String = LanguageBasic.getPhrase("freeplay_tip",
-			"Press {1} to listen to the Song / Press {2} to open the Gameplay Changers Menu / Press {3} to Reset your Score and Accuracy.",
+		var leText:String = Language.getWithFallback("freeplay_tip",
+			"Press {0} to listen to the Song / Press {1} to open the Gameplay Changers Menu / Press {2} to Reset your Score and Accuracy.",
 			[space, control, reset]);
 		bottomString = leText;
 		var size:Int = 16;
 		bottomText = new FlxText(bottomBG.x, bottomBG.y + 4, FlxG.width, leText, size);
-		bottomText.setFormat(Paths.font("vcr.ttf"), size, FlxColor.WHITE, CENTER);
+		// 用按语言映射的像素字体，中文提示才不会显示成空白方块
+		bottomText.setFormat(Paths.font(Language.get('uitab_font')), size, FlxColor.WHITE, CENTER);
 		bottomText.scrollFactor.set();
 
 		// 分帧加载提示：位于偏右下角（底部提示条上方），仅分帧构建进行中可见
@@ -587,19 +586,19 @@ class FreeplayState extends MusicBeatState
 		chartInfoBG.alpha = 0.3;
 		chartInfoBG.visible = false;
 
-		chartInfoTitle = new FlxText(infoPanelX + 8, infoPanelY + 6, infoPanelW - 16, 'CHART INFO', 18);
-		chartInfoTitle.setFormat(Paths.font("vcr.ttf"), 18, FlxColor.YELLOW, LEFT);
+		chartInfoTitle = new FlxText(infoPanelX + 8, infoPanelY + 6, infoPanelW - 16, Language.get('chartinfo_title'), 18);
+		chartInfoTitle.setFormat(Paths.font(Language.get('uitab_font')), 18, FlxColor.YELLOW, LEFT);
 		chartInfoTitle.visible = false;
 
 		chartInfoText = new FlxText(infoPanelX + 8, infoPanelY + 28, infoPanelW - 16, '', 14);
-		chartInfoText.setFormat(Paths.font("vcr.ttf"), 14, FlxColor.WHITE, LEFT);
+		chartInfoText.setFormat(Paths.font(Language.get('uitab_font')), 14, FlxColor.WHITE, LEFT);
 		chartInfoText.visible = false;
 
 		add(chartInfoBG);
 		add(chartInfoTitle);
 		add(chartInfoText);
 
-		// 顶部 HaxeUI 分区 Tab 栏 + 搜索框（两者都在这里创建）
+		// 顶部分区 Tab 栏 + 搜索框（两者都在这里创建）
 		buildHaxeUITopBar();
 
 		changeSelection();
@@ -853,6 +852,28 @@ class FreeplayState extends MusicBeatState
 		for (cat in configured)
 		{
 			var list:Array<SongMetadata> = [];
+
+			// 先按 JSON 里 songs 的书写顺序放入：逐条按 [曲名, 文件夹] 精确匹配，
+			// 这样分区内的曲目顺序与配置一致，而不是沿用全局列表顺序。
+			for (s in cat.songs)
+			{
+				var songPath:String = s[0];
+				var folderFilter:String = (s[1] == null) ? '' : s[1];
+				for (meta in songsFull)
+				{
+					if (list.indexOf(meta) != -1)
+						continue;
+					if (Paths.formatToSongPath(meta.songName) != songPath)
+						continue;
+					if (folderFilter.length > 0
+						&& FreeplayCategory.normalizeFolderName(folderFilter) != FreeplayCategory.normalizeFolderName(meta.folder))
+						continue;
+					list.push(meta);
+					break; // 一条配置只取第一个匹配（同名曲目可能存在于多个模组）
+				}
+			}
+
+			// 再按 folders / weeks 补齐 songs 里没写到的曲目（没有这些规则时不会有多余项）
 			for (meta in songsFull)
 			{
 				if (list.indexOf(meta) != -1)
@@ -860,6 +881,7 @@ class FreeplayState extends MusicBeatState
 				if (cat.matches(meta, getWeekFileName(meta), getWeekDisplayName(meta)))
 					list.push(meta);
 			}
+
 			if (list.length == 0)
 				continue; // 空分区不显示，避免点了却看不到歌
 			customCats.push(cat);
@@ -966,7 +988,33 @@ class FreeplayState extends MusicBeatState
 			FlxG.sound.play(Paths.sound('scrollMenu'), 0.4);
 
 		applyFilter(getSearchText());
-		syncHaxeTabSelection();
+		syncTabSelection();
+	}
+
+	/** 固定分区数量：索引 0 恒为“全部”，若有“未分类”则再占一位。 */
+	private function fixedTabCount():Int
+	{
+		return (categoryList.length >= 2 && categoryList[1].id == CATEGORY_UNCAT_ID) ? 2 : 1;
+	}
+
+	/** 把选中态同步到两行 Tab（两行互斥，当前分区不在某行时该行取消选中）。 */
+	private function syncTabSelection():Void
+	{
+		var fixedCount:Int = fixedTabCount();
+		if (fixedTabBar != null)
+		{
+			if (curCategory < fixedCount)
+				fixedTabBar.setSelected(curCategory);
+			else
+				fixedTabBar.clearSelection();
+		}
+		if (customTabBar != null)
+		{
+			if (curCategory >= fixedCount)
+				customTabBar.setSelected(curCategory - fixedCount);
+			else
+				customTabBar.clearSelection();
+		}
 	}
 
 	// ==================== HaxeUI 焦点清理（防退出崩溃 / 防自动聚焦） ====================
@@ -1009,7 +1057,7 @@ class FreeplayState extends MusicBeatState
 		}
 	}
 
-	/** 创建顶部 HaxeUI 分区 Tab 栏与搜索框（只在进入 Freeplay 时调用一次）。 */
+	/** 创建顶部分区 Tab 栏（Flixel 自绘）与搜索框（HaxeUI），只在进入 Freeplay 时调用一次。 */
 	private function buildHaxeUITopBar():Void
 	{
 		// 首次使用时初始化 HaxeUI Toolkit（幂等）；禁用 DPI 自动缩放，保证坐标与 Flixel 屏幕坐标一致
@@ -1024,14 +1072,58 @@ class FreeplayState extends MusicBeatState
 		applyHaxeThemeOverrides();
 
 		var font:String = Paths.font('unifont-18.0.01.otf');
-		var searchX:Float = FlxG.width - SEARCH_AREA_W - TOP_BAR_X;
+		// 曲目数角标用 fusion-pixel 像素字体（uitab_font 按语言映射到 zh_hans / zh_hant / latin）
+		var badgeFont:String = Paths.font(Language.get('uitab_font'));
 
-		// ---- 搜索框（右上角，与固定分区同一行）----
+		var fixedCount:Int = fixedTabCount();
+
+		// ---- 第一行：固定分区（全部 / 未分类）----
+		fixedTabBar = new FreeplayTabBar(font, badgeFont);
+		fixedTabBar.rowY = TAB_ROW_Y;
+		var fixedTitles:Array<String> = [];
+		var fixedCounts:Array<Int> = [];
+		var fixedColors:Array<Int> = [];
+		for (i in 0...fixedCount)
+		{
+			fixedTitles.push(categoryList[i].getDisplayName());
+			fixedCounts.push(categorySongs[i].length);
+			fixedColors.push(categoryList[i].color);
+		}
+		fixedTabBar.build(fixedTitles, fixedCounts, curCategory, fixedColors);
+		fixedTabBar.onSelect = function(idx:Int)
+		{
+			if (haxeSearchField != null)
+				haxeSearchField.focus = false;
+			switchCategory(0, idx);
+		};
+		fixedTabBar.addTo(this);
+		fixedTabBar.setVisible(true);
+
+		// ---- 第二行：自定义分区（索引从 fixedCount 开始）----
+		customTabBar = new FreeplayTabBar(font, badgeFont);
+		customTabBar.rowY = CUSTOM_ROW_Y;
+		var customTitles:Array<String> = [];
+		var customCounts:Array<Int> = [];
+		var customColors:Array<Int> = [];
+		for (i in fixedCount...categoryList.length)
+		{
+			customTitles.push(categoryList[i].getDisplayName());
+			customCounts.push(categorySongs[i].length);
+			customColors.push(categoryList[i].color);
+		}
+		customTabBar.build(customTitles, customCounts, curCategory - fixedCount, customColors);
+		customTabBar.onSelect = function(idx:Int)
+		{
+			if (haxeSearchField != null)
+				haxeSearchField.focus = false;
+			switchCategory(0, fixedCount + idx);
+		};
+		customTabBar.addTo(this);
+		customTabBar.setVisible(customTitles.length > 0);
+
+		// ---- 曲目筛选框（第一行，紧跟未分类右侧；位置在 layoutTopBar 里算）----
 		haxeSearchBox = new HBox();
-		haxeSearchBox.x = searchX;
-		haxeSearchBox.y = TOP_BAR_Y;
-		haxeSearchBox.width = SEARCH_AREA_W;
-		haxeSearchBox.height = TOP_BAR_H;
+		haxeSearchBox.height = SEARCH_BOX_H;
 		haxeSearchBox.styleString = 'padding: 0; horizontal-spacing: 8px; vertical-align: center;';
 
 		var searchLabel:Label = new Label();
@@ -1043,7 +1135,7 @@ class FreeplayState extends MusicBeatState
 		haxeSearchField.text = '';
 		haxeSearchField.maxChars = 32;
 		haxeSearchField.percentWidth = 100;
-		haxeSearchField.height = 26;
+		haxeSearchField.height = 24;
 		// 背景/边框由 applyHaxeThemeOverrides 的 .textfield 规则统一处理，这里只设字体与内边距
 		haxeSearchField.styleString = 'font-name: $font; font-size: ${TOP_FONT_SIZE}px; padding: 3px 6px;';
 		haxeSearchField.registerEvent(UIEvent.CHANGE, function(_) {
@@ -1061,32 +1153,45 @@ class FreeplayState extends MusicBeatState
 		haxeSearchBox.addComponent(haxeSearchField);
 		Screen.instance.addComponent(haxeSearchBox);
 
-		// ---- 第一行：固定分区 Tab（全部/未分类）----
-		haxeTabBar = new TabBar();
-		haxeTabBar.x = TOP_BAR_X;
-		haxeTabBar.y = TOP_BAR_Y;
-		haxeTabBar.width = Math.max(160, searchX - TOP_BAR_X - 12);
-		haxeTabBar.height = TOP_BAR_H;
-		haxeTabBar.styleString = 'font-name: $font; font-size: ${TOP_FONT_SIZE}px;';
-		haxeTabBar.registerEvent(UIEvent.CHANGE, onHaxeTabChange);
-		Screen.instance.addComponent(haxeTabBar);
-
-		// ---- 第二行：自定义分区 Tab（宽度与第一行对齐，右侧留给高分面板）----
-		haxeCustomTabBar = new TabBar();
-		haxeCustomTabBar.x = TOP_BAR_X;
-		haxeCustomTabBar.y = SECOND_ROW_Y;
-		haxeCustomTabBar.width = Math.max(160, searchX - TOP_BAR_X - 12);
-		haxeCustomTabBar.height = TOP_BAR_H;
-		haxeCustomTabBar.styleString = 'font-name: $font; font-size: ${TOP_FONT_SIZE}px;';
-		haxeCustomTabBar.hidden = true;
-		haxeCustomTabBar.registerEvent(UIEvent.CHANGE, onHaxeCustomTabChange);
-		Screen.instance.addComponent(haxeCustomTabBar);
-
-		rebuildHaxeTabs();
+		syncTabSelection();
+		// 强制做一次布局（此时高分文本还没生成，先按满宽摆放，changeDiff 后会被精确重排）
+		layoutTopBar();
 	}
 
 	/**
-	 * 覆盖 HaxeUI 默认主题里 TabBar/TextField 的浅色网页风样式
+	 * 顶部三块的摆放：第一行固定分区 + 曲目筛选框，第二行自定义分区。
+	 * 两行都避让右上角的高分面板，第二行的宽度完全跟着面板左边界走。
+	 */
+	private function layoutTopBar():Void
+	{
+		if (fixedTabBar == null || haxeSearchBox == null)
+			return;
+
+		var panelLeft:Float = (highscoreLeft > 0) ? highscoreLeft : FlxG.width;
+		if (topBarWidth == FlxG.width && Math.abs(panelLeft - lastLayoutPanelLeft) < 1)
+			return;
+		topBarWidth = FlxG.width;
+		lastLayoutPanelLeft = panelLeft;
+
+		// 第一行固定分区按内容自然宽度摆放，筛选框紧接其右侧
+		var fixedW:Float = Math.min(fixedTabBar.getContentWidth(), Math.max(180, FlxG.width * 0.45));
+		fixedTabBar.layout(TOP_BAR_X, fixedW);
+
+		var searchX:Float = TOP_BAR_X + fixedW + SEARCH_GAP;
+		var searchW:Float = panelLeft - PANEL_GAP - searchX;
+		if (searchW < 100)
+			searchW = 100;
+		haxeSearchBox.x = searchX;
+		haxeSearchBox.y = SEARCH_ROW_Y;
+		haxeSearchBox.width = searchW;
+		haxeSearchBox.height = SEARCH_BOX_H;
+
+		// 第二行：显示范围跟着高分面板的长度收缩
+		customTabBar.layout(TOP_BAR_X, Math.max(160, panelLeft - PANEL_GAP - TOP_BAR_X));
+	}
+
+	/**
+	 * 覆盖 HaxeUI 默认主题里 TextField 的浅色网页风样式
 	 * （圆角、渐变、hover 变浅、按下内阴影、底部边框线）。
 	 * 通过 Toolkit.styleSheet 注入全局规则：主题规则先加载，注入规则后 merge，同选择器属性覆盖生效。
 	 * parse 内部按内容 hash 去重，多次进入 Freeplay 不会重复注入。
@@ -1095,82 +1200,6 @@ class FreeplayState extends MusicBeatState
 	private function applyHaxeThemeOverrides():Void
 	{
 		Toolkit.styleSheet.parse('
-			.tabbar {
-				spacing: 0;
-				padding: 0;
-				background-color: none;
-				border-size: 0px;
-			}
-			.tabbar > .tabbar-contents {
-				border-size: 0px;
-				background-color: none;
-			}
-			.tabbar .tabbar-filler-left, .tabbar .tabbar-filler-right {
-				background-color: none;
-				width: 0px;
-			}
-			.tabbar .tabbar-button {
-				border-size: 0px;
-				border-radius: 0px;
-				filter: none;
-				background-color: #000000;
-				background-color-end: #000000;
-				background-opacity: 0.4;
-				color: #FFFFFF;
-				padding: 5px 12px;
-			}
-			.tabbar .tabbar-button:hover {
-				border-size: 0px;
-				filter: none;
-				background-color: #444444;
-				background-color-end: #444444;
-				background-opacity: 0.7;
-				color: #FFFFFF;
-			}
-			.tabbar .tabbar-button:down, .tabbar .tabbar-button:active {
-				border-size: 0px;
-				filter: none;
-				background-color: #444444;
-				background-color-end: #444444;
-				background-opacity: 0.7;
-				color: #FFFFFF;
-			}
-			.tabbar .tabbar-button-selected {
-				border-size: 0px;
-				border-radius: 0px;
-				filter: none;
-				background-color: #FFD800;
-				background-color-end: #FFD800;
-				background-opacity: 1;
-				color: #000000;
-			}
-			.tabbar .tabbar-button-selected:hover, .tabbar .tabbar-button-selected:down, .tabbar .tabbar-button-selected:active {
-				border-size: 0px;
-				filter: none;
-				background-color: #FFD800;
-				background-color-end: #FFD800;
-				background-opacity: 1;
-				color: #000000;
-			}
-			.tabbar .tabbar-scroll-left, .tabbar .tabbar-scroll-right {
-				border-size: 0px;
-				border-radius: 0px;
-				filter: none;
-				background-color: #000000;
-				background-color-end: #000000;
-				background-opacity: 0.4;
-				color: #FFFFFF;
-				icon: "";
-			}
-			.tabbar .tabbar-scroll-left:hover, .tabbar .tabbar-scroll-left:down, .tabbar .tabbar-scroll-left:active,
-			.tabbar .tabbar-scroll-right:hover, .tabbar .tabbar-scroll-right:down, .tabbar .tabbar-scroll-right:active {
-				border-size: 0px;
-				filter: none;
-				background-color: #444444;
-				background-color-end: #444444;
-				background-opacity: 0.7;
-				color: #FFFFFF;
-			}
 			.textfield {
 				border-radius: 0px;
 				filter: none;
@@ -1189,147 +1218,6 @@ class FreeplayState extends MusicBeatState
 		');
 	}
 
-	/** 前几个分区属于固定行（全部/未分类）。 */
-	private function fixedTabCount():Int
-	{
-		return (categoryList.length >= 2 && categoryList[1].id == CATEGORY_UNCAT_ID) ? 2 : 1;
-	}
-
-	/** 按 categoryList 生成两行 Tab：固定行（全部/未分类）与自定义行（没有自定义分区时隐藏）。 */
-	private function rebuildHaxeTabs():Void
-	{
-		if (haxeTabBar == null)
-			return;
-
-		var showTabs:Bool = categoryList.length > 1;
-		haxeTabBar.hidden = !showTabs;
-		haxeCustomTabBar.hidden = !showTabs;
-
-		if (showTabs)
-		{
-			var fixedCount:Int = fixedTabCount();
-			for (i in 0...fixedCount)
-			{
-				var tab:Label = new Label();
-				tab.text = categoryList[i].getDisplayName() + ' (' + categorySongs[i].length + ')';
-				haxeTabBar.addComponent(tab);
-			}
-			for (i in fixedCount...categoryList.length)
-			{
-				var tab:Label = new Label();
-				tab.text = categoryList[i].getDisplayName() + ' (' + categorySongs[i].length + ')';
-				haxeCustomTabBar.addComponent(tab);
-			}
-			haxeCustomTabBar.hidden = fixedCount >= categoryList.length;
-
-			// Tab 按钮由 TabBar 内部创建：统一禁用键盘焦点，并关闭文字抗锯齿（避免非整数缩放下发糊）
-			for (button in haxeTabBar.tabButtons)
-			{
-				button.allowFocus = false;
-				disableLabelAntialiasing(button);
-			}
-			for (button in haxeCustomTabBar.tabButtons)
-			{
-				button.allowFocus = false;
-				disableLabelAntialiasing(button);
-			}
-		}
-
-		syncHaxeTabSelection();
-	}
-
-	/** 关闭组件文字的抗锯齿：非整数缩放下纹理平滑会让像素字看起来发糊。 */
-	private function disableLabelAntialiasing(component:haxe.ui.core.Component):Void
-	{
-		if (component == null)
-			return;
-		var display = component.getTextDisplay();
-		if (display != null && display.tf != null)
-			display.tf.antialiasing = false;
-	}
-
-	/** 第一行（全部/未分类）Tab 选中变化（点击/触摸由 TabBar 内部完成，这里只同步歌曲列表）。 */
-	private function onHaxeTabChange(_):Void
-	{
-		if (haxeTabBar == null)
-			return;
-		// 拖动松手会误触同一个 Tab，这次切换直接回滚选中态
-		if (FlxG.game.ticks < tabClickSuppressUntil)
-		{
-			syncHaxeTabSelection();
-			return;
-		}
-		// 试听中不允许切区：把选中态同步回当前分区
-		if (player != null && player.playingMusic)
-		{
-			syncHaxeTabSelection();
-			return;
-		}
-		if (haxeTabBar.selectedIndex >= 0 && haxeTabBar.selectedIndex != curCategory)
-		{
-			// 点分区 Tab 时取消搜索框焦点，切区后可直接用键盘/滚轮操作
-			if (haxeSearchField != null)
-				haxeSearchField.focus = false;
-			switchCategory(0, haxeTabBar.selectedIndex);
-		}
-	}
-
-	/** 第二行（自定义分区）Tab 选中变化。 */
-	private function onHaxeCustomTabChange(_):Void
-	{
-		if (haxeCustomTabBar == null)
-			return;
-		// 拖动松手会误触同一个 Tab，这次切换直接回滚选中态
-		if (FlxG.game.ticks < tabClickSuppressUntil)
-		{
-			syncHaxeTabSelection();
-			return;
-		}
-		if (player != null && player.playingMusic)
-		{
-			syncHaxeTabSelection();
-			return;
-		}
-		var idx:Int = haxeCustomTabBar.selectedIndex;
-		if (idx >= 0 && fixedTabCount() + idx != curCategory)
-		{
-			if (haxeSearchField != null)
-				haxeSearchField.focus = false;
-			switchCategory(0, fixedTabCount() + idx);
-		}
-	}
-
-	/** 把两行 Tab 的选中态同步到 curCategory（两行互斥：同时只有一行有选中 Tab）。 */
-	private function syncHaxeTabSelection():Void
-	{
-		var fixedCount:Int = fixedTabCount();
-		if (haxeTabBar != null)
-		{
-			if (curCategory < fixedCount)
-				haxeTabBar.selectedIndex = curCategory;
-			else
-				deselectTabBar(haxeTabBar);
-		}
-		if (haxeCustomTabBar != null)
-		{
-			if (curCategory >= fixedCount)
-				haxeCustomTabBar.selectedIndex = curCategory - fixedCount;
-			else
-				deselectTabBar(haxeCustomTabBar);
-		}
-	}
-
-	/** 取消一个 TabBar 的选中态（selectedIndex=-1 不清样式，需要手动移除 selected class）。 */
-	private function deselectTabBar(bar:TabBar):Void
-	{
-		bar.selectedIndex = -1;
-		for (button in bar.tabButtons)
-		{
-			button.removeClass('tabbar-button-selected');
-			button.invalidateComponentStyle(false, true);
-		}
-	}
-
 	/** 搜索框当前内容。 */
 	private function getSearchText():String
 	{
@@ -1345,131 +1233,36 @@ class FreeplayState extends MusicBeatState
 		return haxeSearchField != null && haxeSearchField.focus;
 	}
 
-	/** 显示/隐藏顶部两行 Tab 栏与搜索框（试听预览时整条隐藏）。 */
+	/** 显示/隐藏顶部两行 Tab 栏与筛选框（试听预览时整条隐藏）。 */
 	private function setHaxeTopBarVisible(visible:Bool):Void
 	{
 		if (haxeSearchBox != null)
 			haxeSearchBox.hidden = !visible;
-		if (haxeTabBar != null)
-			haxeTabBar.hidden = !visible || categoryList.length <= 1;
-		if (haxeCustomTabBar != null)
-			haxeCustomTabBar.hidden = !visible || categoryList.length <= fixedTabCount();
+		if (fixedTabBar != null)
+			fixedTabBar.setVisible(visible);
+		if (customTabBar != null)
+			customTabBar.setVisible(visible && categoryList.length > fixedTabCount());
 		if (!visible && haxeSearchField != null)
 			haxeSearchField.focus = false;
 	}
 
-	/** 每帧维护：窗口尺寸变化后重定位，并给 TabBar 内置的溢出滚动按钮补上文字与字体。 */
+	/** 每帧维护：窗口尺寸变化后重新摆放（高分面板宽度变化由 positionHighscore 触发）。 */
 	private function updateHaxeTopBar():Void
 	{
 		if (haxeSearchBox == null)
 			return;
-
-		var searchX:Float = FlxG.width - SEARCH_AREA_W - TOP_BAR_X;
-		if (haxeSearchBox.x != searchX)
-		{
-			haxeSearchBox.x = searchX;
-			if (haxeTabBar != null)
-				haxeTabBar.width = Math.max(160, searchX - TOP_BAR_X - 12);
-		}
-		var customW:Float = Math.max(160, searchX - TOP_BAR_X - 12);
-		if (haxeCustomTabBar != null && !haxeCustomTabBar.hidden && haxeCustomTabBar.width != customW)
-			haxeCustomTabBar.width = customW;
-
-		if (!haxeArrowsStyled)
-			haxeArrowsStyled = styleTabBarArrows(haxeTabBar) && styleTabBarArrows(haxeCustomTabBar);
+		if (topBarWidth == FlxG.width)
+			return;
+		layoutTopBar();
 	}
 
-	/** 给 TabBar 内置的溢出滚动按钮设置文字与字体（主题图标资源在 flixel 后端不可用，用 ASCII 箭头代替）。 */
-	private function styleTabBarArrows(bar:TabBar):Bool
-	{
-		if (bar == null || bar.hidden)
-			return true;
-		var left:haxe.ui.core.Component = bar.findComponent('tabbar-scroll-left', null, false);
-		var right:haxe.ui.core.Component = bar.findComponent('tabbar-scroll-right', null, false);
-		if (left == null || right == null)
-			return false;
-
-		var font:String = Paths.font('unifont-18.0.01.otf');
-		var style:String = 'font-name: $font; font-size: ${TOP_FONT_SIZE}px;';
-		left.text = '<';
-		right.text = '>';
-		left.styleString = style;
-		right.styleString = style;
-		return true;
-	}
-
-	/** 鼠标是否悬停在两行 Tab 栏上（用于屏蔽歌曲列表的滚轮）。 */
+	/** 鼠标是否悬停在任意一行 Tab 栏上（用于屏蔽歌曲列表的滚轮）。 */
 	private function isMouseOverTabBar():Bool
 	{
-		return isMouseOverBar(haxeTabBar) || isMouseOverBar(haxeCustomTabBar);
+		return (fixedTabBar != null && fixedTabBar.isOverBar()) || (customTabBar != null && customTabBar.isOverBar());
 	}
 
-	/**
-	 * 移动端：按住 Tab 栏左右拖动，分区过多时可横向滑动查看（松手即停）。
-	 * HaxeUI 的 TabBar 只支持滚轮与溢出箭头，内部是普通 HBox，这里直接位移其内容容器。
-	 */
-	private function updateTabBarDrag():Void
-	{
-		if (haxeTabBar == null)
-			return;
-
-		if (!tabDragActive)
-		{
-			if (!FlxG.mouse.justPressed || !isMouseOverTabBar())
-				return;
-			tabDragBar = isMouseOverBar(haxeCustomTabBar) ? haxeCustomTabBar : haxeTabBar;
-			var container:HBox = getTabBarContainer(tabDragBar);
-			if (container == null)
-				return;
-			tabDragActive = true;
-			tabDragMoved = false;
-			tabDragStartX = FlxG.mouse.x;
-			tabDragStartLeft = container.left;
-			return;
-		}
-
-		var container:HBox = getTabBarContainer(tabDragBar);
-		if (container != null)
-		{
-			var dx:Float = FlxG.mouse.x - tabDragStartX;
-			if (!tabDragMoved && Math.abs(dx) > 8)
-				tabDragMoved = true;
-			if (tabDragMoved)
-			{
-				var minLeft:Float = Math.min(0, -(container.width - tabDragBar.width));
-				var newLeft:Float = Math.max(minLeft, Math.min(0, tabDragStartLeft + dx));
-				@:privateAccess
-				{
-					var builder:Dynamic = tabDragBar._compositeBuilder;
-					container.left = newLeft;
-					builder._containerPosition = newLeft;
-					builder.checkLeftRightFillers();
-				}
-			}
-		}
-
-		if (!FlxG.mouse.pressed)
-		{
-			tabDragActive = false;
-			if (tabDragMoved)
-			{
-				// 拖动时内容跟随手指，松手仍会命中同一个 Tab 按钮并触发点击，短暂屏蔽这次切区
-				tabClickSuppressUntil = FlxG.game.ticks + 250;
-			}
-		}
-	}
-
-	/** 取 TabBar 内部 builder 的内容容器（tabbar-contents），用于手动滚动。 */
-	private function getTabBarContainer(bar:TabBar):HBox
-	{
-		if (bar == null)
-			return null;
-		@:privateAccess
-		var builder:Dynamic = bar._compositeBuilder;
-		return cast builder._container;
-	}
-
-	/** 鼠标/触摸点是否落在顶部 HaxeUI 区域（搜索框或两行 Tab 栏）。 */
+	/** 鼠标/触摸点是否落在顶部区域（搜索框或 Tab 栏）。 */
 	private function isMouseOverTopBar():Bool
 	{
 		if (haxeSearchBox != null && !haxeSearchBox.hidden)
@@ -1481,15 +1274,6 @@ class FreeplayState extends MusicBeatState
 				return true;
 		}
 		return isMouseOverTabBar();
-	}
-
-	private function isMouseOverBar(bar:TabBar):Bool
-	{
-		if (bar == null || bar.hidden)
-			return false;
-		var mx:Float = FlxG.mouse.x;
-		var my:Float = FlxG.mouse.y;
-		return mx >= bar.x && mx <= bar.x + bar.width && my >= bar.y && my <= bar.y + bar.height;
 	}
 
 	var instPlaying:Int = -1;
@@ -1533,10 +1317,16 @@ class FreeplayState extends MusicBeatState
 			}
 		}
 
-		// 分区 Tab 栏与搜索框：点击/触摸/溢出滚动由 HaxeUI 自行处理，这里只做重定位与样式维护
+		// 窗口尺寸变化后重新摆放搜索框与 Tab 栏
 		updateHaxeTopBar();
-		// 移动端：Tab 栏触控横向拖动（HaxeUI TabBar 本身不支持拖动，只能滚轮或点箭头）
-		updateTabBarDrag();
+		// 分区 Tab：悬停/点击/横向拖动/滚轮全部由 FreeplayTabBar 内部处理（两行各自独立）
+		if (!Controls.instance.isInSubstate)
+		{
+			if (fixedTabBar != null)
+				fixedTabBar.update(elapsed);
+			if (customTabBar != null)
+				customTabBar.update(elapsed);
+		}
 		if (listFade < 1)
 			listFade = Math.min(1, listFade + elapsed * 5);
 
@@ -1554,9 +1344,9 @@ class FreeplayState extends MusicBeatState
 				switchCategory(1);
 		}
 
-		// 桌面端：未在播放预览音乐时恢复鼠标显示（播放时由 SPACE 分支隐藏）
+		// 桌面端：非手柄模式时保持鼠标可见（含试听播放期间，播放器有可点击按钮）
 		#if desktop
-		if (!player.playingMusic && !controls.controllerMode && !FlxG.mouse.visible)
+		if (!controls.controllerMode && !FlxG.mouse.visible)
 			FlxG.mouse.visible = true;
 		#end
 
@@ -2020,11 +1810,7 @@ class FreeplayState extends MusicBeatState
 			player.switchPlayMusic();
 			player.pauseOrResume(true);
 
-			// 桌面端：空格播放预览时隐藏鼠标
-			#if desktop
-			FlxG.mouse.visible = false;
-			#end
-
+			// 播放预览时不隐藏鼠标：播放器里有可点击的按钮，桌面端需要能看到光标
 			// 播放预览时一并隐藏顶部 Tab 栏 / 搜索框与模组名文本
 			setHaxeTopBarVisible(false);
 			modText.visible = false;
@@ -2655,15 +2441,16 @@ class FreeplayState extends MusicBeatState
 			{
 				// Current difficulty has matching replays
 				#if !desktop
-				cachedReplayText = bottomString + '\nThis song has ${songReplayCount} replay(s) - Tap the E button (top-right) to watch';
+				cachedReplayText = bottomString + '\n' + Language.get('freeplay_replay_hint_mobile', [Std.string(songReplayCount)]);
 				#else
-				cachedReplayText = bottomString + '\nThis song has ${songReplayCount} replay(s) - Press F7 to watch';
+				cachedReplayText = bottomString + '\n' + Language.get('freeplay_replay_hint_desktop', [Std.string(songReplayCount)]);
 				#end
 			}
 			else
 			{
 				// Song has replays but current difficulty doesn't
-				cachedReplayText = bottomString + '\nThis song has ${songReplayCount} replay(s) (but no replay for ${currentDifficultyName} difficulty)';
+				cachedReplayText = bottomString + '\n'
+					+ Language.get('freeplay_replay_hint_nodiff', [Std.string(songReplayCount), currentDifficultyName]);
 			}
 		}
 		else
@@ -2685,20 +2472,29 @@ class FreeplayState extends MusicBeatState
 
 	private function positionHighscore()
 	{
-		// 高分面板放置在搜索框（第一行）下方右侧；第二行自定义分区已缩短宽度，右侧空间留给了面板
-		var topY:Float = TOP_BAR_Y + TOP_BAR_H + 8;
+		// 高分面板固定在右上角，与第一行 Tab 顶部对齐
+		var topY:Float = TAB_ROW_Y;
 		scoreText.y = topY;
 		modText.y = scoreText.y + scoreText.height + 2;
 		diffText.y = modText.y + modText.height + 2;
 
 		scoreText.x = FlxG.width - scoreText.width - 6;
-		scoreBG.scale.x = FlxG.width - scoreText.x + 6;
-		scoreBG.x = FlxG.width - (scoreBG.scale.x / 2);
-		scoreBG.y = scoreText.y - 6;
+		// 面板左边界即背景底色左边缘，Tab 行按它避让
+		highscoreLeft = scoreText.x - 6;
+
+		// 背景按三行文本的实际尺寸重新缩放；updateHitbox 后 x/y 即左上角，直接对齐面板左边界
+		var bgTop:Float = scoreText.y - 6;
+		var bgH:Float = diffText.y + diffText.height + 4 - bgTop;
+		scoreBG.scale.set((FlxG.width - highscoreLeft) / scoreBG.frameWidth, bgH / scoreBG.frameHeight);
+		scoreBG.updateHitbox();
+		scoreBG.x = highscoreLeft;
+		scoreBG.y = bgTop;
 		diffText.x = Std.int(scoreBG.x + (scoreBG.width / 2));
 		diffText.x -= diffText.width / 2;
 		modText.x = Std.int(scoreBG.x + (scoreBG.width / 2));
 		modText.x -= modText.width / 2;
+
+		layoutTopBar();
 	}
 
 	private function updateModText():Void
@@ -3100,19 +2896,19 @@ class FreeplayState extends MusicBeatState
 		}
 
 		var lines:Array<String> = [];
-		lines.push('Song: $songName');
-		lines.push('BPM: ${Math.round(bpm)}');
-		lines.push('Speed: ${Std.string(speed)}x');
-		lines.push('Format: $fmt');
-		lines.push('Sections: $secCount');
-		lines.push('Notes: $totalNotes');
-		lines.push('Events: $totalEvents');
-		lines.push('Duration: $durationStr');
-		lines.push('Players: $p1 vs $p2');
+		lines.push(Language.get('chartinfo_song', [songName]));
+		lines.push(Language.get('chartinfo_bpm', [Std.string(Math.round(bpm))]));
+		lines.push(Language.get('chartinfo_speed', [Std.string(speed)]));
+		lines.push(Language.get('chartinfo_format', [fmt]));
+		lines.push(Language.get('chartinfo_sections', [Std.string(secCount)]));
+		lines.push(Language.get('chartinfo_notes', [Std.string(totalNotes)]));
+		lines.push(Language.get('chartinfo_events', [Std.string(totalEvents)]));
+		lines.push(Language.get('chartinfo_duration', [durationStr]));
+		lines.push(Language.get('chartinfo_players', [p1, p2]));
 		if (songData.stage != null && songData.stage.length > 0)
-			lines.push('Stage: ${songData.stage}');
+			lines.push(Language.get('chartinfo_stage', [songData.stage]));
 		if (songData.generatedBy != null && songData.generatedBy.length > 0)
-			lines.push('By: ${songData.generatedBy}');
+			lines.push(Language.get('chartinfo_by', [songData.generatedBy]));
 
 		chartInfoText.text = lines.join('\n');
 
@@ -3176,6 +2972,18 @@ class FreeplayState extends MusicBeatState
 
 		// 离开 Freeplay 时释放残余的试听音频缓存（防止之前未来得及释放的累积）
 		clearPreviewSounds();
+
+		// 释放两行分区 Tab 栏的卡片精灵
+		if (fixedTabBar != null)
+		{
+			fixedTabBar.destroy();
+			fixedTabBar = null;
+		}
+		if (customTabBar != null)
+		{
+			customTabBar.destroy();
+			customTabBar = null;
+		}
 
 		// --- 资源彻底释放 ---
 		// 1. 清除 'freeplay' tag 保护（HealthIcon 图标才能被 clearStoredMemory 回收）

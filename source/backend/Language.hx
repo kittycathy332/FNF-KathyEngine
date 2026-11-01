@@ -90,6 +90,39 @@ class Language {
         return value;
     }
     
+    /**
+     * 优先使用模组 .lang（LanguageBasic，兼容旧的自定义语言文件）；
+     * 命不中时回退到 JSON 语言包（Language.get）。
+     * 两套体系的占位符编号不同（.lang 是 {1} 起、JSON 是 {0} 起），由各自内部处理，
+     * 调用方只需按顺序传值即可。
+     */
+    public static function getWithFallback(key:String, ?defaultPhrase:String, ?params:Array<Dynamic>):String {
+        var basic:String = LanguageBasic.getPhrase(key, null, params);
+        if (basic != null && basic != key)
+            return basic;
+
+        var jsonParams:Array<String> = null;
+        if (params != null) {
+            jsonParams = [];
+            for (p in params) jsonParams.push(Std.string(p));
+        }
+
+        var json:String = get(key, jsonParams);
+        if (json != key)
+            return json;
+
+        // 两套体系都没有该 key 时才使用默认英文文案（占位符用 {0} 起，与 JSON 一致）
+        if (defaultPhrase != null) {
+            var out:String = defaultPhrase;
+            if (jsonParams != null) {
+                for (i in 0...jsonParams.length)
+                    out = StringTools.replace(out, '{' + i + '}', jsonParams[i]);
+            }
+            return out;
+        }
+        return json;
+    }
+
     // 获取游戏字体文件
     public static function getGameFont():String {
         return currentLang.get("game_font");

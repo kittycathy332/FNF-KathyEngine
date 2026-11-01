@@ -22,12 +22,14 @@ import sys.io.File;
  *       "name": "Kathy MOD",
  *       "folders": ["kathy-mod"],
  *       "weeks": ["week-kathy"],
- *       "songs": [{"song": "Bopeebo", "folder": "kathy-mod"}]
+ *       "songs": [{"song": "Bopeebo", "folder": "kathy-mod"}],
+ *       "color": "#FF7A00"
  *     }
  *   ]
  * }
  * folders / weeks / songs 都是可选项，命中任意一条即归入该分区；
  * songs 也可以直接写成字符串（此时不限制文件夹）。
+ * color 可选：Tab 选中时的主题色，支持 "#RRGGBB"、[r, g, b] 或整数；不写则用默认亮黄。
  */
 class FreeplayCategory
 {
@@ -37,6 +39,12 @@ class FreeplayCategory
 	public var weeks:Array<String> = [];
 	// 每项为 [格式化后的曲名, 文件夹（空字符串表示不限）]
 	public var songs:Array<Array<String>> = [];
+	/**
+	 * Tab 栏选中时的主题色（0xAARRGGBB）；0 表示未配置，用默认亮黄。
+	 * 用 0 而不是 -1 作哨兵：不透明色（alpha=0xFF）在 32 位 Int 里是负数，
+	 * 用 -1 / >= 0 判断会把它们误认成"未配置"。
+	 */
+	public var color:Int = 0;
 
 	public function new() {}
 
@@ -128,6 +136,8 @@ class FreeplayCategory
 	{
 		if (other.name != null && other.name.length > 0)
 			name = other.name;
+		if (other.color != 0)
+			color = other.color;
 		for (f in other.folders)
 			if (!folders.contains(f))
 				folders.push(f);
@@ -211,6 +221,7 @@ class FreeplayCategory
 		if (c.id.length == 0)
 			return null; // 没有 id 和 name 无法合并/识别，跳过
 		c.name = getString(entry, 'name').trim();
+		c.color = parseColor(Reflect.field(entry, 'color'));
 
 		var folders:Array<Dynamic> = Reflect.field(entry, 'folders');
 		if (Std.isOfType(folders, Array))
@@ -263,6 +274,67 @@ class FreeplayCategory
 			return '';
 		var v:Dynamic = Reflect.field(obj, field);
 		return (v == null) ? '' : Std.string(v);
+	}
+
+	/**
+	 * 解析分区的 color 字段，支持三种写法：
+	 *  - "#RRGGBB" / "#AARRGGBB" / 不带 # 的十六进制字符串
+	 *  - [r, g, b]（或 [r, g, b, a]，取值 0~255）
+	 *  - 整数（0xRRGGBB 或 0xAARRGGBB）
+	 * 解析失败或不合法时返回 -1（使用默认颜色）。
+	 */
+	private static function parseColor(value:Dynamic):Int
+	{
+		if (value == null)
+			return 0;
+
+		if (Std.isOfType(value, Array))
+		{
+			var arr:Array<Dynamic> = cast value;
+			if (arr.length < 3)
+				return 0;
+			var alpha:Int = (arr.length > 3) ? clampByte(arr[3]) : 255;
+			return (alpha << 24) | (clampByte(arr[0]) << 16) | (clampByte(arr[1]) << 8) | clampByte(arr[2]);
+		}
+
+		if (Std.isOfType(value, String))
+		{
+			var text:String = Std.string(value).trim();
+			if (text.length == 0)
+				return 0;
+			if (text.charAt(0) == '#')
+				text = text.substr(1);
+
+			// 逐 2 位解析，避免 0xAARRGGBB 超出 Int32 范围
+			var digits:String = '';
+			if (text.length == 6)
+				digits = 'FF' + text; // 只写了 RGB，补满不透明
+			else if (text.length == 8)
+				digits = text;
+
+			if (digits.length != 8)
+				return 0;
+
+			var a:Null<Int> = Std.parseInt('0x' + digits.substr(0, 2));
+			var r:Null<Int> = Std.parseInt('0x' + digits.substr(2, 2));
+			var g:Null<Int> = Std.parseInt('0x' + digits.substr(4, 2));
+			var b:Null<Int> = Std.parseInt('0x' + digits.substr(6, 2));
+			if (a == null || r == null || g == null || b == null)
+				return 0;
+
+			return (a << 24) | (r << 16) | (g << 8) | b;
+		}
+
+		// JSON 里直接写数字（如 16711680 表示 #FF0000）
+		var num:Int = Std.int(cast value);
+		if (num < 0)
+			return 0;
+		return (num <= 0xFFFFFF) ? (num | 0xFF000000) : num;
+	}
+
+	private static function clampByte(v:Dynamic):Int
+	{
+		return Std.int(Math.max(0, Math.min(255, Std.parseFloat(Std.string(v)))));
 	}
 	#end
 }
