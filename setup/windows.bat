@@ -3,7 +3,7 @@ color 0a
 cd ..
 echo Installing dependencies...
 echo This might take a few moments depending on your internet speed.
-haxelib git hxcpp https://github.com/kittycathy332/hxcpp-SDE.git main-9532d78 --quiet
+haxelib git hxcpp https://github.com/kittycathy332/hxcpp-SDE.git main-261101 --quiet
 REM hxcpp git 源码版需要重新编译命令行工具（hxcpp.n），否则构建时会卡在交互提示
 for /f "delims=" %%p in ('haxelib config') do set "HAXELIB_PATH=%%p"
 pushd "%HAXELIB_PATH%hxcpp\git\tools\hxcpp"

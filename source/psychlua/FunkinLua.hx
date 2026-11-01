@@ -1716,38 +1716,37 @@ class FunkinLua {
 			// 命中后台预读：用 dostring(预读内容) 代替 dofile(读盘)，跳过主线程同步 I/O。
 			// 编译 + 执行仍在主线程（dostring 内部编译字节码 + 执行顶层），onCreate 语义不变。
 			// 未命中：走原 dofile / dostring 读盘路径。
+			// 仅当「编译阶段」失败（语法错误）时才回退 dofile：luaL_loadfile 会处理 UTF-8 BOM / 首行 #!，
+			// 而 luaL_loadstring 不会，预读路径不能因此把本来能跑的文件判成错误。
+			// 运行期错误不回退（顶层已执行过一半，重跑会产生重复副作用），直接报告。
 			if (isPreloaded)
 			{
-				var result:Dynamic = LuaL.dostring(lua, preloadedContent);
-				var resultStr:String = Lua.tostring(lua, result);
-				if(resultStr != null && result != 0) {
-					trace(resultStr);
-					#if (desktop || mobile)
-					CoolUtil.showPopUp(resultStr, 'Error on lua script!');
-					#else
-					luaTrace('$scriptName\n$resultStr', true, false, FlxColor.RED);
-					#end
+				var loadResult:Int = LuaL.dostring(lua, preloadedContent);
+				if (loadResult == Lua.LUA_ERRSYNTAX)
+				{
+					Lua.pop(lua, 1); // 丢弃这条语法错误信息，交给下面的 dofile 统一报告
+					preloadedContent = null;
+					isPreloaded = false;
+				}
+				else if (loadResult != 0)
+				{
+					reportLuaError(loadResult, false);
 					lua = null;
 					return;
 				}
 			}
-			else
+
+			if (!isPreloaded)
 			{
 				var isString:Bool = !FileSystem.exists(scriptName);
-				var result:Dynamic = null;
+				var result:Int = 0;
 				if(!isString)
 					result = LuaL.dofile(lua, scriptName);
 				else
 					result = LuaL.dostring(lua, scriptName);
 
-				var resultStr:String = Lua.tostring(lua, result);
-				if(resultStr != null && result != 0) {
-					trace(resultStr);
-					#if (desktop || mobile)
-					CoolUtil.showPopUp(resultStr, 'Error on lua script!');
-					#else
-					luaTrace('$scriptName\n$resultStr', true, false, FlxColor.RED);
-					#end
+				if(result != 0) {
+					reportLuaError(result, isString);
 					lua = null;
 					return;
 				}
@@ -1760,6 +1759,28 @@ class FunkinLua {
 		trace('lua file loaded succesfully:' + scriptName);
 
 		call('onCreate', []);
+	}
+
+	/**
+	 * 统一报告脚本加载失败。
+	 *
+	 * luaL_dofile / luaL_dostring 的返回值是**状态码**（2 = 运行期错误、3 = 语法错误…），不是栈索引；
+	 * 真正的错误信息由 Lua 留在栈顶。之前写成 Lua.tostring(lua, result) 相当于拿状态码当索引去读，
+	 * 读到的是无关栈槽里的数字，弹窗才会出现 2.78922227536758e-313 这种乱码。
+	 */
+	private function reportLuaError(status:Int, isString:Bool):Void
+	{
+		var errStr:String = Lua.tostring(lua, -1);
+		if (errStr == null || errStr.length == 0)
+			errStr = 'Unknown error (status $status)';
+		var shownName:String = isString ? 'unknown' : scriptName;
+		var msg:String = shownName + '\n' + errStr;
+		trace(msg);
+		#if (desktop || mobile)
+		CoolUtil.showPopUp(msg, 'Error on lua script!');
+		#else
+		luaTrace(msg, true, false, FlxColor.RED);
+		#end
 	}
 
 	//main
