@@ -23,12 +23,15 @@ import sys.io.File;
  *       "folders": ["kathy-mod"],
  *       "weeks": ["week-kathy"],
  *       "songs": [{"song": "Bopeebo", "folder": "kathy-mod"}],
+ *       "exclude": [{"song": "Ugh", "folder": "kathy-mod"}],
  *       "color": "#FF7A00"
  *     }
  *   ]
  * }
  * folders / weeks / songs 都是可选项，命中任意一条即归入该分区；
  * songs 也可以直接写成字符串（此时不限制文件夹）。
+ * exclude 与 songs 格式相同：命中的曲目即便符合 folders / weeks / songs 规则也不会归入该分区，
+ * 用于把规则命中的歌曲单独移出（Freeplay 分区编辑器取消勾选时会自动写入）。
  * color 可选：Tab 选中时的主题色，支持 "#RRGGBB"、[r, g, b] 或整数；不写则用默认亮黄。
  */
 class FreeplayCategory
@@ -39,6 +42,12 @@ class FreeplayCategory
 	public var weeks:Array<String> = [];
 	// 每项为 [格式化后的曲名, 文件夹（空字符串表示不限）]
 	public var songs:Array<Array<String>> = [];
+	/**
+	 * 显式排除的曲目（格式与 songs 相同）。
+	 * 用于把 folders / weeks 规则命中的歌从分区里拿掉：
+	 * 命中 exclude 的歌即便符合 folders / weeks / songs 规则也不会归入本分区。
+	 */
+	public var exclude:Array<Array<String>> = [];
 	/**
 	 * Tab 栏选中时的主题色（0xAARRGGBB）；0 表示未配置，用默认亮黄。
 	 * 用 0 而不是 -1 作哨兵：不透明色（alpha=0xFF）在 32 位 Int 里是负数，
@@ -68,10 +77,58 @@ class FreeplayCategory
 	 */
 	public function matches(meta:SongMetadata, weekFileName:String, weekName:String):Bool
 	{
-		var folder:String = normalizeFolderName(meta.folder);
-		for (f in folders)
-			if (normalizeFolderName(f) == folder)
+		return matchesPrepared(Paths.formatToSongPath(meta.songName), normalizeFolderName(meta.folder), weekFileName, weekName);
+	}
+
+	/**
+	 * 快速匹配：曲名路径与文件夹名由调用方预计算（每首歌只算一次），
+	 * 1000+ 首 × 多个分区时不再重复分配字符串，避免 GC 抖动。
+	 */
+	public function matchesPrepared(songPath:String, folderNorm:String, weekFileName:String, weekName:String):Bool
+	{
+		if (isExcludedPrepared(songPath, folderNorm))
+			return false;
+		if (matchesSongsPrepared(songPath, folderNorm))
+			return true;
+		return matchesRulesPrepared(folderNorm, weekFileName, weekName);
+	}
+
+	/** songs 列表是否显式包含该曲目（不看 exclude）。 */
+	public function matchesSongs(meta:SongMetadata):Bool
+	{
+		return matchesSongsPrepared(Paths.formatToSongPath(meta.songName), normalizeFolderName(meta.folder));
+	}
+
+	public function matchesSongsPrepared(songPath:String, folderNorm:String):Bool
+	{
+		if (songs.length == 0)
+			return false;
+		for (s in songs)
+		{
+			if (s[0] != songPath)
+				continue;
+			var f:String = (s[1] == null) ? '' : s[1];
+			if (f.length == 0 || normalizeFolderName(f) == folderNorm)
 				return true;
+		}
+		return false;
+	}
+
+	/** folders / weeks 规则是否命中该曲目（不含 songs 与 exclude）。 */
+	public function matchesRules(meta:SongMetadata, weekFileName:String, weekName:String):Bool
+	{
+		return matchesRulesPrepared(normalizeFolderName(meta.folder), weekFileName, weekName);
+	}
+
+	public function matchesRulesPrepared(folderNorm:String, weekFileName:String, weekName:String):Bool
+	{
+		for (f in folders)
+			if (normalizeFolderName(f) == folderNorm)
+				return true;
+
+		// 绝大多数分区只配 folders：提前返回，避免每首歌都做两次 trim/toLowerCase 的字符串分配
+		if (weeks.length == 0)
+			return false;
 
 		var wf:String = (weekFileName == null) ? '' : weekFileName.trim().toLowerCase();
 		var wn:String = (weekName == null) ? '' : weekName.trim().toLowerCase();
@@ -81,18 +138,26 @@ class FreeplayCategory
 			if (wl.length > 0 && (wl == wf || (wn.length > 0 && wl == wn)))
 				return true;
 		}
+		return false;
+	}
 
-		if (songs.length > 0)
+	/** 是否被 exclude 显式排除。 */
+	public function isExcluded(meta:SongMetadata, weekFileName:String, weekName:String):Bool
+	{
+		return isExcludedPrepared(Paths.formatToSongPath(meta.songName), normalizeFolderName(meta.folder));
+	}
+
+	public function isExcludedPrepared(songPath:String, folderNorm:String):Bool
+	{
+		if (exclude.length == 0)
+			return false;
+		for (s in exclude)
 		{
-			var songPath:String = Paths.formatToSongPath(meta.songName);
-			for (s in songs)
-			{
-				if (s[0] != songPath)
-					continue;
-				var f:String = (s[1] == null) ? '' : s[1];
-				if (f.length == 0 || normalizeFolderName(f) == folder)
-					return true;
-			}
+			if (s[0] != songPath)
+				continue;
+			var f:String = (s[1] == null) ? '' : s[1];
+			if (f.length == 0 || normalizeFolderName(f) == folderNorm)
+				return true;
 		}
 		return false;
 	}
@@ -157,6 +222,20 @@ class FreeplayCategory
 			}
 			if (!exists)
 				songs.push(s);
+		}
+		for (s in other.exclude)
+		{
+			var exists:Bool = false;
+			for (existing in exclude)
+			{
+				if (existing[0] == s[0] && existing[1] == s[1])
+				{
+					exists = true;
+					break;
+				}
+			}
+			if (!exists)
+				exclude.push(s);
 		}
 	}
 
@@ -245,27 +324,36 @@ class FreeplayCategory
 			}
 		}
 
-		var songs:Array<Dynamic> = Reflect.field(entry, 'songs');
-		if (Std.isOfType(songs, Array))
-		{
-			for (s in songs)
-			{
-				if (Std.isOfType(s, String))
-				{
-					var v:String = Std.string(s).trim();
-					if (v.length > 0)
-						c.songs.push([Paths.formatToSongPath(v), '']);
-				}
-				else
-				{
-					var sn:String = getString(s, 'song').trim();
-					if (sn.length > 0)
-						c.songs.push([Paths.formatToSongPath(sn), getString(s, 'folder').trim()]);
-				}
-			}
-		}
+		c.songs = parseSongList(Reflect.field(entry, 'songs'));
+		c.exclude = parseSongList(Reflect.field(entry, 'exclude'));
 
 		return c;
+	}
+
+	/** 解析 songs / exclude：支持字符串或 {song, folder} 两种写法。 */
+	private static function parseSongList(value:Dynamic):Array<Array<String>>
+	{
+		var list:Array<Array<String>> = [];
+		if (!Std.isOfType(value, Array))
+			return list;
+
+		var entries:Array<Dynamic> = cast value;
+		for (s in entries)
+		{
+			if (Std.isOfType(s, String))
+			{
+				var v:String = Std.string(s).trim();
+				if (v.length > 0)
+					list.push([Paths.formatToSongPath(v), '']);
+			}
+			else
+			{
+				var sn:String = getString(s, 'song').trim();
+				if (sn.length > 0)
+					list.push([Paths.formatToSongPath(sn), getString(s, 'folder').trim()]);
+			}
+		}
+		return list;
 	}
 
 	private static function getString(obj:Dynamic, field:String):String
@@ -275,6 +363,196 @@ class FreeplayCategory
 		var v:Dynamic = Reflect.field(obj, field);
 		return (v == null) ? '' : Std.string(v);
 	}
+
+	// ==================== 写盘（分区编辑器） ====================
+
+	/**
+	 * 把分区编辑器的结果写回配置文件。
+	 * @param edited 被修改或新建的分区（未修改的不用传，保持原文件原样）
+	 * @param removedIds 被删除的分区 id
+	 *
+	 * 做法：先把这些 id 从各模组的 freeplay_categories.json 里摘掉，
+	 * 再统一写入全局 mods/freeplay_categories.json，避免同一分区在两处合并后残留旧规则。
+	 */
+	public static function saveAll(edited:Array<FreeplayCategory>, removedIds:Array<String>):Void
+	{
+#if (FEATURE_FILESYSTEM && MODS_ALLOWED)
+		var changed:Array<String> = [];
+		for (id in removedIds)
+			if (id != null && id.length > 0 && !changed.contains(id))
+				changed.push(id);
+		for (c in edited)
+			if (c != null && c.id != null && c.id.length > 0 && !changed.contains(c.id))
+				changed.push(c.id);
+		if (changed.length == 0)
+			return;
+
+		// 先确认全局文件可解析：解析失败时直接放弃整次写入，
+		// 否则会带着"已从各模组文件删掉条目"的半截状态离开
+		var globalPath:String = Paths.mods('freeplay_categories.json');
+		var globalExists:Bool = FileSystem.exists(globalPath);
+		var parsed:Dynamic = null;
+		if (globalExists)
+		{
+			try parsed = Json.parse(File.getContent(globalPath))
+			catch (e:Dynamic)
+			{
+				trace('[FREEPLAY] 分区配置解析失败，已取消写入: ' + globalPath + ' (' + e + ')');
+				return;
+			}
+		}
+
+		for (mod in Mods.getModDirectories())
+			removeIdsFromFile(Paths.mods(mod + '/freeplay_categories.json'), changed);
+
+		var entries:Array<Dynamic> = (parsed == null) ? [] : extractEntries(parsed);
+		var kept:Array<Dynamic> = [];
+		for (e in entries)
+		{
+			var id:String = entryId(e);
+			if (id.length > 0 && changed.contains(id))
+				continue;
+			kept.push(e);
+		}
+		for (c in edited)
+			kept.push(toJson(c));
+
+		if (kept.length == 0 && !FileSystem.exists(globalPath))
+			return;
+
+		try
+		{
+			var modsFolder:String = Paths.mods();
+			if (!FileSystem.exists(modsFolder))
+				FileSystem.createDirectory(modsFolder);
+			File.saveContent(globalPath, Json.stringify(buildRoot(parsed, kept), '\t'));
+		}
+		catch (e:Dynamic)
+			trace('[FREEPLAY] 分区配置写入失败: ' + globalPath + ' (' + e + ')');
+#end
+	}
+
+#if (FEATURE_FILESYSTEM && MODS_ALLOWED)
+	/** 从单个配置文件中移除指定 id 的分区；文件不存在或解析失败时静默跳过。 */
+	private static function removeIdsFromFile(path:String, ids:Array<String>):Void
+	{
+		if (!FileSystem.exists(path))
+			return;
+
+		var parsed:Dynamic = null;
+		try parsed = Json.parse(File.getContent(path))
+		catch (e:Dynamic) return;
+
+		var kept:Array<Dynamic> = [];
+		var changed:Bool = false;
+		for (e in extractEntries(parsed))
+		{
+			var id:String = entryId(e);
+			if (id.length > 0 && ids.contains(id))
+			{
+				changed = true;
+				continue;
+			}
+			kept.push(e);
+		}
+		if (!changed)
+			return;
+
+		try File.saveContent(path, Json.stringify(buildRoot(parsed, kept), '\t'))
+		catch (e:Dynamic) trace('[FREEPLAY] 分区配置写入失败: ' + path + ' (' + e + ')');
+	}
+
+	private static function extractEntries(parsed:Dynamic):Array<Dynamic>
+	{
+		if (parsed == null)
+			return [];
+		if (Std.isOfType(parsed, Array))
+			return cast parsed;
+
+		var cats:Dynamic = Reflect.field(parsed, 'categories');
+		if (Std.isOfType(cats, Array))
+			return cast cats;
+		if (isCategoryObject(cats))
+			return [cats];
+		if (isCategoryObject(parsed))
+			return [parsed];
+		return [];
+	}
+
+	/** 复用原文件的其余字段（如 _comment），只替换 categories。 */
+	private static function buildRoot(parsed:Dynamic, entries:Array<Dynamic>):Dynamic
+	{
+		if (parsed != null && !Std.isOfType(parsed, Array) && Reflect.isObject(parsed) && Reflect.hasField(parsed, 'categories'))
+		{
+			Reflect.setField(parsed, 'categories', entries);
+			return parsed;
+		}
+		var root:Dynamic = {};
+		Reflect.setField(root, 'categories', entries);
+		return root;
+	}
+
+	private static function entryId(entry:Dynamic):String
+	{
+		var id:String = getString(entry, 'id').trim();
+		if (id.length == 0)
+			id = getString(entry, 'name').trim();
+		return id;
+	}
+
+	private static function toJson(cat:FreeplayCategory):Dynamic
+	{
+		var obj:Dynamic = {};
+		Reflect.setField(obj, 'id', cat.id);
+		if (cat.name != null && cat.name.trim().length > 0)
+			Reflect.setField(obj, 'name', cat.name.trim());
+		if (cat.folders.length > 0)
+			Reflect.setField(obj, 'folders', cat.folders.copy());
+		if (cat.weeks.length > 0)
+			Reflect.setField(obj, 'weeks', cat.weeks.copy());
+		if (cat.songs.length > 0)
+			Reflect.setField(obj, 'songs', songListToJson(cat.songs));
+		if (cat.exclude.length > 0)
+			Reflect.setField(obj, 'exclude', songListToJson(cat.exclude));
+		if (cat.color != 0)
+			Reflect.setField(obj, 'color', colorToHex(cat.color));
+		return obj;
+	}
+
+	private static function songListToJson(list:Array<Array<String>>):Array<Dynamic>
+	{
+		var out:Array<Dynamic> = [];
+		for (s in list)
+		{
+			var folder:String = (s[1] == null) ? '' : s[1];
+			if (folder.length == 0)
+				out.push(s[0]);
+			else
+			{
+				var item:Dynamic = {};
+				Reflect.setField(item, 'song', s[0]);
+				Reflect.setField(item, 'folder', folder);
+				out.push(item);
+			}
+		}
+		return out;
+	}
+
+	/** 0xAARRGGBB → "#RRGGBB"（全不透明）或 "#AARRGGBB"。 */
+	public static function colorToHex(color:Int):String
+	{
+		var a:Int = (color >>> 24) & 0xFF;
+		var r:Int = (color >> 16) & 0xFF;
+		var g:Int = (color >> 8) & 0xFF;
+		var b:Int = color & 0xFF;
+		return '#' + ((a == 0xFF) ? '' : hex2(a)) + hex2(r) + hex2(g) + hex2(b);
+	}
+
+	private static inline function hex2(v:Int):String
+	{
+		return StringTools.hex(v, 2).toUpperCase();
+	}
+#end
 
 	/**
 	 * 解析分区的 color 字段，支持三种写法：

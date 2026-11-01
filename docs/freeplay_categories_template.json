@@ -1,5 +1,5 @@
 {
-  "_comment": "Freeplay 分区配置模板。复制并改名为 freeplay_categories.json，放到 mods/freeplay_categories.json（全局生效）或 mods/<模组文件夹>/freeplay_categories.json（仅该模组）。categories 推荐写成数组；也兼容单个分区对象或顶层直接写数组。同名 id 的分区会自动合并：名称与颜色以后读到的（全局）为准，匹配规则取并集。_comment 字段会被忽略。匹配字段：folders（模组文件夹）、weeks（周目文件名或 weekName）、songs（曲名，可写字符串或 {song, folder}，folder 留空表示不限文件夹）。color 为可选的主题色，决定该 Tab 选中时的文字、描边与底部亮条颜色，可写 \"#RRGGBB\"、[r, g, b]；不写则用默认亮黄色。",
+  "_comment": "Freeplay 分区配置模板。复制并改名为 freeplay_categories.json，放到 mods/freeplay_categories.json（全局生效）或 mods/<模组文件夹>/freeplay_categories.json（仅该模组）。categories 推荐写成数组；也兼容单个分区对象或顶层直接写数组。同名 id 的分区会自动合并：名称与颜色以后读到的（全局）为准，匹配规则取并集。_comment 字段会被忽略。匹配字段：folders（模组文件夹）、weeks（周目文件名或 weekName）、songs（曲名，可写字符串或 {song, folder}，folder 留空表示不限文件夹）。exclude 与 songs 格式相同，用于把 folders / weeks 规则命中的曲目从分区里移除（命中 exclude 的曲目即便符合其他规则也不会归入该分区）。color 为可选的主题色，决定该 Tab 选中时的文字、描边与底部亮条颜色，可写 \"#RRGGBB\"、[r, g, b]；不写则用默认亮黄色。",
   "categories": [
     {
       "id": "my-mod",
@@ -27,7 +27,10 @@
       "id": "extra",
       "name": "额外关卡",
       "folders": ["extra-songs"],
-      "weeks": ["week-extra"]
+      "weeks": ["week-extra"],
+      "exclude": [
+        { "song": "SomeSong", "folder": "extra-songs" }
+      ]
     }
   ]
 }

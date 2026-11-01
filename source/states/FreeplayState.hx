@@ -21,9 +21,11 @@ import flash.media.Sound;
 import haxe.Json;
 import haxe.ui.Toolkit;
 import haxe.ui.core.Screen;
+import haxe.ui.components.Button;
 import haxe.ui.components.Label;
 import haxe.ui.components.TextField;
 import haxe.ui.containers.HBox;
+import haxe.ui.events.MouseEvent;
 import haxe.ui.events.UIEvent;
 import backend.ui.PsychUIRadioGroup;
 import backend.ui.PsychUIButton;
@@ -54,9 +56,6 @@ class FreeplayState extends MusicBeatState
 	// 当前试听加载过的音频绝对路径：停止试听/切换曲目时据此释放缓存，
 	// 避免"换着听 N 首歌"时 Inst/Vocals 永久累积在 currentTrackedSounds。
 	private static var _previewSoundFiles:Array<String> = [];
-	// 上次执行低频主动 GC 的时间点，避免每帧跑 NativeGc 造成卡顿
-	private static var _lastGcTime:Float = 0;
-	private static inline var GC_INTERVAL:Float = 5.0;
 
 	// 记录某 key 最近被访问/写入，并淘汰超出上限的最久未用项
 	private static function touchSongCache(key:String):Void
@@ -203,6 +202,15 @@ class FreeplayState extends MusicBeatState
 	// 当前想要预解析的曲目 key，以及停留多久后才真正开始预解析（避免快速滚动列表时狂开线程）
 	var prefetchKey:String = null;
 	var prefetchDelay:Float = 0;
+	// 上一次计算 prefetchKey 时的选中项/难度/列表版本：三者没变就不必每帧重新拼接字符串（减少 GC）
+	private var _prefetchSel:Int = -9999;
+	private var _prefetchDiff:Int = -9999;
+	private var _prefetchVer:Int = -1;
+	// 与 prefetchKey 对应的谱面名，避免每帧重新计算
+	private var _prefetchPoop:String = null;
+	private var _prefetchSongPath:String = null;
+	// 列表内容版本号：筛选/切区重建列表时自增，用于让预解析缓存失效
+	private var _listVersion:Int = 0;
 	private static inline var PREFETCH_DELAY:Float = 1.0;
 	// 每帧预热图标数量上限：把“滚动时才加载纹理”的开销摊到空闲帧，
 	// 同时让可见窗口在被滚到后能较快填充满，减少图标缺帧。
@@ -218,19 +226,26 @@ class FreeplayState extends MusicBeatState
 		if (player.playingMusic || songs.length == 0 || curDifficulty < 0 || curSelected < 0 || curSelected >= songs.length)
 			return;
 
-		var meta:SongMetadata = songs[curSelected];
-		var songLowercase:String = Paths.formatToSongPath(meta.songName);
-		var poop:String = Highscore.formatSong(songLowercase, curDifficulty);
-		var cacheKey:String = meta.folder + '_' + poop;
-
-		if (cacheKey != prefetchKey)
+		var cacheKey:String = prefetchKey;
+		if (curSelected != _prefetchSel || curDifficulty != _prefetchDiff || _prefetchVer != _listVersion)
 		{
+			_prefetchSel = curSelected;
+			_prefetchDiff = curDifficulty;
+			_prefetchVer = _listVersion;
+
+			var meta:SongMetadata = songs[curSelected];
+			var songLowercase:String = Paths.formatToSongPath(meta.songName);
+			var poop:String = Highscore.formatSong(songLowercase, curDifficulty);
+			cacheKey = meta.folder + '_' + poop;
+
+			_prefetchPoop = poop;
+			_prefetchSongPath = songLowercase;
 			prefetchKey = cacheKey;
 			prefetchDelay = PREFETCH_DELAY;
 			return;
 		}
 
-		if (prefetchDelay <= 0)
+		if (cacheKey == null || prefetchDelay <= 0)
 			return;
 
 		prefetchDelay -= elapsed;
@@ -243,7 +258,7 @@ class FreeplayState extends MusicBeatState
 
 		// 路径解析必须留在主线程（依赖 Mods.currentModDirectory 等全局状态）。
 		// getChartPath 内部已包含 Normal 难度（-normal / 忽略大小写 / 拼写错误）的兼容回退。
-		var path:String = Song.getChartPath(poop, songLowercase);
+		var path:String = Song.getChartPath(_prefetchPoop, _prefetchSongPath);
 		if (path == null || !FileSystem.exists(path))
 			return; // 无文件（含打包进 assets 的谱面），跳过预取，走同步加载分支
 
@@ -252,7 +267,7 @@ class FreeplayState extends MusicBeatState
 
 		// 把任务投到队列，交给常驻工作线程处理（不在主线程新建线程）
 		_prefetchQueueMutex.acquire();
-		_prefetchQueue.push({key: cacheKey, path: path, poop: poop});
+		_prefetchQueue.push({key: cacheKey, path: path, poop: _prefetchPoop});
 		_prefetchQueueMutex.release();
 		startPrefetchWorker();
 		#end
@@ -278,6 +293,8 @@ class FreeplayState extends MusicBeatState
 	private static final CUSTOM_ROW_Y:Int = TAB_ROW_Y + TAB_ROW_H + TOP_ROW_GAP;
 	private static final SEARCH_ROW_Y:Int = TAB_ROW_Y + 3; // 与第一行卡片垂直居中
 	private static final SEARCH_BOX_H:Int = 28;
+	/** 搜索框右侧的分区编辑按钮宽度（触屏没有 TAB 键时用） */
+	private static final EDIT_BTN_W:Int = 96;
 	private static final SEARCH_GAP:Int = 10;
 	private static final PANEL_GAP:Int = 8;
 	private static final TOP_FONT_SIZE:Int = 16; // 顶部 Tab 栏与搜索框字号
@@ -285,6 +302,9 @@ class FreeplayState extends MusicBeatState
 	private var customTabBar:FreeplayTabBar = null; // 第二行：自定义分区
 	private var haxeSearchBox:HBox = null;
 	private var haxeSearchField:TextField = null;
+	private var categoryEditButton:Button = null; // 搜索框右侧的分区编辑入口（触屏可用）
+	private var categoryEditor:FreeplayCategoryEditor = null; // 分区编辑器（非 null 表示正打开）
+	private var _suppressSearchChange:Bool = false; // 重建顶栏时回填搜索文字，避免重复触发筛选
 	private var topBarWidth:Float = 0; // 上次布局宽度，窗口尺寸变化后重新摆放
 	private var highscoreLeft:Float = -1000; // 高分面板左边界，自定义分区行按它避让
 	private var lastLayoutPanelLeft:Float = -1000;
@@ -297,8 +317,6 @@ class FreeplayState extends MusicBeatState
 
 	var lerpSelected:Float = 0;
 	var curDifficulty:Int = -1;
-	// 用于检测选择变化，仅在变化时触发图标预热，避免每帧空转造成 GC
-	var lastWarmupSelected:Int = -999;
 
 	private static var lastDifficultyName:String = Difficulty.getDefault();
 
@@ -316,21 +334,16 @@ class FreeplayState extends MusicBeatState
 	private var curPlaying:Bool = false;
 
 	private var iconArray:Array<HealthIcon> = null;
-	private var iconLoadStatus:Array<Bool> = []; // 记录每个图标是否已加载
-	// songTextArray[i] = songs[i] 的菜单条目：与 grpSongs.members 顺序解耦，支持分帧乱序构建
+	private var iconLoadStatus:Array<Bool> = []; // 记录每个图标是否已加载（创建失败也标记，避免每帧重试）
+	// songTextArray[i] = songs[i] 的菜单条目：按需创建，未创建的为 null。
+	// 进入 Freeplay 时不再一次性把整张列表（1000+ 首）建出来。
 	private var songTextArray:Array<Alphabet> = [];
-	private var _listBuildPriority:Array<Int> = null; // 分帧构建顺序：可见窗口优先，其余按序号
-	private var _listBuildIndex:Int = -1; // 分帧构建游标；-1 表示已构建完毕
-	// 进入 Freeplay 时只同步构建可见窗口，其余条目每空闲帧最多补建这么多条，
-	// 把“几百首歌一次全建”的卡顿摊到进入后的前几帧。
-	private static inline var LIST_BUILD_PER_FRAME:Int = 24;
-
-	// 图标分帧构建：与文本列表同理，进入时只同步建 curSelected ± ICON_RADIUS 的可见图标，
-	// 其余图标在 update() 空闲帧按 ICON_BUILD_PER_FRAME 逐帧补建，
-	// 避免进入时一次性同步创建全部图标精灵（含文件系统探测）造成的卡顿。
-	private var _iconBuildPriority:Array<Int> = null; // 图标分帧构建顺序：可见窗口优先，其余按序号
-	private var _iconBuildIndex:Int = -1; // 图标分帧游标；-1 表示已构建完毕
-	private static inline var ICON_BUILD_PER_FRAME:Int = 16;
+	// 单帧最多创建的文本行数：滚动/跳转时按需创建，把开销摊到多帧，避免整页跳转一次性卡顿
+	private static inline var TEXT_CREATE_PER_FRAME:Int = 8;
+	// 远距离回收：离选中项超过该行数的条目会被移除并置空，内存不随浏览时长/曲库规模增长
+	private static inline var RECYCLE_DISTANCE:Int = 40;
+	private static inline var RECYCLE_PER_FRAME:Int = 24;
+	private var _recycleCursor:Int = 0;
 
 	var bg:FlxSprite;
 	var intendedColor:Int;
@@ -345,9 +358,6 @@ class FreeplayState extends MusicBeatState
 	var bottomText:FlxText;
 	var bottomBG:FlxSprite;
 
-	// 分帧加载指示：进入 Freeplay 后列表/图标仍在空闲帧补建时，在右下角显示加载字样
-	private var loadingText:FlxText;
-
 	var player:MusicPlayer;
 
 	// BPM变化提示相关
@@ -360,6 +370,7 @@ class FreeplayState extends MusicBeatState
 	// 回放缓存相关
 	private var cachedReplayText:String = "";
 	private var cachedReplayIndex:Map<String, Array<String>> = new Map(); // 缓存回放文件索引：歌曲名 -> 难度列表
+	private var _replayIndexMod:String = null; // 上次建立索引所用的模组目录，相同则跳过重扫
 	#if FEATURE_FILESYSTEM
 	private var replayButton:FlxButton = null; // 右上角 E 键回放按钮
 	#end
@@ -480,10 +491,6 @@ class FreeplayState extends MusicBeatState
 		reloadSongList();
 		var __t5:Float = haxe.Timer.stamp();
 		trace('[FREEPLAY] reloadSongList: ' + Math.round((__t5 - __t4) * 1000) + 'ms');
-		var __t7:Float = haxe.Timer.stamp();
-		preloadAllIcons();
-		var __t6:Float = haxe.Timer.stamp();
-		trace('[FREEPLAY] preloadAllIcons: ' + Math.round((__t6 - __t7) * 1000) + 'ms');
 		WeekData.setDirectoryFromWeek();
 
 		if (curSelected >= songs.length)
@@ -535,14 +542,6 @@ class FreeplayState extends MusicBeatState
 		// 用按语言映射的像素字体，中文提示才不会显示成空白方块
 		bottomText.setFormat(Paths.font(Language.get('uitab_font')), size, FlxColor.WHITE, CENTER);
 		bottomText.scrollFactor.set();
-
-		// 分帧加载提示：位于偏右下角（底部提示条上方），仅分帧构建进行中可见
-		// 使用 uitab_font（按语言映射的像素字体，中文为 zh_hans）以正确渲染「加载中…」
-		loadingText = new FlxText(0, 0, 0, '', 12);
-		loadingText.setFormat(Paths.font(Language.get('uitab_font')), 12, FlxColor.WHITE, LEFT, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
-		loadingText.scrollFactor.set();
-		loadingText.visible = false;
-		add(loadingText);
 
 		player = new MusicPlayer(this);
 
@@ -664,8 +663,8 @@ class FreeplayState extends MusicBeatState
 	 * 重建歌曲显示列表（grpSongs / grpIcons / 图标状态数组）。
 	 * 在初始创建以及筛选条件变化时调用。
 	 *
-	 * 分帧构建：先同步建好"可见窗口"（±_drawDistance 文本行 + ±ICON_RADIUS 图标区），
-	 * 其余条目在 update() 的空闲帧里按 LIST_BUILD_PER_FRAME 逐帧补建，避免几百首歌一次性全建卡顿。
+	 * 不再一次性构建整张列表：只有滚动到可见范围的条目才会被创建（见 updateVisibleItems），
+	 * 因此进入耗时与内存占用都不随曲库规模（1000+ 首）增长。
 	 */
 	private function reloadSongList():Void
 	{
@@ -674,98 +673,121 @@ class FreeplayState extends MusicBeatState
 		iconArray = new Array<HealthIcon>();
 		iconLoadStatus = new Array<Bool>();
 		songTextArray = new Array<Alphabet>();
-		_lastIconVisibles = []; // 列表重建后清空图标可见缓存
-		_lastVisibles = [];
+		_lastIconVisibles.resize(0); // 列表重建后清空图标可见缓存
+		_lastVisibles.resize(0);
+		_recycleCursor = 0;
+		_listVersion++;
 
-		// 预填占位：分帧构建期间 updateVisibleItems 对未就绪条目做 null 跳过
+		// 只预填占位：真正的文本/图标在进入可见窗口时按需创建
 		for (i in 0...songs.length)
 		{
 			songTextArray.push(null);
 			iconArray.push(null);
 			iconLoadStatus.push(false);
 		}
-
-		// 构建优先级：可见窗口排最前（同步建），其余按序号在空闲帧补建
-		var center:Int = Math.round(Math.max(0, Math.min(songs.length - 1, curSelected)));
-		_listBuildPriority = [];
-		function addPriority(i:Int):Void
-		{
-			if (i >= 0 && i < songs.length && _listBuildPriority.indexOf(i) == -1)
-				_listBuildPriority.push(i);
-		}
-		for (offset in (-_drawDistance)...(_drawDistance + 1))
-			addPriority(center + offset);
-		for (offset in (-ICON_RADIUS)...(ICON_RADIUS + 1))
-			addPriority(center + offset);
-		for (i in 0...songs.length)
-			addPriority(i);
-
-		// 同步先建可见窗口（Alphabet ±drawDistance + 图标 ±ICON_RADIUS），其余走空闲帧补建
-		_listBuildIndex = 0;
-		var windowBudget:Int = (_drawDistance * 2 + 1) + (ICON_RADIUS * 2 + 1);
-		buildListBatch(windowBudget);
 	}
 
 	/**
-	 * 按预算构建列表条目（Alphabet）。构建完成的条目由 updateVisibleItems 统一管理可见性。
-	 * @param budget 本批最多新建条数；windowBudget 用于同步补建可见窗口，LIST_BUILD_PER_FRAME 用于空闲帧补建。
+	 * 创建单条菜单文本（Alphabet）。已存在则直接返回。
+	 * 创建失败（字体/图集异常）时返回 null，调用方跳过该行。
 	 */
-	private function buildListBatch(budget:Int):Void
+	private function ensureSongText(i:Int):Alphabet
 	{
-		if (_listBuildIndex < 0 || _listBuildPriority == null)
+		if (i < 0 || i >= songs.length)
+			return null;
+		var item:Alphabet = songTextArray[i];
+		if (item != null)
+			return item;
+
+		try
+		{
+			item = new Alphabet(90, 320, songs[i].songName, true);
+		}
+		catch (e:Dynamic)
+		{
+			trace('Failed to create song text for ${songs[i].songName}: ' + e);
+			return null;
+		}
+
+		item.targetY = i;
+		grpSongs.add(item);
+		item.scaleX = Math.min(1, 980 / item.width);
+		item.snapToPosition();
+
+		// too laggy with a lot of songs, so i had to recode the logic for it
+		item.visible = item.active = item.isMenuItem = false;
+		songTextArray[i] = item;
+		return item;
+	}
+
+	/**
+	 * 创建单个小图标（HealthIcon）。已存在、或已尝试过（含失败）时返回 null。
+	 * 位置由 updateVisibleItems 用投影公式统一设置。
+	 */
+	private function ensureIcon(i:Int):HealthIcon
+	{
+		if (i < 0 || i >= songs.length)
+			return null;
+		if (iconLoadStatus[i])
+			return iconArray[i];
+
+		// 先标记已尝试：创建失败也不重试，避免每帧反复探测文件系统
+		iconLoadStatus[i] = true;
+		var savedDir:String = Mods.currentModDirectory; // 保存当前目录，避免全局目录被污染
+		Mods.currentModDirectory = songs[i].folder;
+		var ic:HealthIcon = null;
+		try
+		{
+			ic = new HealthIcon(songs[i].songCharacter);
+		}
+		catch (e:Dynamic)
+		{
+			trace('Failed to create icon for ${songs[i].songName}: ' + e);
+		}
+		Mods.currentModDirectory = savedDir; // 无论成败都恢复选中曲目的目录
+		if (ic == null)
+			return null;
+
+		ic.sprTracker = null; // 位置在 updateVisibleItems 里用投影公式手动设置
+		ic.visible = ic.active = false;
+		iconArray[i] = ic;
+		grpIcons.add(ic);
+		return ic;
+	}
+
+	/**
+	 * 远距离回收：把离选中项太远的条目从组里移除并置空，交给 GC 释放。
+	 * 每帧只处理少量索引，完整扫描一圈的开销可以忽略；内存因此不随浏览时长增长。
+	 */
+	private function recycleDistantItems():Void
+	{
+		var n:Int = songs.length;
+		if (n == 0)
 			return;
 
-		var built:Int = 0;
-		while (_listBuildIndex < _listBuildPriority.length && built < budget)
+		for (_ in 0...Std.int(Math.min(RECYCLE_PER_FRAME, n)))
 		{
-			var i:Int = _listBuildPriority[_listBuildIndex++];
-			if (i < 0 || i >= songs.length || songTextArray[i] != null)
+			if (_recycleCursor >= n)
+				_recycleCursor = 0;
+			var i:Int = _recycleCursor++;
+			if (Math.abs(i - curSelected) <= RECYCLE_DISTANCE)
 				continue;
 
-			var songText:Alphabet = new Alphabet(90, 320, songs[i].songName, true);
-			songText.targetY = i;
-			grpSongs.add(songText);
+			var item:Alphabet = songTextArray[i];
+			if (item != null && !item.visible)
+			{
+				grpSongs.remove(item, true);
+				songTextArray[i] = null;
+			}
 
-			songText.scaleX = Math.min(1, 980 / songText.width);
-			songText.snapToPosition();
-
-			// too laggy with a lot of songs, so i had to recode the logic for it
-			songText.visible = songText.active = songText.isMenuItem = false;
-			songTextArray[i] = songText;
-			built++;
+			var icon:HealthIcon = iconArray[i];
+			if (icon != null && !icon.visible)
+			{
+				grpIcons.remove(icon, true);
+				iconArray[i] = null;
+				iconLoadStatus[i] = false; // 滚回来时允许重新创建
+			}
 		}
-
-		if (_listBuildIndex >= _listBuildPriority.length)
-		{
-			_listBuildIndex = -1;
-			_listBuildPriority = null;
-		}
-	}
-
-	/**
-	 * 分帧加载进行中时，在右下角显示加载提示（含剩余待构建数量）；构建完成后自动隐藏。
-	 * 仅在启用「Freeplay 分帧加载」且仍有条目/图标在空闲帧补建时显示。
-	 */
-	private function updateLoadingIndicator():Void
-	{
-		if (loadingText == null)
-			return;
-
-		var building:Bool = (_listBuildIndex >= 0 || _iconBuildIndex >= 0);
-		loadingText.visible = building;
-		if (!building)
-			return;
-
-		var remaining:Int = 0;
-		if (_listBuildIndex >= 0 && _listBuildPriority != null)
-			remaining += (_listBuildPriority.length - _listBuildIndex);
-		if (_iconBuildIndex >= 0 && _iconBuildPriority != null)
-			remaining += (_iconBuildPriority.length - _iconBuildIndex);
-
-		loadingText.text = OptionsLanguage.get('freeplay_loading_text', 'Loading...') + (remaining > 0 ? ' (' + remaining + ')' : '');
-		// 偏右下角：距右缘 24px，位于底部提示条（高度 26）上方
-		loadingText.x = FlxG.width - loadingText.width - 24;
-		loadingText.y = FlxG.height - 55;
 	}
 
 	/**
@@ -808,9 +830,6 @@ class FreeplayState extends MusicBeatState
 		lerpSelected = curSelected;
 
 		reloadSongList();
-		// 筛选后列表已重建，图标全部置为未加载；这里一次性全部预加载，
-		// 避免退化为 warmupIcons 每帧 2 个的懒加载，导致滚动时图标逐个冒出的现象。
-		preloadAllIcons();
 
 		if (songs.length > 0)
 		{
@@ -845,41 +864,73 @@ class FreeplayState extends MusicBeatState
 		categoryList.push(allCat);
 		categorySongs.push(songsFull);
 
+		// 每首歌的曲名路径 / 归一化文件夹 / 周目名只算一次：
+		// 1000+ 首 × 多个分区时不再重复分配字符串，也不再对数组反复 indexOf（原来整体是 O(n²)）
+		var n:Int = songsFull.length;
+		var songPaths:Array<String> = [];
+		var songFolders:Array<String> = [];
+		var songWeekFiles:Array<String> = [];
+		var songWeekNames:Array<String> = [];
+		for (i in 0...n)
+		{
+			var meta:SongMetadata = songsFull[i];
+			songPaths.push(Paths.formatToSongPath(meta.songName));
+			songFolders.push(FreeplayCategory.normalizeFolderName(meta.folder));
+			songWeekFiles.push(getWeekFileName(meta));
+			songWeekNames.push(getWeekDisplayName(meta));
+		}
+
 		// 先解析自定义分区（不直接入列表，等“未分类”插队到前面后再合并）
 		var customCats:Array<FreeplayCategory> = [];
 		var customSongs:Array<Array<SongMetadata>> = [];
 		var configured:Array<FreeplayCategory> = FreeplayCategory.loadAll();
+		var anyMatched:Array<Bool> = [];
+		for (i in 0...n)
+			anyMatched.push(false);
+
 		for (cat in configured)
 		{
 			var list:Array<SongMetadata> = [];
+			var member:Array<Bool> = [];
+			for (i in 0...n)
+				member.push(false);
 
 			// 先按 JSON 里 songs 的书写顺序放入：逐条按 [曲名, 文件夹] 精确匹配，
 			// 这样分区内的曲目顺序与配置一致，而不是沿用全局列表顺序。
+			// exclude 优先：被显式排除的曲目即便写在 songs 里也不放入（编辑器用它来移出规则命中的歌）。
 			for (s in cat.songs)
 			{
 				var songPath:String = s[0];
 				var folderFilter:String = (s[1] == null) ? '' : s[1];
-				for (meta in songsFull)
+				var folderNorm:String = (folderFilter.length == 0) ? '' : FreeplayCategory.normalizeFolderName(folderFilter);
+				for (i in 0...n)
 				{
-					if (list.indexOf(meta) != -1)
+					if (member[i])
 						continue;
-					if (Paths.formatToSongPath(meta.songName) != songPath)
+					if (songPaths[i] != songPath)
 						continue;
-					if (folderFilter.length > 0
-						&& FreeplayCategory.normalizeFolderName(folderFilter) != FreeplayCategory.normalizeFolderName(meta.folder))
+					if (folderFilter.length > 0 && folderNorm != songFolders[i])
 						continue;
-					list.push(meta);
+					if (cat.isExcludedPrepared(songPath, songFolders[i]))
+						continue;
+					member[i] = true;
+					anyMatched[i] = true;
+					list.push(songsFull[i]);
 					break; // 一条配置只取第一个匹配（同名曲目可能存在于多个模组）
 				}
 			}
 
 			// 再按 folders / weeks 补齐 songs 里没写到的曲目（没有这些规则时不会有多余项）
-			for (meta in songsFull)
+			for (i in 0...n)
 			{
-				if (list.indexOf(meta) != -1)
+				if (member[i])
 					continue;
-				if (cat.matches(meta, getWeekFileName(meta), getWeekDisplayName(meta)))
-					list.push(meta);
+				if (cat.matchesRulesPrepared(songFolders[i], songWeekFiles[i], songWeekNames[i]))
+				{
+					member[i] = true;
+					anyMatched[i] = true;
+					list.push(songsFull[i]);
+				}
 			}
 
 			if (list.length == 0)
@@ -890,19 +941,10 @@ class FreeplayState extends MusicBeatState
 
 		// 未分类：没被任何自定义分区匹配到的歌（紧跟“全部”，固定在第一行）
 		var uncategorized:Array<SongMetadata> = [];
-		for (meta in songsFull)
+		for (i in 0...n)
 		{
-			var matched:Bool = false;
-			for (list in customSongs)
-			{
-				if (list.indexOf(meta) != -1)
-				{
-					matched = true;
-					break;
-				}
-			}
-			if (!matched)
-				uncategorized.push(meta);
+			if (!anyMatched[i])
+				uncategorized.push(songsFull[i]);
 		}
 		if (uncategorized.length > 0)
 		{
@@ -1139,6 +1181,8 @@ class FreeplayState extends MusicBeatState
 		// 背景/边框由 applyHaxeThemeOverrides 的 .textfield 规则统一处理，这里只设字体与内边距
 		haxeSearchField.styleString = 'font-name: $font; font-size: ${TOP_FONT_SIZE}px; padding: 3px 6px;';
 		haxeSearchField.registerEvent(UIEvent.CHANGE, function(_) {
+			if (_suppressSearchChange)
+				return;
 			var txt:String = getSearchText();
 			// 去除可能由 TAB 误输入的制表符，避免筛选异常
 			if (txt.indexOf('\t') >= 0)
@@ -1151,6 +1195,24 @@ class FreeplayState extends MusicBeatState
 		// 回车提交后取消聚焦，避免继续拦截选歌/方向键
 		haxeSearchField.registerEvent(UIEvent.SUBMIT, function(_) haxeSearchField.focus = false);
 		haxeSearchBox.addComponent(haxeSearchField);
+
+		// ---- 分区编辑入口（触屏没有 Tab 键，放一个按钮在第一行末尾）----
+		categoryEditButton = new Button();
+		categoryEditButton.text = OptionsLanguage.get('freeplay_cat_editor_entry', 'EDIT');
+		categoryEditButton.width = EDIT_BTN_W;
+		categoryEditButton.height = SEARCH_BOX_H - 4;
+		// 禁止键盘焦点，避免确认键被 HaxeUI 焦点系统吞掉
+		categoryEditButton.allowFocus = false;
+		categoryEditButton.styleString = 'font-name: $font; font-size: 14px;';
+		categoryEditButton.registerEvent(MouseEvent.CLICK, function(_) {
+			if (haxeSearchField != null)
+				haxeSearchField.focus = false;
+			openCategoryEditor();
+		});
+		// 单独挂到屏幕上（不要放进 haxeSearchBox：搜索框的 TextField 用 percentWidth=100，
+		// 再加一个固定宽度的兄弟节点会把输入框挤出可视区域）。位置由 layoutTopBar 计算。
+		Screen.instance.addComponent(categoryEditButton);
+
 		Screen.instance.addComponent(haxeSearchBox);
 
 		syncTabSelection();
@@ -1177,14 +1239,24 @@ class FreeplayState extends MusicBeatState
 		var fixedW:Float = Math.min(fixedTabBar.getContentWidth(), Math.max(180, FlxG.width * 0.45));
 		fixedTabBar.layout(TOP_BAR_X, fixedW);
 
+		// 分区编辑按钮占最右侧固定宽度，筛选框宽度要把它扣掉，避免被挤出面板
+		var editW:Float = EDIT_BTN_W;
 		var searchX:Float = TOP_BAR_X + fixedW + SEARCH_GAP;
-		var searchW:Float = panelLeft - PANEL_GAP - searchX;
+		var searchW:Float = panelLeft - PANEL_GAP - searchX - editW - SEARCH_GAP;
 		if (searchW < 100)
 			searchW = 100;
 		haxeSearchBox.x = searchX;
 		haxeSearchBox.y = SEARCH_ROW_Y;
 		haxeSearchBox.width = searchW;
 		haxeSearchBox.height = SEARCH_BOX_H;
+
+		if (categoryEditButton != null)
+		{
+			categoryEditButton.x = searchX + searchW + SEARCH_GAP;
+			categoryEditButton.y = SEARCH_ROW_Y + 2;
+			categoryEditButton.width = editW;
+			categoryEditButton.height = SEARCH_BOX_H - 4;
+		}
 
 		// 第二行：显示范围跟着高分面板的长度收缩
 		customTabBar.layout(TOP_BAR_X, Math.max(160, panelLeft - PANEL_GAP - TOP_BAR_X));
@@ -1244,6 +1316,116 @@ class FreeplayState extends MusicBeatState
 			customTabBar.setVisible(visible && categoryList.length > fixedTabCount());
 		if (!visible && haxeSearchField != null)
 			haxeSearchField.focus = false;
+		if (categoryEditButton != null)
+			categoryEditButton.hidden = !visible;
+	}
+
+	// ==================== 分区编辑器 ====================
+
+	/** 打开分区编辑器（非试听播放时）。 */
+	private function openCategoryEditor():Void
+	{
+		if (categoryEditor != null || player == null || player.playingMusic)
+			return;
+		if (Controls.instance.isInSubstate)
+			return;
+
+		if (haxeSearchField != null)
+			haxeSearchField.focus = false;
+		setHaxeTopBarVisible(false);
+
+		#if desktop
+		FlxG.mouse.visible = true;
+		#end
+
+		// 新建的分区 id 依赖 songsFull 里的曲目信息，编辑器内部自行读取并保存
+		categoryEditor = new FreeplayCategoryEditor(songsFull);
+		categoryEditor.onClose = closeCategoryEditor;
+		categoryEditor.onSaved = onCategoryEditorSaved;
+		categoryEditor.build();
+		FlxG.sound.play(Paths.sound('scrollMenu'), 0.4);
+	}
+
+	/** 关闭编辑器（不写盘），并恢复顶部 Tab 栏。 */
+	private function closeCategoryEditor():Void
+	{
+		if (categoryEditor == null)
+			return;
+		categoryEditor.destroy();
+		categoryEditor = null;
+		if (!player.playingMusic)
+			setHaxeTopBarVisible(true);
+	}
+
+	/** 编辑器保存成功：先关掉界面，再按新配置重建分区与 Tab 栏。 */
+	private function onCategoryEditorSaved():Void
+	{
+		closeCategoryEditor();
+		rebuildAfterCategoryEdit();
+		FlxG.sound.play(Paths.sound('scrollMenu'), 0.4);
+	}
+
+	/**
+	 * 分区配置变更后重建：分区列表、顶部两行 Tab、搜索框与左侧曲目列表。
+	 * 尽量保持当前停留的分区（按 id 找回，找不到则回到“全部”）。
+	 */
+	private function rebuildAfterCategoryEdit():Void
+	{
+		var searchText:String = getSearchText();
+		var curId:String = (curCategory >= 0 && curCategory < categoryList.length) ? categoryList[curCategory].id : '';
+
+		buildCategoryList();
+		curCategory = 0;
+		for (i in 0...categoryList.length)
+		{
+			if (categoryList[i].id == curId)
+			{
+				curCategory = i;
+				break;
+			}
+		}
+
+		destroyHaxeUITopBar();
+		buildHaxeUITopBar();
+
+		if (haxeSearchField != null)
+		{
+			_suppressSearchChange = true;
+			haxeSearchField.text = searchText;
+			_suppressSearchChange = false;
+		}
+		applyFilter(searchText);
+	}
+
+	/** 释放顶部两行 Tab 栏与搜索框（重建前调用；HaxeUI 组件需要显式移除）。 */
+	private function destroyHaxeUITopBar():Void
+	{
+		if (fixedTabBar != null)
+		{
+			fixedTabBar.destroy();
+			fixedTabBar = null;
+		}
+		if (customTabBar != null)
+		{
+			customTabBar.destroy();
+			customTabBar = null;
+		}
+		if (haxeSearchBox != null)
+		{
+			if (haxeSearchField != null)
+				haxeSearchField.focus = false;
+			Screen.instance.removeComponent(haxeSearchBox);
+			haxeSearchBox = null;
+			haxeSearchField = null;
+		}
+		if (categoryEditButton != null)
+		{
+			Screen.instance.removeComponent(categoryEditButton);
+			categoryEditButton = null;
+		}
+		// 强制下次 layoutTopBar 重新摆放
+		topBarWidth = 0;
+		lastLayoutPanelLeft = -1000;
 	}
 
 	/** 每帧维护：窗口尺寸变化后重新摆放（高分面板宽度变化由 positionHighscore 触发）。 */
@@ -1291,18 +1473,21 @@ class FreeplayState extends MusicBeatState
 		if (WeekData.weeksList.length < 1)
 			return;
 
-		// 空闲帧补建列表条目：可见窗口已在 reloadSongList 同步建好，
-		// 其余按 LIST_BUILD_PER_FRAME 逐帧补齐，避免一次性全建卡顿
-		if (_listBuildIndex >= 0)
-			buildListBatch(LIST_BUILD_PER_FRAME);
-
-		// 空闲帧补建图标：可见窗口已在 preloadAllIcons 同步建好，
-		// 其余按 ICON_BUILD_PER_FRAME 逐帧补齐，避免进入时同步创建全部图标精灵
-		if (_iconBuildIndex >= 0)
-			buildIconsBatch(ICON_BUILD_PER_FRAME);
-
-		// 分帧加载进行中时于右下角显示加载提示，构建完成后自动隐藏
-		updateLoadingIndicator();
+		// 分区编辑器打开时接管全部输入：只处理退出键，其余交给 HaxeUI 组件
+		if (categoryEditor != null)
+		{
+			if (controls.BACK)
+			{
+				closeCategoryEditor();
+				FlxG.sound.play(Paths.sound('cancelMenu'));
+				super.update(elapsed);
+				return;
+			}
+			// 每帧驱动虚拟列表：同步勾选状态 + 按滚动位置重绑可见行
+			categoryEditor.update();
+			super.update(elapsed);
+			return;
+		}
 
 		// 是否正在搜索框中输入（避免空格/方向键等被 freeplay 逻辑拦截）
 		var typingSearch:Bool = isTypingSearch();
@@ -1365,32 +1550,17 @@ class FreeplayState extends MusicBeatState
 			chartInfoText.visible = showInfo;
 		}
 
-		if (FlxG.keys.justPressed.TAB)
+		// TAB：试听播放时切换谱面信息面板，非播放时打开分区编辑器
+		if (FlxG.keys.justPressed.TAB && !typingSearch && !Controls.instance.isInSubstate)
 		{
-			_chartInfoVisible = !_chartInfoVisible;
+			if (player.playingMusic)
+				_chartInfoVisible = !_chartInfoVisible;
+			else
+				openCategoryEditor();
 		}
 
 		// 后台预解析当前选中曲目的谱面，让按下确认键时直接命中缓存
 		updateChartPrefetch(elapsed);
-
-		// 仅在曲目切换时预热图标，避免每帧空转造成 GC 尖刺
-		if (!player.playingMusic && curSelected != lastWarmupSelected)
-		{
-			lastWarmupSelected = curSelected;
-			warmupIcons();
-		}
-
-		// 低频主动 GC：每 GC_INTERVAL 秒在空闲时跑一次 NativeGc，
-		// 及时回收被 clearPreviewSounds / LRU 淘汰后沦为孤儿的 SwagSong、AudioBuffer 与废弃图标纹理，
-		// 把"反反复复爆浆"的锯齿内存曲线压平成稳定的低位平台。
-		_lastGcTime += elapsed;
-		if (_lastGcTime >= GC_INTERVAL)
-		{
-			_lastGcTime = 0;
-			#if cpp
-			cpp.NativeGc.run(true);
-			#end
-		}
 
 		if (FlxG.sound.music.volume < 0.7)
 			FlxG.sound.music.volume += 0.5 * elapsed;
@@ -2351,10 +2521,16 @@ class FreeplayState extends MusicBeatState
 	 */
 	private function preloadReplayIndex():Void
 	{
+		var moddirCheck:String = (Mods.currentModDirectory != null && Mods.currentModDirectory.length > 0) ? Mods.currentModDirectory : 'global';
+		// 同一模组目录下的回放列表不会变化：滚动选歌时直接复用已有索引，
+		// 避免每换一首歌就重新 readDirectory + 解析全部回放 JSON（大量临时字符串 → GC 抖动）。
+		if (_replayIndexMod == moddirCheck)
+			return;
+		_replayIndexMod = moddirCheck;
+
 		// 清空之前的缓存
 		cachedReplayIndex = new Map();
-		
-		var moddirCheck:String = (Mods.currentModDirectory != null && Mods.currentModDirectory.length > 0) ? Mods.currentModDirectory : 'global';
+
 		var replayFolderCheck:String = Paths.mods(moddirCheck + '/replay');
 		
 		if (!FileSystem.exists(replayFolderCheck))
@@ -2535,18 +2711,30 @@ class FreeplayState extends MusicBeatState
 			if (songTextArray[i] != null)
 				songTextArray[i].visible = songTextArray[i].active = false;
 		}
-		_lastVisibles = [];
+		_lastVisibles.resize(0);
 
 		// 计算当前可见文本范围（基于lerpSelected而不是curSelected，使过渡更平滑）
 		var min:Int = Math.round(Math.max(0, Math.min(songs.length, lerpSelected - _drawDistance)));
 		var max:Int = Math.round(Math.max(0, Math.min(songs.length, lerpSelected + _drawDistance)));
 
-		// 只显示可见范围内的文本对象（分帧构建未就绪的条目先跳过）
+		// 选中行优先按需创建：整页跳转时保证焦点那一行一定是完整的
+		var created:Int = 0;
+		if (curSelected >= min && curSelected < max && songTextArray[curSelected] == null && ensureSongText(curSelected) != null)
+			created++;
+
+		// 只显示可见范围内的文本对象；未创建的按需创建（每帧有上限，避免整页跳转时一次性建太多行卡顿）
 		for (i in min...max)
 		{
 			var item:Alphabet = songTextArray[i];
 			if (item == null)
-				continue;
+			{
+				if (created >= TEXT_CREATE_PER_FRAME)
+					continue;
+				item = ensureSongText(i);
+				created++;
+				if (item == null)
+					continue;
+			}
 			item.visible = item.active = true;
 			item.x = ((item.targetY - lerpSelected) * item.distancePerItem.x) + item.startPosition.x;
 			item.y = ((item.targetY - lerpSelected) * 1.3 * item.distancePerItem.y) + item.startPosition.y;
@@ -2560,35 +2748,24 @@ class FreeplayState extends MusicBeatState
 		hideLastIcons();
 		var iconMin:Int = Math.round(Math.max(0, Math.min(songs.length, lerpSelected - ICON_RADIUS)));
 		var iconMax:Int = Math.round(Math.max(0, Math.min(songs.length, lerpSelected + ICON_RADIUS)));
+		var iconCreated:Int = 0;
 		for (i in iconMin...iconMax)
 		{
 			var songItem:Alphabet = songTextArray[i];
 			if (songItem == null)
-				continue; // 文本行尚未构建，图标位置依赖其尺寸，先跳过
-
-			// 选中项若尚未预热，做一次同步创建（最多 1 次解码，保证焦点图标始终可见）
-			if (iconArray[i] == null && i == curSelected && !iconLoadStatus[i])
-			{
-				var __savedDir:String = Mods.currentModDirectory; // 保存当前目录，避免全局目录被污染
-				Mods.currentModDirectory = songs[i].folder;
-				var selIcon:HealthIcon = null;
-				try {
-					selIcon = new HealthIcon(songs[i].songCharacter);
-				} catch (e:Dynamic) {
-					trace('Failed to create selected icon for ${songs[i].songName}: ' + e);
-				}
-				Mods.currentModDirectory = __savedDir; // 无论成败都恢复选中曲目的目录
-				if (selIcon != null) {
-					selIcon.sprTracker = null; // 位置在下方用投影公式手动设置
-					iconArray[i] = selIcon;
-					iconLoadStatus[i] = true;
-					grpIcons.add(selIcon);
-				}
-			}
+				continue; // 文本行尚未创建，图标位置依赖其尺寸，下一帧会随文本补建
 
 			var icon:HealthIcon = iconArray[i];
 			if (icon == null)
-				continue;
+			{
+				// 按需创建（每帧有上限，把 PNG 解码/文件系统探测摊到多帧）
+				if (iconLoadStatus[i] || iconCreated >= ICON_WARM_PER_FRAME)
+					continue;
+				icon = ensureIcon(i);
+				iconCreated++;
+				if (icon == null)
+					continue;
+			}
 
 			// 与 HealthIcon.update 中跟随 sprTracker 的偏移一致：(sprTracker.x + width + 12, sprTracker.y - 30)
 			var sx:Float = ((songItem.targetY - lerpSelected) * songItem.distancePerItem.x) + songItem.startPosition.x;
@@ -2598,6 +2775,9 @@ class FreeplayState extends MusicBeatState
 			icon.alpha = ((i == curSelected) ? 1.0 : 0.6) * listFade; // 设置选中项的透明度；listFade 处理切区淡入
 			_lastIconVisibles.push(i);
 		}
+
+		// 远距离回收，让内存不随浏览时长/曲库规模无限增长
+		recycleDistantItems();
 	}
 
 	// 隐藏上一帧显示过的小图标（含超出文本可视窗口的邻近图标）
@@ -2608,134 +2788,7 @@ class FreeplayState extends MusicBeatState
 			if (iconArray[i] != null)
 				iconArray[i].visible = iconArray[i].active = false;
 		}
-		_lastIconVisibles = [];
-	}
-
-	/** 一次性把列表里所有小图标建好并常驻，与 PsychEngine 原版一致：
-	 *  浏览/滚动过程不再有任何新建或解码，内存进入 Freeplay 时即一次性到顶、之后保持稳定。
-	 *  分帧构建：curSelected ± ICON_RADIUS 的可见图标同步建好，其余在 update() 空闲帧按
-	 *  ICON_BUILD_PER_FRAME 逐帧补建，避免进入时同步创建全部图标精灵导致卡顿。
-	 */
-	private function preloadAllIcons():Void
-	{
-		if (songs.length == 0 || iconArray == null)
-			return;
-
-		// 构建优先级：可见窗口（curSelected ± ICON_RADIUS）排最前（同步建），其余按序号空闲帧补建
-		var center:Int = Math.round(Math.max(0, Math.min(songs.length - 1, curSelected)));
-		_iconBuildPriority = [];
-		function addPriority(i:Int):Void
-		{
-			if (i >= 0 && i < songs.length && _iconBuildPriority.indexOf(i) == -1)
-				_iconBuildPriority.push(i);
-		}
-		for (offset in (-ICON_RADIUS)...(ICON_RADIUS + 1))
-			addPriority(center + offset);
-		for (i in 0...songs.length)
-			addPriority(i);
-
-		// 同步只建可见窗口内的 HealthIcon（±ICON_RADIUS = 17 个），其余由 update() 空闲帧逐帧补建。
-		// 与 Alphabet 列表的 windowBudget 策略保持一致：在 create() 只做"必须立即可见"的内容，
-		// 把剩余的 400+ HealthIcon 创建分摊到 20 帧（~333ms），避免一次性 ~900ms 同步阻塞。
-		_iconBuildIndex = 0;
-		var __visibleBudget:Int = Std.int(Math.min(ICON_RADIUS * 2 + 1, songs.length));
-		buildIconsBatch(__visibleBudget);
-	}
-
-	/**
-	 * 按预算批量创建图标精灵。与 buildListBatch 同理：同步调用用于补建可见窗口，
-	 * 空闲帧调用用于逐帧补齐其余图标，把 PNG 解码/文件系统探测/精灵创建摊到多帧。
-	 */
-	private function buildIconsBatch(budget:Int):Void
-	{
-		if (_iconBuildIndex < 0 || _iconBuildPriority == null)
-			return;
-
-		var built:Int = 0;
-		while (_iconBuildIndex < _iconBuildPriority.length && built < budget)
-		{
-			var i:Int = _iconBuildPriority[_iconBuildIndex++];
-			if (i < 0 || i >= songs.length || iconLoadStatus[i])
-				continue;
-
-			// 标记已尝试（创建失败也标记，避免每帧重试）；updateVisibleItems 的选中项兜底
-			// 依赖该标记，创建成功前若被选中会走其同步兜底逻辑。
-			iconLoadStatus[i] = true;
-			var __savedDir:String = Mods.currentModDirectory;
-			Mods.currentModDirectory = songs[i].folder;
-			var ic:HealthIcon = null;
-			try {
-				ic = new HealthIcon(songs[i].songCharacter);
-			} catch (e:Dynamic) {
-				trace('Failed to preload icon for ${songs[i].songName}: ' + e);
-			}
-			Mods.currentModDirectory = __savedDir;
-			if (ic == null)
-				continue;
-			// 位置由 updateVisibleItems 用投影公式统一设置，不绑定 sprTracker
-			ic.sprTracker = null;
-			ic.visible = ic.active = false;
-			iconArray[i] = ic;
-			grpIcons.add(ic);
-			built++;
-		}
-
-		if (_iconBuildIndex >= _iconBuildPriority.length)
-		{
-			_iconBuildIndex = -1;
-			_iconBuildPriority = null;
-		}
-	}
-
-	/**
-	 * 空闲时预加载“选中项附近 ±ICON_RADIUS”的小图标：每帧最多创建 ICON_WARM_PER_FRAME 个，
-	 * 把 PNG 解码/纹理上传开销摊到空闲帧，避免滚动过程中的间歇性卡顿。
-	 * 跟随 curSelected 形成一个滑动预热窗口（而非一次性预热整张列表），
-	 * 因此滚动或跳转后，新进入附近的图标会在后续帧被补建，始终及时显示。
-	 */
-	private function warmupIcons():Void
-	{
-		if (songs.length == 0 || iconArray == null || iconLoadStatus.length != songs.length)
-			return;
-
-		var warmedThisFrame:Int = 0;
-		// 仅扫描 curSelected ± ICON_RADIUS 的滑动窗口，开销极小；
-		// 已加载的会被跳过，未加载的按预算补建。
-		for (step in 0...(ICON_RADIUS * 2 + 1))
-		{
-			var offset:Int = (step % 2 == 0) ? (step >> 1) : -((step + 1) >> 1);
-			var i:Int = curSelected + offset;
-			if (i < 0 || i >= songs.length)
-				continue;
-
-			if (!iconLoadStatus[i])
-			{
-				var __savedDir:String = Mods.currentModDirectory; // 保存当前目录，避免全局目录被污染
-				Mods.currentModDirectory = songs[i].folder;
-				var ic:HealthIcon = null;
-				try {
-					ic = new HealthIcon(songs[i].songCharacter);
-				} catch (e:Dynamic) {
-					trace('Failed to create icon for ${songs[i].songName}: ' + e);
-				}
-				Mods.currentModDirectory = __savedDir; // 无论成败都恢复选中曲目的目录
-				if (ic == null) { // 创建失败，标记已尝试，避免每帧重试
-					iconLoadStatus[i] = true;
-					continue;
-				}
-				// 不绑定 sprTracker：位置由 updateVisibleItems 用投影公式统一设置，
-				// 使图标能独立于文本可视窗口、在选中项附近 ±ICON_RADIUS 显示。
-				ic.sprTracker = null;
-				ic.visible = false;
-				ic.active = false;
-				iconArray[i] = ic;
-				iconLoadStatus[i] = true;
-				grpIcons.add(ic);
-				warmedThisFrame++;
-				if (warmedThisFrame >= ICON_WARM_PER_FRAME)
-					return; // 本帧达到预算上限，余下留到后续空闲帧
-			}
-		}
+		_lastIconVisibles.resize(0);
 	}
 
 	/**
@@ -2938,7 +2991,6 @@ class FreeplayState extends MusicBeatState
 
 		// 重置Freeplay播放标志
 		isFreeplayPlayingMusic = false;
-		lastWarmupSelected = -999;
 
 		// 分区变动落盘（切区时只改了内存）
 		if (categoryPrefsDirty)
@@ -2974,6 +3026,11 @@ class FreeplayState extends MusicBeatState
 		clearPreviewSounds();
 
 		// 释放两行分区 Tab 栏的卡片精灵
+		if (categoryEditor != null)
+		{
+			categoryEditor.destroy();
+			categoryEditor = null;
+		}
 		if (fixedTabBar != null)
 		{
 			fixedTabBar.destroy();
