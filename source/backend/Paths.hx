@@ -80,11 +80,18 @@ class Paths
 			}
 		}
 
-		// run the garbage collector for good measure lmfao
-		System.gc();
-		#if cpp
-		cpp.NativeGc.run(true);
-		#end
+		// 仅在原生 GC 开启时强制回收。
+		// 注意：Gc.run()/System.gc() 不受 Gc.enable(false) 约束（hxcpp 的
+		// InternalCollect 不检查 sgInternalEnable），所以必须在这里显式判断，
+		// 否则关掉 GC 设置后游玩期间仍会被这里强制停顿一次。
+		// 关闭 GC 时只做资源解引用，贴图/音频仍按上面的逻辑正常释放。
+		if (ClientPrefs.data == null || ClientPrefs.data.garbageCollectorEnabled)
+		{
+			System.gc();
+			#if cpp
+			cpp.NativeGc.run(true);
+			#end
+		}
 	}
 
 	// define the locally tracked assets
