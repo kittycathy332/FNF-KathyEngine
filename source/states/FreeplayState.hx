@@ -21,12 +21,11 @@ import flash.media.Sound;
 import haxe.Json;
 import haxe.ui.Toolkit;
 import haxe.ui.core.Screen;
-import haxe.ui.components.Button;
 import haxe.ui.components.Label;
 import haxe.ui.components.TextField;
 import haxe.ui.containers.HBox;
-import haxe.ui.events.MouseEvent;
 import haxe.ui.events.UIEvent;
+import backend.ui.FreeplaySkewButton;
 import backend.ui.PsychUIRadioGroup;
 import backend.ui.PsychUIButton;
 import backend.ui.FreeplayTabBar;
@@ -287,7 +286,17 @@ class FreeplayState extends MusicBeatState
 
 	// 顶部：第一行固定分区（全部/未分类）+ 曲目筛选框，第二行自定义分区；高分面板占右上角
 	private static final TOP_BAR_X:Int = 12;
-	private static final TAB_ROW_Y:Int = 6;
+	/**
+	 * 顶部整条 Tab 栏的纵向偏移。
+	 * 移动端屏幕最上沿容易被状态栏/圆角/刘海占掉，手指在贴边位置也更容易点偏，
+	 * 所以移动端把第一行（含搜索框、分区编辑按钮与高分面板）整体下移一点。
+	 */
+	#if mobile
+	private static final TOP_BAR_OFFSET_Y:Int = 16;
+	#else
+	private static final TOP_BAR_OFFSET_Y:Int = 0;
+	#end
+	private static final TAB_ROW_Y:Int = 6 + TOP_BAR_OFFSET_Y;
 	private static final TAB_ROW_H:Int = 34;
 	private static final TOP_ROW_GAP:Int = 6;
 	private static final CUSTOM_ROW_Y:Int = TAB_ROW_Y + TAB_ROW_H + TOP_ROW_GAP;
@@ -302,7 +311,7 @@ class FreeplayState extends MusicBeatState
 	private var customTabBar:FreeplayTabBar = null; // 第二行：自定义分区
 	private var haxeSearchBox:HBox = null;
 	private var haxeSearchField:TextField = null;
-	private var categoryEditButton:Button = null; // 搜索框右侧的分区编辑入口（触屏可用）
+	private var categoryEditButton:FreeplaySkewButton = null; // 第一行末尾的分区编辑入口（触屏可用，斜切卡片样式）
 	private var categoryEditor:FreeplayCategoryEditor = null; // 分区编辑器（非 null 表示正打开）
 	private var _suppressSearchChange:Bool = false; // 重建顶栏时回填搜索文字，避免重复触发筛选
 	private var topBarWidth:Float = 0; // 上次布局宽度，窗口尺寸变化后重新摆放
@@ -1197,21 +1206,17 @@ class FreeplayState extends MusicBeatState
 		haxeSearchBox.addComponent(haxeSearchField);
 
 		// ---- 分区编辑入口（触屏没有 Tab 键，放一个按钮在第一行末尾）----
-		categoryEditButton = new Button();
-		categoryEditButton.text = OptionsLanguage.get('freeplay_cat_editor_entry', 'EDIT');
-		categoryEditButton.width = EDIT_BTN_W;
-		categoryEditButton.height = SEARCH_BOX_H - 4;
-		// 禁止键盘焦点，避免确认键被 HaxeUI 焦点系统吞掉
-		categoryEditButton.allowFocus = false;
-		categoryEditButton.styleString = 'font-name: $font; font-size: 14px;';
-		categoryEditButton.registerEvent(MouseEvent.CLICK, function(_) {
+		// 用 Flixel 自绘的斜切卡片按钮：和分区 Tab 卡片同一套视觉，斜角方向相反，
+		// 文字固定 #87CEEB。HaxeUI 的 Button 套不出这种卡片风格。
+		// 不要放进 haxeSearchBox（TextField 用 percentWidth=100，会把它挤出可视区），
+		// 直接挂到 state 上，位置由 layoutTopBar 计算。
+		categoryEditButton = new FreeplaySkewButton(font, OptionsLanguage.get('freeplay_cat_editor_entry', 'EDIT'));
+		categoryEditButton.onClick = function() {
 			if (haxeSearchField != null)
 				haxeSearchField.focus = false;
 			openCategoryEditor();
-		});
-		// 单独挂到屏幕上（不要放进 haxeSearchBox：搜索框的 TextField 用 percentWidth=100，
-		// 再加一个固定宽度的兄弟节点会把输入框挤出可视区域）。位置由 layoutTopBar 计算。
-		Screen.instance.addComponent(categoryEditButton);
+		};
+		categoryEditButton.addTo(this);
 
 		Screen.instance.addComponent(haxeSearchBox);
 
@@ -1239,8 +1244,8 @@ class FreeplayState extends MusicBeatState
 		var fixedW:Float = Math.min(fixedTabBar.getContentWidth(), Math.max(180, FlxG.width * 0.45));
 		fixedTabBar.layout(TOP_BAR_X, fixedW);
 
-		// 分区编辑按钮占最右侧固定宽度，筛选框宽度要把它扣掉，避免被挤出面板
-		var editW:Float = EDIT_BTN_W;
+		// 分区编辑按钮占最右侧（宽度按文字长度算，与卡片同高），筛选框宽度要把它扣掉，避免被挤出面板
+		var editW:Float = (categoryEditButton != null) ? categoryEditButton.width : EDIT_BTN_W;
 		var searchX:Float = TOP_BAR_X + fixedW + SEARCH_GAP;
 		var searchW:Float = panelLeft - PANEL_GAP - searchX - editW - SEARCH_GAP;
 		if (searchW < 100)
@@ -1251,12 +1256,8 @@ class FreeplayState extends MusicBeatState
 		haxeSearchBox.height = SEARCH_BOX_H;
 
 		if (categoryEditButton != null)
-		{
-			categoryEditButton.x = searchX + searchW + SEARCH_GAP;
-			categoryEditButton.y = SEARCH_ROW_Y + 2;
-			categoryEditButton.width = editW;
-			categoryEditButton.height = SEARCH_BOX_H - 4;
-		}
+			// 与第一行分区卡片同高同基线，斜角方向相反
+			categoryEditButton.layout(searchX + searchW + SEARCH_GAP, TAB_ROW_Y);
 
 		// 第二行：显示范围跟着高分面板的长度收缩
 		customTabBar.layout(TOP_BAR_X, Math.max(160, panelLeft - PANEL_GAP - TOP_BAR_X));
@@ -1317,7 +1318,7 @@ class FreeplayState extends MusicBeatState
 		if (!visible && haxeSearchField != null)
 			haxeSearchField.focus = false;
 		if (categoryEditButton != null)
-			categoryEditButton.hidden = !visible;
+			categoryEditButton.setVisible(visible);
 	}
 
 	// ==================== 分区编辑器 ====================
@@ -1434,7 +1435,7 @@ class FreeplayState extends MusicBeatState
 		}
 		if (categoryEditButton != null)
 		{
-			Screen.instance.removeComponent(categoryEditButton);
+			categoryEditButton.destroy();
 			categoryEditButton = null;
 		}
 		// 强制下次 layoutTopBar 重新摆放
@@ -1532,6 +1533,8 @@ class FreeplayState extends MusicBeatState
 				fixedTabBar.update(elapsed);
 			if (customTabBar != null)
 				customTabBar.update(elapsed);
+			if (categoryEditButton != null)
+				categoryEditButton.update(elapsed);
 		}
 		if (listFade < 1)
 			listFade = Math.min(1, listFade + elapsed * 5);
@@ -3061,6 +3064,11 @@ class FreeplayState extends MusicBeatState
 		{
 			customTabBar.destroy();
 			customTabBar = null;
+		}
+		if (categoryEditButton != null)
+		{
+			categoryEditButton.destroy();
+			categoryEditButton = null;
 		}
 
 		// --- 资源彻底释放 ---
