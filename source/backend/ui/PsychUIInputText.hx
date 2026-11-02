@@ -303,8 +303,12 @@ class PsychUIInputText extends FlxSpriteGroup
 				else
 				{
 					var lastText = text;
-					text = text.substring(0, caretIndex-1) + text.substring(caretIndex);
+					// 先左移光标、再改文本。
+					// set_text 末尾会用新文本长度 clamp 光标：如果先改文本再 caretIndex--，
+					// 旧光标值会先被压到新长度、之后又被减一次，于是光标多左移一格，
+					// 连续退格时文本最右侧的字永远删不掉。
 					caretIndex--;
+					text = text.substring(0, caretIndex) + text.substring(caretIndex + 1);
 					if(onChange != null) onChange(lastText, text);
 					if(broadcastInputTextEvent) PsychUIEventHandler.event(CHANGE_EVENT, this);
 				}

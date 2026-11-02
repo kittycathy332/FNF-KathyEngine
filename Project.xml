@@ -201,6 +201,10 @@
 		<haxedef name="HXCPP_STACK_LINE" />
 		<haxedef name="HXCPP_STACK_TRACE" />
 		<haxedef name="HXCPP_CATCH_SEGV" />
+		<!-- 抬高 hxcpp GC 的 block 上限：默认 BlockIdType 为 16 位、块 32KB，
+		     整个 block heap 约 2GiB 就触顶，随后会走兜底回收（Gc.enable(false) 拦不住）。
+		     开启后块变 64KB、BlockIdType 变 32 位，上限基本消失。 -->
+		<haxedef name="HXCPP_GC_BIG_BLOCKS" />
 	</section>
 	
 	<!--Disable deprecated warnings-->

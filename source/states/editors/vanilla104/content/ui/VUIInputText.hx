@@ -271,8 +271,10 @@ class VUIInputText extends FlxSpriteGroup
 				else
 				{
 					var lastText = text;
-					text = text.substring(0, caretIndex-1) + text.substring(caretIndex);
+					// 先左移光标、再改文本。set_text 末尾会用新文本长度 clamp 光标，
+					// 先改文本再 caretIndex-- 会让光标多左移一格，最右侧的字永远删不掉。
 					caretIndex--;
+					text = text.substring(0, caretIndex) + text.substring(caretIndex + 1);
 					if(onChange != null) onChange(lastText, text);
 					if(broadcastInputTextEvent) VUIEventHandler.event(CHANGE_EVENT, this);
 				}

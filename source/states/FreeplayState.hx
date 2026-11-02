@@ -1491,12 +1491,21 @@ class FreeplayState extends MusicBeatState
 		// 分区编辑器打开时接管全部输入：只处理退出键，其余交给 HaxeUI 组件
 		if (categoryEditor != null)
 		{
-			if (controls.BACK)
+			// 退出只认 ESC 键（或编辑器里的「取消」按钮）：BACK 默认还绑着 BACKSPACE，
+			// 用它判断会导致打字时一按退格就退出编辑器
+			if (FlxG.keys.justPressed.ESCAPE)
 			{
-				// 保存目标弹窗 / 系统软键盘展开时，BACK 只关最上层，不关整个编辑器
+				// 保存目标弹窗 / 系统软键盘展开时，ESC 只关最上层，不关整个编辑器
 				if (categoryEditor.cancelTargetPicker() || categoryEditor.cancelSoftKeyboard())
 				{
 					FlxG.sound.play(Paths.sound('cancelMenu'));
+					super.update(elapsed);
+					return;
+				}
+				// 输入框聚焦时 ESC 只取消聚焦（再按一次 ESC 才真正退出）
+				if (categoryEditor.isTyping())
+				{
+					categoryEditor.blurFields();
 					super.update(elapsed);
 					return;
 				}
