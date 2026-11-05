@@ -483,6 +483,10 @@ inline public static function getSharedPath(file:String = '')
 	inline static function menuMusicModsBase():String
 		return #if android StorageUtil.getExternalStorageDirectory() #else Sys.getCwd() #end;
 
+	// 谱面编辑器备份目录：跟随存储位置（Android）/ 工作目录（桌面）。
+	public static inline function backupsPath():String
+		return #if android StorageUtil.getExternalStorageDirectory() #else Sys.getCwd() #end + 'backups/';
+
 	static function scanMenuMusicFolders()
 	{
 		final dirs:Array<String> = [menuMusicAssetsBase() + 'assets/shared/music', menuMusicModsBase() + 'mods/music'];

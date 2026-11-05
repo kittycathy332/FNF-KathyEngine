@@ -357,15 +357,8 @@ class OptionsIOState extends MusicBeatState
 
 	function _getSaveRootDir():String
 	{
-		// 跨平台：桌面用 CWD/backups，Android 用 /sdcard/.KathyEngine/backups
-		var root:String;
-		#if android
-		root = '/sdcard/.KathyEngine/backups';
-		#elseif desktop
-		root = Sys.getCwd() + '/backups';
-		#else
-		root = Sys.getCwd() + '/backups';
-		#end
+		// 跨平台：用户数据根目录跟随「存储位置」设置
+		var root:String = #if android StorageUtil.getExternalStorageDirectory() #else Sys.getCwd() + '/' #end + 'backups';
 		if (!FileSystem.exists(root))
 		{
 			try { FileSystem.createDirectory(root); } catch (e:Dynamic) {}

@@ -138,6 +138,16 @@ class BaseOptionsMenu extends MusicBeatSubstate
 		_loadingText.x = FlxG.width - _loadingText.width - 100;
 		add(_loadingText);
 
+		// 动画返回按钮
+		if (FlxG.onMobile)
+		{
+			var backBtn:MobileButton = MobileButton.back(() -> {
+				FlxG.sound.play(Paths.sound('cancelMenu'));
+				close();
+			}, null, true);
+			add(backBtn);
+		}
+
 		// keybindManager 和 touchPad 延后到 onOptionsBuilt 才创建，避免拖慢构造函数
 		// （构造函数只做最轻量的 UI 基础搭建）
 

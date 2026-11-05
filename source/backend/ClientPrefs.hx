@@ -34,6 +34,15 @@ import haxe.io.BytesInput;
 	public var gameOverVibration:Bool = false;
 	public var mobileJudgmentCompensation:Bool = FlxG.onMobile; // 移动端判定补偿（触屏自动加偏移）
 	public var mobileJudgmentOffset:Float = 10.0; // 移动端补偿量（ms）
+	// ===== 存储位置（Data / Media / Obb / External，默认 External）=====
+	// 只切换位置，不自动迁移已有数据。受 StorageUtil 标记文件同步。
+	public var storageType:String = 'External';
+	// ===== Hitbox 样式（Classic 表示沿用旧 hitboxType；其余为 psychmobile 的 10 种样式）=====
+	public var hitboxStyle:String = 'Classic';
+	public var hitboxColors:String = 'Notes'; // Notes / Classic / Pastel / White / RGB
+	public var hitboxImageFit:String = 'Stretch'; // Stretch / Fit / Fill
+	public var hitboxImageTint:Bool = true; // 自定义图片是否按轨道颜色着色
+	public var hitboxRGB:Array<FlxColor> = [0xFF00FFFF, 0xFF12FA05, 0xFFF9393F, 0xFFC24B99]; // RGB 配色模式下的四轨颜色
 	public var fpsRework:Bool = false;
 	
 	public var downScroll:Bool = false;
@@ -798,6 +807,16 @@ class ClientPrefs {
 			data.mobileJudgmentCompensation = FlxG.onMobile;
 		if (!Reflect.hasField(FlxG.save.data, 'mobileJudgmentOffset') || data.mobileJudgmentOffset < 0)
 			data.mobileJudgmentOffset = 10.0;
+
+		// 存储位置：标记文件为准（设置页切换后立即生效，下次启动也保持一致）
+		#if android
+		data.storageType = StorageUtil.getStorageType();
+		StorageUtil.ensureStorageRoot(data.storageType);
+		#else
+		StorageUtil.setStorageType(data.storageType);
+		#end
+		if (!StorageUtil.STORAGE_TYPES.contains(data.storageType))
+			data.storageType = StorageUtil.DEFAULT_STORAGE_TYPE;
 
 		// 为 1.5.x 新增的 Shit 窗口与 SafeZone 模式填充默认值（兼容老存档升级）
 		if (!Reflect.hasField(FlxG.save.data, 'shitWindow') || data.shitWindow <= 0)

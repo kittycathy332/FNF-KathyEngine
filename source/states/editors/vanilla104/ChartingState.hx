@@ -737,12 +737,12 @@ class ChartingState extends MusicBeatState implements VUIEventHandler.VUIEvent
 				Reflect.setField(songCopy, '__original_path', Song.chartPath);
 				var dataToSave:String = haxe.Json.stringify(songCopy);
 				//trace(chartName, dataToSave);
-				if(!FileSystem.isDirectory('backups')) FileSystem.createDirectory('backups');
-				File.saveContent('backups/$chartName.$BACKUP_EXT', dataToSave);
+				if(!FileSystem.isDirectory(Paths.backupsPath())) FileSystem.createDirectory(Paths.backupsPath());
+				File.saveContent(Paths.backupsPath() + '$chartName.$BACKUP_EXT', dataToSave);
 
 				if(backupLimit > 0)
 				{
-					var files:Array<String> = Paths.readDirectory('backups/').filter((file:String) -> file.endsWith('.$BACKUP_EXT'));
+					var files:Array<String> = Paths.readDirectory(Paths.backupsPath()).filter((file:String) -> file.endsWith('.$BACKUP_EXT'));
 					if(files.length > backupLimit)
 					{
 						var incorrect:Array<String> = [];
@@ -779,7 +779,7 @@ class ChartingState extends MusicBeatState implements VUIEventHandler.VUIEvent
 							//trace('removed $file');
 							try
 							{
-								FileSystem.deleteFile('backups/$file');
+								FileSystem.deleteFile(Paths.backupsPath() + file);
 							}
 							catch(e:Exception) {}
 						}
@@ -3776,13 +3776,13 @@ class ChartingState extends MusicBeatState implements VUIEventHandler.VUIEvent
 			upperBox.isMinimized = true;
 			upperBox.bg.visible = false;
 
-			if(!FileSystem.exists('backups/'))
+			if(!FileSystem.exists(Paths.backupsPath()))
 			{
 				showOutput('The "backups" folder does not exist.', true);
 				return;
 			}
 			
-			var fileList:Array<String> = Paths.readDirectory('backups/').filter((file:String) -> file.endsWith('.$BACKUP_EXT'));
+			var fileList:Array<String> = Paths.readDirectory(Paths.backupsPath()).filter((file:String) -> file.endsWith('.$BACKUP_EXT'));
 			if(fileList.length < 1)
 			{
 				showOutput('No autosave files found.', true);
@@ -3812,7 +3812,7 @@ class ChartingState extends MusicBeatState implements VUIEventHandler.VUIEvent
 					var btn:VUIButton = new VUIButton(0, radioGrp.y + radioGrp.height + 20, 'Load', function()
 					{
 						var autosaveName:String = fileList[radioGrp.checked];
-						var path:String = 'backups/$autosaveName';
+						var path:String = Paths.backupsPath() + autosaveName;
 						state.close();
 
 						if(FileSystem.exists(path))

@@ -398,6 +398,57 @@ class HScript extends Iris
 			}
 			return PlayState.instance.luaTouchPadJustReleased(button);
 		});
+
+		// ===== psychmobile 兼容：VirtualPad 别名 =====
+		set("addVirtualPad", (DPadMode:String, ActionMode:String) -> {
+			PlayState.instance.makeLuaTouchPad(DPadMode, ActionMode);
+			PlayState.instance.addLuaTouchPad();
+		});
+
+		set("removeVirtualPad", () -> {
+			PlayState.instance.removeLuaTouchPad();
+		});
+
+		set("addVirtualPadCamera", () -> {
+			if (PlayState.instance.luaTouchPad == null)
+				return;
+			PlayState.instance.addLuaTouchPadCamera();
+		});
+
+		set("hasVirtualPad", () -> PlayState.instance.luaTouchPad != null);
+
+		set("setVirtualPadAlpha", (alpha:Float) -> {
+			if (PlayState.instance.luaTouchPad != null)
+				PlayState.instance.luaTouchPad.alpha = alpha;
+		});
+
+		set("virtualPadJustPressed", function(button:Dynamic):Bool {
+			return PlayState.instance.luaTouchPad != null && PlayState.instance.luaTouchPadJustPressed(button);
+		});
+
+		set("virtualPadPressed", function(button:Dynamic):Bool {
+			return PlayState.instance.luaTouchPad != null && PlayState.instance.luaTouchPadPressed(button);
+		});
+
+		set("virtualPadJustReleased", function(button:Dynamic):Bool {
+			return PlayState.instance.luaTouchPad != null && PlayState.instance.luaTouchPadJustReleased(button);
+		});
+
+		set("virtualPadReleased", function(button:Dynamic):Bool {
+			return PlayState.instance.luaTouchPad != null && PlayState.instance.luaTouchPadReleased(button);
+		});
+
+		// ===== 平台与原生能力（桌面自动降级）=====
+		set("isMobile", () -> MobileUtil.isMobile());
+		set("getPlatform", () -> MobileUtil.getPlatform());
+		set("toast", (text:String) -> MobileUtil.toast(text));
+		set("getBatteryLevel", () -> MobileUtil.getBatteryLevel());
+		set("isCharging", () -> MobileUtil.isCharging());
+		set("setKeepScreenOn", (on:Bool) -> MobileUtil.setKeepScreenOn(on));
+		set("getKeepScreenOn", () -> MobileUtil.getKeepScreenOn());
+		set("getStorageType", () -> StorageUtil.getStorageType());
+		set("getStoragePath", () -> StorageUtil.getExternalStorageDirectory());
+		set("setStorageType", (storageType:String) -> StorageUtil.setStorageType(storageType));
 		#else
 		set('parentLua', null);
 		#end

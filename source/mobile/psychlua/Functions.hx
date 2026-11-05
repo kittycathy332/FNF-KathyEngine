@@ -246,6 +246,78 @@ class MobileFunctions
 			}
 			return TouchUtil.overlapsComplex(obj, cam);
 		});
+		// ===== psychmobile 兼容 API =====
+		// 虚拟按键（映射到现有的 Lua TouchPad 实现）
+		Lua_helper.add_callback(lua, "addVirtualPad", (DPadMode:String, ActionMode:String, ?addToCustomSubstate:Bool = false, ?posAtCustomSubstate:Int = -1) ->
+		{
+			PlayState.instance.makeLuaTouchPad(DPadMode, ActionMode);
+			if (addToCustomSubstate)
+				CustomSubstate.insertLuaTpad(posAtCustomSubstate);
+			else
+				PlayState.instance.addLuaTouchPad();
+		});
+
+		Lua_helper.add_callback(lua, "removeVirtualPad", () -> {
+			PlayState.instance.removeLuaTouchPad();
+		});
+
+		Lua_helper.add_callback(lua, "addVirtualPadCamera", () ->
+		{
+			if (PlayState.instance.luaTouchPad == null)
+				return FunkinLua.luaTrace('addVirtualPadCamera: Virtual Pad does not exist.');
+			PlayState.instance.addLuaTouchPadCamera();
+		});
+
+		Lua_helper.add_callback(lua, "hasVirtualPad", () -> PlayState.instance.luaTouchPad != null);
+
+		Lua_helper.add_callback(lua, "setVirtualPadAlpha", (alpha:Float) ->
+		{
+			if (PlayState.instance.luaTouchPad != null)
+				PlayState.instance.luaTouchPad.alpha = alpha;
+		});
+
+		Lua_helper.add_callback(lua, "virtualPadJustPressed", function(button:Dynamic):Bool
+		{
+			return PlayState.instance.luaTouchPad != null && PlayState.instance.luaTouchPadJustPressed(button);
+		});
+
+		Lua_helper.add_callback(lua, "virtualPadPressed", function(button:Dynamic):Bool
+		{
+			return PlayState.instance.luaTouchPad != null && PlayState.instance.luaTouchPadPressed(button);
+		});
+
+		Lua_helper.add_callback(lua, "virtualPadJustReleased", function(button:Dynamic):Bool
+		{
+			return PlayState.instance.luaTouchPad != null && PlayState.instance.luaTouchPadJustReleased(button);
+		});
+
+		Lua_helper.add_callback(lua, "virtualPadReleased", function(button:Dynamic):Bool
+		{
+			return PlayState.instance.luaTouchPad != null && PlayState.instance.luaTouchPadReleased(button);
+		});
+
+		// 平台与原生能力（桌面自动降级）
+		Lua_helper.add_callback(lua, "isMobile", () -> MobileUtil.isMobile());
+		Lua_helper.add_callback(lua, "getPlatform", () -> MobileUtil.getPlatform());
+		Lua_helper.add_callback(lua, "toast", (text:String) -> MobileUtil.toast(text));
+		// psychmobile 命名兼容
+		Lua_helper.add_callback(lua, "mobileToast", function(text:String):Void MobileUtil.toast(text));
+		Lua_helper.add_callback(lua, "keepScreenOn", function(value:Bool = true):Void MobileUtil.setKeepScreenOn(value));
+		Lua_helper.add_callback(lua, "getBatteryLevel", () -> MobileUtil.getBatteryLevel());
+		Lua_helper.add_callback(lua, "isCharging", () -> MobileUtil.isCharging());
+		Lua_helper.add_callback(lua, "setKeepScreenOn", (on:Bool) -> MobileUtil.setKeepScreenOn(on));
+		Lua_helper.add_callback(lua, "getKeepScreenOn", () -> MobileUtil.getKeepScreenOn());
+
+		// 存储位置
+		Lua_helper.add_callback(lua, "getStorageType", () -> StorageUtil.getStorageType());
+		Lua_helper.add_callback(lua, "getStoragePath", () -> StorageUtil.getExternalStorageDirectory());
+		Lua_helper.add_callback(lua, "setStorageType", function(storageType:String):Bool
+		{
+			var ok:Bool = StorageUtil.setStorageType(storageType);
+			if (ClientPrefs.data != null)
+				ClientPrefs.data.storageType = StorageUtil.getStorageType();
+			return ok;
+		});
 	}
 
 	public static function getMobileControlsAsString():String

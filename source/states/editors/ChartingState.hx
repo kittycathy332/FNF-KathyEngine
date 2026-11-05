@@ -1594,12 +1594,12 @@ if(_shouldReset) Conductor.songPosition = 0;
 					Reflect.setField(songCopy, '__original_path', Song.chartPath);
 					var dataToSave:String = haxe.Json.stringify(songCopy);
 					//trace(chartName, dataToSave);
-					if(!FileSystem.isDirectory('backups')) FileSystem.createDirectory('backups');
-					File.saveContent('backups/$chartName.$BACKUP_EXT', dataToSave);
+					if(!FileSystem.isDirectory(Paths.backupsPath())) FileSystem.createDirectory(Paths.backupsPath());
+					File.saveContent(Paths.backupsPath() + '$chartName.$BACKUP_EXT', dataToSave);
 
 					if(backupLimit > 0)
 					{
-						var files:Array<String> = Paths.readDirectory('backups/').filter((file:String) -> file.endsWith('.$BACKUP_EXT'));
+						var files:Array<String> = Paths.readDirectory(Paths.backupsPath()).filter((file:String) -> file.endsWith('.$BACKUP_EXT'));
 						if(files.length > backupLimit)
 						{
 							var incorrect:Array<String> = [];
@@ -1636,7 +1636,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 								//trace('removed $file');
 								try
 								{
-									FileSystem.deleteFile('backups/$file');
+									FileSystem.deleteFile(Paths.backupsPath() + file);
 								}
 								catch(e:Exception) {}
 							}
@@ -7540,13 +7540,13 @@ for (i in 0...GRID_PLAYERS)
 			upperBox.isMinimized = true;
 			upperBox.bg.visible = false;
 
-			if(!FileSystem.exists('backups/'))
+			if(!FileSystem.exists(Paths.backupsPath()))
 			{
 				showOutput(Language.get('charting_msg_autosave_nobackup'), true);
 				return;
 			}
 			
-			var fileList:Array<String> = Paths.readDirectory('backups/').filter((file:String) -> file.endsWith('.$BACKUP_EXT'));
+			var fileList:Array<String> = Paths.readDirectory(Paths.backupsPath()).filter((file:String) -> file.endsWith('.$BACKUP_EXT'));
 			if(fileList.length < 1)
 			{
 				showOutput(Language.get('charting_msg_autosave_none'), true);
@@ -7576,7 +7576,7 @@ for (i in 0...GRID_PLAYERS)
 					var btn:PsychUIButton = new PsychUIButton(0, radioGrp.y + radioGrp.height + 20, 'Load', function()
 					{
 						var autosaveName:String = fileList[radioGrp.checked];
-						var path:String = 'backups/$autosaveName';
+						var path:String = Paths.backupsPath() + autosaveName;
 						state.close();
 
 						if(FileSystem.exists(path))

@@ -22,28 +22,210 @@
 
 package mobile.backend;
 
-import flixel.util.FlxTimer;
+import haxe.io.Path;
 
 /**
  * A storage class for mobile.
+ *
+ * 四种存储类型（Data / Media / Obb / External）决定「用户数据」根目录：
+ * mods、saves、logs、screenshots、exports、backups、crash 等全部跟随该根目录。
+ * 只切换位置、不自动迁移已有数据。
+ *
  * @author Karim Akra and Homura Akemi (HomuHomu833)
  */
 class StorageUtil
 {
-	#if sys
-	public static function getStorageDirectory():String
-		return #if android haxe.io.Path.addTrailingSlash(AndroidContext.getExternalFilesDir()) #elseif ios
-			haxe.io.Path.addTrailingSlash(lime.system.System.documentsDirectory) #else Sys.getCwd() #end;
+	/**
+	 * 可选存储类型。默认 External（用户可在设置页切换）。
+	 */
+	public static var STORAGE_TYPES:Array<String> = ['Data', 'Media', 'Obb', 'External'];
+	public static var DEFAULT_STORAGE_TYPE:String = 'External';
+
+	/** 存储类型标记文件（始终放在应用私有目录，避免受类型切换本身影响） */
+	static inline var TYPE_FILE_NAME:String = '.kathy_storage_type';
+
+	static var _storageType:Null<String> = null;
+	static var _storageRoot:Null<String> = null;
 
 	/**
-	 * 用户可见的数据根目录（mods / saves / logs 都放这里）。
-	 *
-	 * Android 固定为 /sdcard/.KathyEngine/；
-	 * 其余 sys 目标（iOS、桌面等）回落到 getStorageDirectory()，
-	 * 这样非 Android 平台引用该方法时也能编译并拿到可写目录。
+	 * 应用私有目录（cwd / 内置资源复制目标），与存储类型无关。
+	 */
+	public static function getStorageDirectory():String
+		return #if android Path.addTrailingSlash(AndroidContext.getExternalFilesDir()) #elseif ios
+			Path.addTrailingSlash(lime.system.System.documentsDirectory) #else Sys.getCwd() #end;
+
+	/**
+	 * 用户可见的数据根目录（mods / saves / logs 等都放这里）。
 	 */
 	public static function getExternalStorageDirectory():String
-		return #if android '/sdcard/.KathyEngine/' #else getStorageDirectory() #end;
+	{
+		if (_storageRoot == null)
+			_storageRoot = getStorageRootPathForType(getStorageType());
+		return _storageRoot;
+	}
+
+	/**
+	 * 获取当前存储类型（读取标记文件；无效值回落到默认 External）。
+	 */
+	public static function getStorageType():String
+	{
+		if (_storageType != null)
+			return _storageType;
+
+		var storageType:String = DEFAULT_STORAGE_TYPE;
+		#if android
+		try
+		{
+			var file:String = getStorageDirectory() + TYPE_FILE_NAME;
+			if (FileSystem.exists(file))
+			{
+				var saved:String = StringTools.trim(File.getContent(file));
+				if (STORAGE_TYPES.contains(saved))
+					storageType = saved;
+			}
+		}
+		catch (e:Dynamic) {}
+		#end
+		return _storageType = storageType;
+	}
+
+	/**
+	 * 设置存储类型（不迁移数据）。返回 false 表示目标目录无法创建/写入。
+	 */
+	public static function setStorageType(storageType:String):Bool
+	{
+		if (storageType == null || !STORAGE_TYPES.contains(storageType))
+			storageType = DEFAULT_STORAGE_TYPE;
+
+		_storageType = storageType;
+		_storageRoot = getStorageRootPathForType(storageType);
+
+		var ok:Bool = #if android ensureStorageRoot(storageType) #else true #end;
+
+		#if android
+		try
+		{
+			if (!FileSystem.exists(getStorageDirectory()))
+				FileSystem.createDirectory(getStorageDirectory());
+			File.saveContent(getStorageDirectory() + TYPE_FILE_NAME, storageType);
+		}
+		catch (e:Dynamic) {}
+		#end
+
+		return ok;
+	}
+
+	/**
+	 * 获取指定存储类型的用户数据根目录（带结尾斜杠，保证路径可直接拼接）。
+	 */
+	public static function getStorageRootPathForType(storageType:String):String
+	{
+		#if android
+		var dir:String = switch (storageType)
+		{
+			case 'Data':
+				AndroidContext.getFilesDir();
+			case 'Media':
+				getAndroidMediaDir();
+			case 'Obb':
+				AndroidContext.getObbDir();
+			case 'External':
+				'/sdcard/.KathyEngine/';
+			default:
+				getStorageDirectory();
+		};
+		if (dir == null || dir.length == 0)
+			dir = getStorageDirectory();
+		dir = Path.addTrailingSlash(dir);
+		// 未授予「所有文件访问」时 /sdcard 等目录不可写：回退到应用私有目录，避免启动崩溃
+		if (!isWritableDir(dir))
+		{
+			trace('StorageUtil: "$dir" is not writable, falling back to app storage.');
+			dir = getStorageDirectory();
+		}
+		return dir;
+		#else
+		return getStorageDirectory();
+		#end
+	}
+
+	#if android
+	/**
+	 * 目录是否可写（不存在时尝试创建一次）。
+	 */
+	static function isWritableDir(dir:String):Bool
+	{
+		try
+		{
+			if (!FileSystem.exists(dir))
+				FileSystem.createDirectory(dir);
+			return FileSystem.exists(dir);
+		}
+		catch (e:Dynamic)
+			return false;
+	}
+	#end
+
+	/**
+	 * 确保当前（或指定）类型的根目录存在。
+	 */
+	public static function ensureStorageRoot(?storageType:String):Bool
+	{
+		var root:String = getStorageRootPathForType(storageType == null ? getStorageType() : storageType);
+		try
+		{
+			if (!FileSystem.exists(root))
+				FileSystem.createDirectory(root);
+			for (folder in ['mods', 'saves', 'logs'])
+			{
+				var path:String = root + folder;
+				if (!FileSystem.exists(path))
+					FileSystem.createDirectory(path);
+			}
+			return true;
+		}
+		catch (e:Dynamic)
+		{
+			trace('StorageUtil: failed to create storage root "$root" (${e.message})');
+			return false;
+		}
+	}
+
+	/**
+	 * 判断某个存储类型当前是否可写（创建根目录并写入测试文件）。
+	 */
+	public static function isStorageTypeWritable(?storageType:String):Bool
+	{
+		return ensureStorageRoot(storageType);
+	}
+
+	#if android
+	/**
+	 * Android 10+ 的 Media 目录：/storage/emulated/0/Android/media/<package>/
+	 * 由 getExternalFilesDir() 的路径推导，避免依赖 getExternalMediaDirs（Haxe 侧未导出）。
+	 */
+	static function getAndroidMediaDir():String
+	{
+		var base:String = AndroidContext.getExternalFilesDir();
+		if (base == null)
+			return getStorageDirectory();
+
+		var parts:Array<String> = base.split('/');
+		var dataIdx:Int = -1;
+		for (i in 0...parts.length)
+			if (parts[i] == 'data')
+				dataIdx = i;
+
+		// .../Android/data/<pkg>/files → .../Android/media/<pkg>
+		if (dataIdx > 0 && dataIdx + 2 < parts.length && parts[dataIdx + 2] == 'files')
+		{
+			parts[dataIdx] = 'media';
+			parts.splice(dataIdx + 2, 1);
+			return parts.join('/');
+		}
+		return base;
+	}
+	#end
 
 	public static function saveContent(fileName:String, fileData:String, ?alert:Bool = true):Void
 	{
@@ -113,6 +295,5 @@ class StorageUtil
 			lime.system.System.exit(1);
 		}
 	}
-	#end
 	#end
 }

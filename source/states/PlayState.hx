@@ -440,7 +440,7 @@ class PlayState extends MusicBeatState
 	public var camGame:FlxCamera;
 	public var camOther:FlxCamera;
 	public var camArchived:FlxCamera;
-	private var mobilePauseBtn:TouchButton;
+	private var mobilePauseBtn:MobileButton;
 	public var luaTpadCam:FlxCamera;
 	public var cameraSpeed:Float = 1;
 
@@ -5887,34 +5887,17 @@ tempScore += '${lblScore}: ${songScore}';
 		if (!controls.mobileC)
 			return;
 
-		mobilePauseBtn = new TouchButton(0, 0, null);
-		mobilePauseBtn.label = new FlxSprite();
-		mobilePauseBtn.loadGraphic(Paths.image('touchpad/bg', 'mobile'));
-		mobilePauseBtn.label.loadGraphic(Paths.image('touchpad/P', 'mobile'));
-
-		mobilePauseBtn.scale.set(0.22, 0.22);
-		mobilePauseBtn.updateHitbox();
-		mobilePauseBtn.refreshLabel();
-
-		mobilePauseBtn.statusIndicatorType = ALPHA;
-		mobilePauseBtn.independentLabelColor = true; // P 用独立浅蓝，不被底板色覆盖
-		mobilePauseBtn.statusAlphas = [0.4, 0.5, 0.3];
-		mobilePauseBtn.canChangeLabelAlpha = false; // 图标始终不透明，底板才有透明度
-		mobilePauseBtn.label.alpha = 1.0;
-
-		mobilePauseBtn.color = 0x88ccff;       // 底板用原来的字母浅蓝
-		mobilePauseBtn.label.color = 0xb0c4de; // 图标 #B0C4DE
-
-		mobilePauseBtn.antialiasing = ClientPrefs.data.antialiasing;
+		// 动画暂停按钮（psychmobile 素材 mobile/pauseButton）
+		mobilePauseBtn = MobileButton.pause(null, mobileControlsCam);
 		mobilePauseBtn.tag = 'P';
-		mobilePauseBtn.scrollFactor.set();
-
+		mobilePauseBtn.statusAlphas = [0.4, 0.5, 0.3];
+		mobilePauseBtn.alpha = 0.4;
 		mobilePauseBtn.x = FlxG.width - mobilePauseBtn.width - 15;
 		mobilePauseBtn.y = 15;
 
-		mobilePauseBtn.cameras = [mobileControlsCam];
 		mobilePauseBtn.onDown.callback = () ->
 		{
+			mobilePauseBtn.press();
 			if (startedCountdown && !paused && canPause)
 			{
 				var ret:Dynamic = callOnScripts('onPause', null, true);
@@ -5926,7 +5909,6 @@ tempScore += '${lblScore}: ${songScore}';
 			}
 		};
 
-		mobilePauseBtn.alpha = 0.4;
 		mobileControls.instance.insert(0, mobilePauseBtn);
 		mobilePauseBtn.visible = controls.mobileC;
 	}

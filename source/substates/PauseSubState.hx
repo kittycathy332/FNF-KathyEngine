@@ -264,6 +264,13 @@ class PauseSubState extends MusicBeatSubstate
 		regenMenu();
 		cameras = [FlxG.cameras.list[FlxG.cameras.list.length - 1]];
 
+		// 动画返回按钮（关闭暂停菜单）
+		if (FlxG.onMobile)
+		{
+			var backBtn:MobileButton = MobileButton.back(() -> close(), cameras[0], true);
+			add(backBtn);
+		}
+
 		addTouchPad(menuItems.contains('Skip Time') ? 'LEFT_FULL' : 'UP_DOWN', 'A');
 		addTouchPadCamera();
 

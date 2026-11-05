@@ -25,8 +25,11 @@ package mobile.objects;
 import openfl.display.BitmapData;
 import openfl.display.Shape;
 import flixel.graphics.FlxGraphic;
+import flixel.util.FlxGradient;
 import flixel.util.FlxSignal.FlxTypedSignal;
 import openfl.geom.Matrix;
+import openfl.geom.Point;
+import openfl.geom.Rectangle;
 import states.PlayState;
 import backend.ExtraKeysHandler;
 
@@ -38,6 +41,64 @@ import backend.ExtraKeysHandler;
  */
 class Hitbox extends MobileInputManager implements IMobileControls
 {
+	// ===== psychmobile 样式 / 配色体系（hitboxStyle='Classic' 时沿用旧 hitboxType 行为）=====
+	public static var STYLES:Array<String> = ['Classic', 'Gradient', 'Solid', 'Outline', 'Bottom Glow', 'Edges', 'Rounded', 'Neon', 'Arrows',
+		'Corners', 'Image'];
+	public static var IMAGE_FITS:Array<String> = ['Stretch', 'Fit', 'Fill'];
+	public static var COLOR_MODES:Array<String> = ['Notes', 'Classic', 'Pastel', 'White', 'RGB'];
+	static var CLASSIC_COLORS:Array<FlxColor> = [0xFFC24B99, 0xFF00FFFF, 0xFF12FA05, 0xFFF9393F];
+	static var PASTEL_COLORS:Array<FlxColor> = [0xFFE7A6F2, 0xFFA6E9F2, 0xFFB8F2A6, 0xFFF2A6AC];
+	static inline var IMAGE_FILE:String = 'mobile/hitbox_image.png';
+
+	static var cachedImage:BitmapData = null;
+
+	/** 自定义 Hitbox 图片的完整路径（位于应用可写目录下） */
+	public static function imagePath():String
+		return haxe.io.Path.addTrailingSlash(Sys.getCwd()) + IMAGE_FILE;
+
+	public static function hasImage():Bool
+	{
+		try
+		{
+			return FileSystem.exists(imagePath());
+		}
+		catch (e:Dynamic)
+			return false;
+	}
+
+	/** 导入新图片后调用，强制重新读取磁盘文件 */
+	public static function reloadImage():Void
+	{
+		if (cachedImage != null)
+			cachedImage.dispose();
+		cachedImage = null;
+	}
+
+	public static function removeImage():Void
+	{
+		reloadImage();
+		try
+		{
+			if (hasImage())
+				FileSystem.deleteFile(imagePath());
+		}
+		catch (e:Dynamic) {}
+	}
+
+	static function loadImage():BitmapData
+	{
+		if (cachedImage != null)
+			return cachedImage;
+		try
+		{
+			if (hasImage())
+				cachedImage = BitmapData.fromFile(imagePath());
+		}
+		catch (e:Dynamic)
+			cachedImage = null;
+		return cachedImage;
+	}
+
 	final offsetFir:Int = (ClientPrefs.data.hitboxPos ? Std.int(FlxG.height / 4) * 3 : 0);
 	final offsetSec:Int = (ClientPrefs.data.hitboxPos ? 0 : Std.int(FlxG.height / 4));
 
@@ -114,7 +175,7 @@ class Hitbox extends MobileInputManager implements IMobileControls
 			for (i in 0...count)
 			{
 				var zoneW:Int = Std.int(FlxG.width / count);
-				var btn:TouchButton = createHint(i * zoneW, offsetFir, zoneW, Std.int(FlxG.height / 4), extraColors[i]);
+				var btn:TouchButton = createHint(i * zoneW, offsetFir, zoneW, Std.int(FlxG.height / 4), extraColors[i], i);
 				switch (i)
 				{
 					case 0: buttonExtra = btn;
@@ -149,17 +210,17 @@ class Hitbox extends MobileInputManager implements IMobileControls
 		if (totalCols <= 4)
 		{
 			var zoneW:Int = Std.int(FlxG.width / 4);
-			add(buttonLeft = createHint(0, y, zoneW, h, getLaneColor(0, maniaIdx)));
-			add(buttonDown = createHint(zoneW, y, zoneW, h, getLaneColor(1, maniaIdx)));
-			add(buttonUp = createHint(zoneW * 2, y, zoneW, h, getLaneColor(2, maniaIdx)));
-			add(buttonRight = createHint(zoneW * 3, y, zoneW, h, getLaneColor(3, maniaIdx)));
+			add(buttonLeft = createHint(0, y, zoneW, h, getLaneColor(0, maniaIdx), 0));
+			add(buttonDown = createHint(zoneW, y, zoneW, h, getLaneColor(1, maniaIdx), 1));
+			add(buttonUp = createHint(zoneW * 2, y, zoneW, h, getLaneColor(2, maniaIdx), 2));
+			add(buttonRight = createHint(zoneW * 3, y, zoneW, h, getLaneColor(3, maniaIdx), 3));
 			return;
 		}
 
 		var zoneW:Int = Std.int(FlxG.width / totalCols);
 		for (i in 0...totalCols)
 		{
-			var btn:TouchButton = createHint(i * zoneW, y, zoneW, h, getLaneColor(i, maniaIdx));
+			var btn:TouchButton = createHint(i * zoneW, y, zoneW, h, getLaneColor(i, maniaIdx), i);
 			btn.IDs = [noteIDForIndex(i)];
 			if (i < 4)
 			{
@@ -263,6 +324,24 @@ class Hitbox extends MobileInputManager implements IMobileControls
 		var style:Int = column;
 		if (ExtraKeysHandler.instance != null && ExtraKeysHandler.instance.data != null)
 			style = ExtraKeysHandler.instance.globalIndex(mania, column);
+
+		// 配色模式（5 种）：Notes 保持旧逻辑；其余使用 psychmobile 配色表
+		switch (ClientPrefs.data.hitboxColors)
+		{
+			case 'Classic':
+				return CLASSIC_COLORS[style % CLASSIC_COLORS.length];
+			case 'Pastel':
+				return PASTEL_COLORS[style % PASTEL_COLORS.length];
+			case 'White':
+				return FlxColor.WHITE;
+			case 'RGB':
+				var rgb:Array<FlxColor> = ClientPrefs.data.hitboxRGB;
+				if (rgb != null && rgb.length > 0)
+					return rgb[style % rgb.length];
+				return CLASSIC_COLORS[style % CLASSIC_COLORS.length];
+			default:
+				// 'Notes'：沿用原有逐列箭头配色
+		}
 
 		var arr:Array<FlxColor> = null;
 		if (cfg != null && cfg.arrowRGB != null && style > -1 && style < cfg.arrowRGB.length)
@@ -406,16 +485,16 @@ class Hitbox extends MobileInputManager implements IMobileControls
 		}
 	}
 
-	private function createHint(X:Float, Y:Float, Width:Int, Height:Int, Color:Int = 0xFFFFFF):TouchButton
+	private function createHint(X:Float, Y:Float, Width:Int, Height:Int, Color:Int = 0xFFFFFF, lane:Int = 0):TouchButton
 	{
 		var hint = new TouchButton(X, Y);
 		hint.statusAlphas = [];
 		hint.statusIndicatorType = NONE;
-		hint.loadGraphic(createHintGraphic(Width, Height));
+		hint.loadGraphic(createHintGraphic(Width, Height, false, lane));
 
 		hint.label = new FlxSprite();
 		hint.labelStatusDiff = (ClientPrefs.data.hitboxType != "Hidden") ? ClientPrefs.data.controlsAlpha : 0.00001;
-		hint.label.loadGraphic(createHintGraphic(Width, Math.floor(Height * 0.035), true));
+		hint.label.loadGraphic(createHintGraphic(Width, Math.floor(Height * 0.035), true, lane));
 		if (ClientPrefs.data.hitboxPos)
 			hint.label.offset.y -= (hint.height - hint.label.height) / 2;
 		else
@@ -483,7 +562,7 @@ class Hitbox extends MobileInputManager implements IMobileControls
 		hint.label.alpha = (ClientPrefs.data.hitboxType != "Hidden" && !ClientPrefs.data.hitboxHideIdle) ? ClientPrefs.data.controlsAlpha : 0.00001;
 		hint.canChangeLabelAlpha = false;
 		hint.label.antialiasing = hint.antialiasing = ClientPrefs.data.antialiasing;
-		hint.color = Color;
+		hint.color = (ClientPrefs.data.hitboxStyle == 'Image' && !ClientPrefs.data.hitboxImageTint && hasImage()) ? FlxColor.WHITE : Color;
 		#if FLX_DEBUG
 		hint.ignoreDrawDebug = true;
 		#end
@@ -556,8 +635,29 @@ class Hitbox extends MobileInputManager implements IMobileControls
 		}
 	}
 
-	function createHintGraphic(Width:Int, Height:Int, ?isLane:Bool = false):FlxGraphic
+	function createHintGraphic(Width:Int, Height:Int, ?isLane:Bool = false, ?lane:Int = 0):FlxGraphic
 	{
+		var style:String = ClientPrefs.data.hitboxStyle;
+
+		// ===== psychmobile 样式（Classic 之外）=====
+		if (style != null && style != 'Classic' && ClientPrefs.data.hitboxType != 'Hidden')
+		{
+			var bitmap:BitmapData;
+			if (isLane)
+			{
+				// 细条（label）：统一使用纯白实心条，让旧版的按键指示仍然可见
+				var bar:Shape = new Shape();
+				bar.graphics.beginFill(0xFFFFFF);
+				bar.graphics.drawRect(0, 0, Width, Height);
+				bar.graphics.endFill();
+				bitmap = new BitmapData(Width, Height, true, 0);
+				bitmap.draw(bar);
+			}
+			else
+				bitmap = createStyleBitmap(style, Width, Height, lane);
+			return FlxG.bitmap.add(bitmap);
+		}
+
 		var shape:Shape = new Shape();
 		shape.graphics.beginFill(0xFFFFFF);
 
@@ -598,5 +698,141 @@ class Hitbox extends MobileInputManager implements IMobileControls
 		bitmap.draw(shape);
 
 		return FlxG.bitmap.add(bitmap);
+	}
+
+	/**
+	 * 按 psychmobile 的 10 种样式生成单列位图。
+	 * Image 样式没有可用图片时自动回退到 Gradient。
+	 */
+	static function createStyleBitmap(style:String, width:Int, height:Int, lane:Int):BitmapData
+	{
+		var bitmap:BitmapData;
+		if (style == 'Image')
+		{
+			var image:BitmapData = loadImage();
+			if (image != null)
+				return drawImage(image, width, height);
+			style = 'Gradient';
+		}
+
+		switch (style)
+		{
+			case 'Rounded':
+				var shape:Shape = new Shape();
+				shape.graphics.lineStyle(5, 0xFFFFFF, 1);
+				shape.graphics.beginFill(0xFFFFFF, 0.3);
+				shape.graphics.drawRoundRect(8, 8, width - 16, height - 16, 48, 48);
+				shape.graphics.endFill();
+				bitmap = drawShape(shape, width, height);
+
+			case 'Neon':
+				bitmap = new BitmapData(width, height, true, 0x08FFFFFF);
+				var glow:Int = Std.int(width * 0.22);
+				for (x in 0...glow)
+				{
+					var t:Float = 1 - x / glow;
+					var alpha:Int = Std.int(255 * t * t * t);
+					var color:Int = (alpha << 24) | 0xFFFFFF;
+					bitmap.fillRect(new Rectangle(x, 0, 1, height), color);
+					bitmap.fillRect(new Rectangle(width - 1 - x, 0, 1, height), color);
+				}
+
+			case 'Arrows':
+				var shape:Shape = new Shape();
+				shape.graphics.beginFill(0xFFFFFF, 0.18);
+				shape.graphics.drawRect(0, 0, width, height);
+				shape.graphics.endFill();
+				var size:Float = Math.min(width, height) * 0.55;
+				var angle:Float = [180, 90, -90, 0][lane % 4] * Math.PI / 180;
+				var points:Array<Array<Float>> = [[0.5, 0], [0, -0.48], [0, -0.2], [-0.45, -0.2], [-0.45, 0.2], [0, 0.2], [0, 0.48]];
+				shape.graphics.lineStyle(6, 0xFFFFFF, 1);
+				shape.graphics.beginFill(0xFFFFFF, 0.55);
+				for (i in 0...points.length)
+				{
+					var px:Float = width / 2 + (points[i][0] * Math.cos(angle) - points[i][1] * Math.sin(angle)) * size;
+					var py:Float = height / 2 + (points[i][0] * Math.sin(angle) + points[i][1] * Math.cos(angle)) * size;
+					if (i == 0)
+						shape.graphics.moveTo(px, py);
+					else
+						shape.graphics.lineTo(px, py);
+				}
+				shape.graphics.endFill();
+				bitmap = drawShape(shape, width, height);
+
+			case 'Corners':
+				bitmap = new BitmapData(width, height, true, 0x10FFFFFF);
+				var length:Int = Std.int(Math.min(width, height) * 0.25);
+				var thick:Int = 10;
+				var inset:Int = 6;
+				for (corner in [[inset, inset, 1, 1], [width - inset, inset, -1, 1], [inset, height - inset, 1, -1], [width - inset, height - inset, -1, -1]])
+				{
+					var cx:Int = corner[0];
+					var cy:Int = corner[1];
+					bitmap.fillRect(new Rectangle(corner[2] > 0 ? cx : cx - length, corner[3] > 0 ? cy : cy - thick, length, thick), 0xFFFFFFFF);
+					bitmap.fillRect(new Rectangle(corner[2] > 0 ? cx : cx - thick, corner[3] > 0 ? cy : cy - length, thick, length), 0xFFFFFFFF);
+				}
+
+			case 'Solid':
+				bitmap = new BitmapData(width, height, true, 0x70FFFFFF);
+				bitmap.fillRect(new Rectangle(0, 0, 3, height), 0xFFFFFFFF);
+				bitmap.fillRect(new Rectangle(width - 3, 0, 3, height), 0xFFFFFFFF);
+
+			case 'Outline':
+				bitmap = new BitmapData(width, height, true, 0x18FFFFFF);
+				var thickness:Int = 8;
+				var inset:Int = 4;
+				bitmap.fillRect(new Rectangle(inset, inset, width - inset * 2, thickness), 0xFFFFFFFF);
+				bitmap.fillRect(new Rectangle(inset, height - inset - thickness, width - inset * 2, thickness), 0xFFFFFFFF);
+				bitmap.fillRect(new Rectangle(inset, inset, thickness, height - inset * 2), 0xFFFFFFFF);
+				bitmap.fillRect(new Rectangle(width - inset - thickness, inset, thickness, height - inset * 2), 0xFFFFFFFF);
+
+			case 'Bottom Glow':
+				bitmap = FlxGradient.createGradientBitmapData(width, height, [0x00FFFFFF, 0x10FFFFFF, 0xD0FFFFFF], 1, 90);
+
+			case 'Edges':
+				bitmap = FlxGradient.createGradientBitmapData(width, height, [0xE0FFFFFF, 0x00FFFFFF, 0x00FFFFFF, 0xE0FFFFFF], 1, 0);
+
+			default: // Gradient
+				bitmap = FlxGradient.createGradientBitmapData(width, height, [0xB0FFFFFF, 0x10FFFFFF, 0x10FFFFFF, 0xB0FFFFFF], 1, 0);
+				var glow:BitmapData = FlxGradient.createGradientBitmapData(width, Std.int(height * 0.35), [0x00FFFFFF, 0x60FFFFFF], 1, 90);
+				bitmap.copyPixels(glow, glow.rect, new Point(0, height - glow.height), null, null, true);
+				disposeBitmap(glow);
+				bitmap.fillRect(new Rectangle(0, 0, 4, height), 0xFFFFFFFF);
+				bitmap.fillRect(new Rectangle(width - 4, 0, 4, height), 0xFFFFFFFF);
+		}
+		return bitmap;
+	}
+
+	static function drawImage(image:BitmapData, width:Int, height:Int):BitmapData
+	{
+		var bitmap:BitmapData = new BitmapData(width, height, true, 0);
+		var scaleX:Float = width / image.width;
+		var scaleY:Float = height / image.height;
+		switch (ClientPrefs.data.hitboxImageFit)
+		{
+			case 'Fit':
+				scaleX = scaleY = Math.min(scaleX, scaleY);
+			case 'Fill':
+				scaleX = scaleY = Math.max(scaleX, scaleY);
+			default: // Stretch
+		}
+		var matrix:Matrix = new Matrix();
+		matrix.scale(scaleX, scaleY);
+		matrix.translate((width - image.width * scaleX) / 2, (height - image.height * scaleY) / 2);
+		bitmap.draw(image, matrix, null, null, new Rectangle(0, 0, width, height), true);
+		return bitmap;
+	}
+
+	static function drawShape(shape:Shape, width:Int, height:Int):BitmapData
+	{
+		var bitmap:BitmapData = new BitmapData(width, height, true, 0);
+		bitmap.draw(shape, null, null, null, null, true);
+		return bitmap;
+	}
+
+	static function disposeBitmap(bitmap:BitmapData):Void
+	{
+		if (bitmap != null)
+			bitmap.dispose();
 	}
 }

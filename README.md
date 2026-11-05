@@ -52,6 +52,7 @@ To be updated...\
 - Engines:  
   **[NovaFlare Engine](https://github.com/NovaFlare-Engine-Concentration/FNF-NovaFlare-Engine)**・
   **[JS Engine](https://github.com/JordanSantiagoYT/FNF-JS-Engine)**・
+  [another PsychEngine Mobile Project](https://github.com/BrenninhoTools/FNF-PsychEngine-Mobile)・
   [Slush Engine](https://github.com/Slushi-Github/Slushi-Engine)・
   [OS Engine](https://github.com/notweuz/FNF-OSEngine)・
   [Kade Engine](https://github.com/KadeArchive/Kade-Engine)

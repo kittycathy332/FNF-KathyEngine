@@ -138,6 +138,11 @@ class Main extends Sprite
 		StorageUtil.requestPermissions();
 		#end
 		Sys.setCwd(StorageUtil.getStorageDirectory());
+		#if android
+		// 按用户选择初始化用户数据根目录，并安装 Java 层崩溃上报
+		StorageUtil.ensureStorageRoot();
+		MobileUtil.installCrashHandler(StorageUtil.getExternalStorageDirectory() + 'logs');
+		#end
 		#end
 		backend.CrashHandler.init();
 
