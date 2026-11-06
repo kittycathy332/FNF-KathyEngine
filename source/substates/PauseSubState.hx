@@ -176,15 +176,17 @@ class PauseSubState extends MusicBeatSubstate
 			blueballedTxt.y = 15 + 64;
 		}
 
-		// 移动端：信息列末行显示电量与充电状态（每 5 秒刷新）
+		// 移动端：信息列末行显示电量与充电状态（右对齐，风格与 SONG 等行一致）
 		if (FlxG.onMobile)
 		{
-			batteryText = new FlxText(20, blueballedTxt.y + 32, 0, MobileUtil.getBatteryText(), 32);
+			batteryText = new FlxText(20, blueballedTxt.y + 32, 0, '', 32);
 			batteryText.scrollFactor.set();
 			batteryText.setFormat(Paths.font('vcr.ttf'), 32);
 			batteryText.updateHitbox();
-			batteryText.visible = batteryText.text.length > 0;
+			batteryText.x = FlxG.width - (batteryText.width + 20);
+			batteryText.alpha = 0;
 			add(batteryText);
+			refreshBatteryText();
 			batteryRefresh = 5;
 		}
 
@@ -247,17 +249,26 @@ class PauseSubState extends MusicBeatSubstate
 		blueballedTxt.x = FlxG.width - (blueballedTxt.width + 20);
 		if (specialVocalText != null) specialVocalText.x = FlxG.width - (specialVocalText.width + 20);
 		if (sprcialInstText != null) sprcialInstText.x = FlxG.width - (sprcialInstText.width + 20);
+		if (batteryText != null) batteryText.x = FlxG.width - (batteryText.width + 20);
 
 		FlxTween.tween(bg, {alpha: 0.6}, 0.3, {ease: FlxEase.quartInOut});
-		FlxTween.tween(levelInfo, {alpha: 1, y: 20}, 0.3, {ease: FlxEase.quartInOut, startDelay: 0.1});
-		FlxTween.tween(levelDifficulty, {alpha: 1, y: levelDifficulty.y + 5}, 0.3, {ease: FlxEase.quartInOut, startDelay: 0.2});
-		if (bpmText != null) FlxTween.tween(bpmText, {alpha: 1, y: bpmText.y + 5}, 0.3, {ease: FlxEase.quartInOut, startDelay: 0.3});
-		if (speedText != null) FlxTween.tween(speedText, {alpha: 1, y: speedText.y + 5}, 0.3, {ease: FlxEase.quartInOut, startDelay: 0.4}); 
-		if (formatText != null) FlxTween.tween(formatText, {alpha: 1, y: formatText.y + 5}, 0.3, {ease: FlxEase.quartInOut, startDelay: 0.5});
-		if (generatedByText != null) FlxTween.tween(generatedByText, {alpha: 1, y: generatedByText.y + 5}, 0.3, {ease: FlxEase.quartInOut, startDelay: 0.55});
-		if (sprcialInstText != null) FlxTween.tween(sprcialInstText, {alpha: 1, y: sprcialInstText.y + 5}, 0.3, {ease: FlxEase.quartInOut, startDelay: 0.6});
-		if (specialVocalText != null) FlxTween.tween(specialVocalText, {alpha: 1, y: specialVocalText.y + 5}, 0.3, {ease: FlxEase.quartInOut, startDelay: 0.7});
-		FlxTween.tween(blueballedTxt, {alpha: 1, y: blueballedTxt.y + 5}, 0.3, {ease: FlxEase.quartInOut, startDelay: PlayState.isCommandLineMode ? 0.3 : 0.8});
+
+		// 按实际显示的行顺序依次淡入：避免因某行缺失（数据为空/命令行模式）而沿用固定延迟，出现明显空档
+		var fadeRows:Array<FlxText> = [levelInfo, levelDifficulty];
+		if (bpmText != null) fadeRows.push(bpmText);
+		if (speedText != null) fadeRows.push(speedText);
+		if (formatText != null) fadeRows.push(formatText);
+		if (generatedByText != null) fadeRows.push(generatedByText);
+		if (sprcialInstText != null) fadeRows.push(sprcialInstText);
+		if (specialVocalText != null) fadeRows.push(specialVocalText);
+		fadeRows.push(blueballedTxt);
+		if (batteryText != null) fadeRows.push(batteryText);
+
+		for (i in 0...fadeRows.length)
+		{
+			var row:FlxText = fadeRows[i];
+			FlxTween.tween(row, {alpha: 1, y: row.y + 5}, 0.3, {ease: FlxEase.quartInOut, startDelay: 0.1 + i * 0.1});
+		}
 
 		grpMenuShit = new FlxTypedGroup<Alphabet>();
 		add(grpMenuShit);
@@ -293,6 +304,44 @@ class PauseSubState extends MusicBeatSubstate
 		super.create();
 	}
 	
+	/**
+	 * 暂停菜单电量行：与 SONG / DIFFICULTY 等行同风格（固定英文，vcr 字体不支持中文）。
+	 * 仅数字百分比按电量染色（0% 红 → 100% 蓝），其余文字保持默认白色。
+	 */
+	function refreshBatteryText():Void
+	{
+		if (batteryText == null)
+			return;
+
+		if (!FlxG.onMobile)
+		{
+			batteryText.visible = false;
+			return;
+		}
+
+		var level:Int = MobileUtil.getBatteryLevel();
+		if (level < 0)
+		{
+			batteryText.visible = false;
+			return;
+		}
+
+		var suffix:String = '';
+		// 非充电状态不显示后缀；充电时显示功率（设备读不到功率则只显示 CHARGING）
+		if (MobileUtil.isCharging())
+		{
+			var wattsText:String = MobileUtil.formatWatts(MobileUtil.getChargingWatts());
+			suffix = (wattsText.length > 0) ? ' (CHARGING $wattsText)' : ' (CHARGING)';
+		}
+
+		var line:String = 'BATTERY: §$level%§$suffix';
+		batteryText.applyMarkup(line, [new FlxTextFormatMarkerPair(new FlxTextFormat(MobileUtil.getBatteryColor(level)), '§')]);
+		batteryText.visible = true;
+		batteryText.updateHitbox();
+		// 文案长度变化后保持右对齐
+		batteryText.x = FlxG.width - (batteryText.width + 20);
+	}
+
 	function getPauseSong()
 	{
 		var formattedSongName:String = (songName != null ? Paths.formatToSongPath(songName) : '');
@@ -317,8 +366,7 @@ class PauseSubState extends MusicBeatSubstate
 			if (batteryRefresh <= 0)
 			{
 				batteryRefresh = 5;
-				batteryText.text = MobileUtil.getBatteryText();
-				batteryText.visible = batteryText.text.length > 0;
+				refreshBatteryText();
 			}
 		}
 

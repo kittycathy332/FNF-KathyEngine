@@ -17,6 +17,7 @@ class MobileUtil
 	// 电量/充电缓存：避免每次 UI 刷新都走 JNI
 	static var _batteryLevel:Int = -2;
 	static var _charging:Bool = false;
+	static var _chargingWatts:Float = -1;
 	static var _batteryStamp:Float = -1000;
 	static inline var BATTERY_CACHE_SECONDS:Float = 5;
 
@@ -55,6 +56,7 @@ class MobileUtil
 		_batteryStamp = now;
 		_batteryLevel = getBatteryLevelRaw();
 		_charging = isChargingRaw();
+		_chargingWatts = getChargingWattsRaw();
 	}
 
 	/** 电量百分比（0~100；读不到时 -1；桌面固定 100） */
@@ -89,7 +91,44 @@ class MobileUtil
 		#end
 	}
 
-	/** 电量信息文本（仅移动端且能读到电量时返回，否则空串） */
+	/** 充电功率（瓦特；设备不支持时返回 -1） */
+	public static function getChargingWatts():Float
+	{
+		refreshBatteryCache();
+		return _chargingWatts;
+	}
+
+	static function getChargingWattsRaw():Float
+	{
+		#if android
+		return JNICache.createStaticMethod('com/kathyengine/mobile/MobileBridge', 'getChargingWatts', '()F')();
+		#else
+		return -1;
+		#end
+	}
+
+	/** 瓦数格式化：保留 1 位小数（12.3W）；无效值返回空串 */
+	public static function formatWatts(watts:Float):String
+	{
+		if (watts <= 0)
+			return '';
+		var value:Float = Math.round(watts * 10) / 10;
+		var text:String = Std.string(value);
+		if (text.indexOf('.') < 0)
+			text += '.0';
+		return text + 'W';
+	}
+
+	/**
+	 * 电量颜色：0% 红 → 100% 蓝，按 HSV 色相平滑过渡（中间经过绿/青），降低饱和度让文字更柔和。
+	 */
+	public static function getBatteryColor(level:Int):FlxColor
+	{
+		var ratio:Float = FlxMath.bound(level / 100.0, 0, 1);
+		return FlxColor.fromHSB(ratio * 210.0, 0.65, 0.95);
+	}
+
+	/** 电量信息文本（仅移动端且能读到电量时返回，否则空串）。固定英文，避免默认 vcr 字体缺中文字形 */
 	public static function getBatteryText():String
 	{
 		if (!FlxG.onMobile)
@@ -98,9 +137,13 @@ class MobileUtil
 		if (level < 0)
 			return '';
 		#if android
-		var chargingText:String = isCharging() ? backend.LanguageBasic.getPhrase('battery_charging', '充电中') :
-			backend.LanguageBasic.getPhrase('battery_not_charging', '未充电');
-		return backend.LanguageBasic.getPhrase('battery_info', '电量 {1}% · {2}', [level, chargingText]);
+		var text:String = 'Battery $level%';
+		if (isCharging())
+		{
+			var wattsText:String = formatWatts(getChargingWatts());
+			text += (wattsText.length > 0) ? ' (Charging $wattsText)' : ' (Charging)';
+		}
+		return text;
 		#else
 		return '';
 		#end

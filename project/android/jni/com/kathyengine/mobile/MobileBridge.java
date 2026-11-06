@@ -93,6 +93,31 @@ public class MobileBridge {
 		}
 	}
 
+	/** 充电功率（瓦特）= |电流| × 电压；设备不支持时返回 -1 */
+	public static float getChargingWatts() {
+		Context c = ctx();
+		if (c == null) return -1f;
+		try {
+			Intent sticky = c.registerReceiver(null, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+			if (sticky == null) return -1f;
+			int voltageMv = sticky.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1);
+			if (voltageMv <= 0) return -1f;
+
+			BatteryManager bm = (BatteryManager) c.getSystemService(Context.BATTERY_SERVICE);
+			if (bm == null) return -1f;
+			long currentUa = bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW);
+			if (currentUa == 0 || currentUa == Long.MIN_VALUE || currentUa == Integer.MIN_VALUE)
+				return -1f;
+			if (Math.abs(currentUa) > 10000000L) return -1f; // >10A 视为异常读数
+
+			float volts = voltageMv / 1000f;
+			float amps = Math.abs(currentUa) / 1000000f;
+			return amps * volts;
+		} catch (Throwable t) {
+			return -1f;
+		}
+	}
+
 	/** 打开系统图片选择器（SAF / Documents UI），结果通过 androidtools 回调返回 */
 	public static void openImagePicker(int requestCode) {
 		Activity a = activity();
