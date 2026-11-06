@@ -300,9 +300,10 @@ class MobileFunctions
 		Lua_helper.add_callback(lua, "isMobile", () -> MobileUtil.isMobile());
 		Lua_helper.add_callback(lua, "getPlatform", () -> MobileUtil.getPlatform());
 		Lua_helper.add_callback(lua, "toast", (text:String) -> MobileUtil.toast(text));
-		// psychmobile 命名兼容
-		Lua_helper.add_callback(lua, "mobileToast", function(text:String):Void MobileUtil.toast(text));
+		// psychmobile 命名兼容（支持长时提示）
+		Lua_helper.add_callback(lua, "mobileToast", function(text:String, ?longDuration:Bool = false):Void MobileUtil.toast(text, longDuration));
 		Lua_helper.add_callback(lua, "keepScreenOn", function(value:Bool = true):Void MobileUtil.setKeepScreenOn(value));
+		Lua_helper.add_callback(lua, "openDataFolder", () -> MobileUtil.openDataFolder());
 		Lua_helper.add_callback(lua, "getBatteryLevel", () -> MobileUtil.getBatteryLevel());
 		Lua_helper.add_callback(lua, "isCharging", () -> MobileUtil.isCharging());
 		Lua_helper.add_callback(lua, "setKeepScreenOn", (on:Bool) -> MobileUtil.setKeepScreenOn(on));

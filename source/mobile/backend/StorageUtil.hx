@@ -43,6 +43,8 @@ class StorageUtil
 
 	/** 存储类型标记文件（始终放在应用私有目录，避免受类型切换本身影响） */
 	static inline var TYPE_FILE_NAME:String = '.kathy_storage_type';
+	/** 实际可写根目录标记（供 Android DocumentsProvider 读取，保持 Java 与 Haxe 同源） */
+	static inline var ROOT_FILE_NAME:String = '.kathy_storage_root';
 
 	static var _storageType:Null<String> = null;
 	static var _storageRoot:Null<String> = null;
@@ -143,11 +145,29 @@ class StorageUtil
 			trace('StorageUtil: "$dir" is not writable, falling back to app storage.');
 			dir = getStorageDirectory();
 		}
+		writeRootMarker(dir);
 		return dir;
 		#else
 		return getStorageDirectory();
 		#end
 	}
+
+	#if android
+	/**
+	 * 把当前实际可写的根目录写入应用私有目录，供 DocumentsProvider 读取。
+	 */
+	static function writeRootMarker(root:String):Void
+	{
+		try
+		{
+			var privateDir:String = getStorageDirectory();
+			if (!FileSystem.exists(privateDir))
+				FileSystem.createDirectory(privateDir);
+			File.saveContent(privateDir + ROOT_FILE_NAME, root);
+		}
+		catch (e:Dynamic) {}
+	}
+	#end
 
 	#if android
 	/**
@@ -182,6 +202,9 @@ class StorageUtil
 				if (!FileSystem.exists(path))
 					FileSystem.createDirectory(path);
 			}
+			#if android
+			writeRootMarker(root);
+			#end
 			return true;
 		}
 		catch (e:Dynamic)

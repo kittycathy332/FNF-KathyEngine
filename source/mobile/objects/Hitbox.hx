@@ -390,7 +390,7 @@ class Hitbox extends MobileInputManager implements IMobileControls
 	}
 
 	/** 音符列索引 -> 触屏 NOTE 枚举值（0..3 -> NOTE_LEFT..NOTE_RIGHT，4..17 -> NOTE_4..NOTE_17） */
-	static function noteIDForIndex(index:Int):MobileInputID
+	public static function noteIDForIndex(index:Int):MobileInputID
 	{
 		return switch (index)
 		{

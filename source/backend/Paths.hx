@@ -908,6 +908,80 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 	inline static public function mods(key:String = '')
 		return #if android StorageUtil.getExternalStorageDirectory() + #else Sys.getCwd() + #end 'mods/' + key;
 
+	#if mobile
+	// mod 路径解析用的目录列举缓存（Android 上 readDirectory 是固定开销）
+	static var _dirCache:Map<String, Array<String>> = new Map();
+	static var _dirMutex:sys.thread.Mutex = new sys.thread.Mutex();
+
+	public static function clearModPathCache():Void
+	{
+		_dirMutex.acquire();
+		_dirCache.clear();
+		_dirMutex.release();
+	}
+
+	static function listDirectory(dir:String):Array<String>
+	{
+		_dirMutex.acquire();
+		var entries:Array<String> = _dirCache.get(dir);
+		_dirMutex.release();
+		if (entries != null) return entries;
+
+		try
+		{
+			if (!FileSystem.exists(dir) || !FileSystem.isDirectory(dir)) return null;
+			entries = FileSystem.readDirectory(dir);
+		}
+		catch (e:Dynamic)
+		{
+			return null;
+		}
+
+		_dirMutex.acquire();
+		_dirCache.set(dir, entries);
+		_dirMutex.release();
+		return entries;
+	}
+	#end
+
+	/**
+	 * 大小写不敏感的 mod 路径解析：精确路径不存在时逐层按目录项匹配。
+	 * 返回 null 表示确实找不到；找不到时调用方回退到原路径。
+	 */
+	public static function resolveModPath(path:String):String
+	{
+		if (path == null) return null;
+		if (FileSystem.exists(path)) return path;
+		#if mobile
+		var root:String = mods();
+		if (!path.startsWith(root)) return null;
+
+		var current:String = root.substr(0, root.length - 1);
+		for (part in path.substr(root.length).split('/'))
+		{
+			if (part.length == 0) continue;
+			var entries:Array<String> = listDirectory(current);
+			if (entries == null) return null;
+
+			var lower:String = part.toLowerCase();
+			var match:String = null;
+			for (entry in entries)
+			{
+				if (entry.toLowerCase() == lower)
+				{
+					match = entry;
+					break;
+				}
+			}
+			if (match == null) return null;
+			current += '/' + match;
+		}
+		return path.endsWith('/') ? current + '/' : current;
+		#else
+		return null;
+		#end
+	}
+
 	inline static public function modsJson(key:String)
 		return modFolders('data/' + key + '.json');
 
@@ -933,8 +1007,9 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 	{
 		if(Mods.currentModDirectory != null && Mods.currentModDirectory.length > 0)
 		{
-			var fileToCheck:String = mods(Mods.currentModDirectory + '/' + key);
-			if(FileSystem.exists(fileToCheck))
+			// 先按原路径精确命中，再逐层做大小写不敏感解析（Android 上 mod 目录大小写经常写错）
+			var fileToCheck:String = resolveModPath(mods(Mods.currentModDirectory + '/' + key));
+			if(fileToCheck != null)
 				return fileToCheck;
 			#if linux
 			else
@@ -948,7 +1023,11 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 
 		// globalMods + mods 根：走 Mods.findInGlobalMods 缓存
 		var found:Null<String> = Mods.findInGlobalMods(key);
-		if (found != null) return found;
+		if (found != null)
+		{
+			var resolved:String = resolveModPath(found);
+			return resolved != null ? resolved : found;
+		}
 		#if linux
 		var fileToFind:String = findFile(key);
 		if (fileToFind != null)

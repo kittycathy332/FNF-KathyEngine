@@ -190,6 +190,8 @@ class FPSCounter extends Sprite
 
 			if (ClientPrefs.data.simpleInfoShowFPS) textLines.push(currentFPS + " fps" + gcStateLabel());
 			if (ClientPrefs.data.simpleInfoShowMem) textLines.push(formatSimpleMemory(memory) + " / " + formatSimpleMemory(memoryPeakMegas));
+			var batteryInfo:String = MobileUtil.getBatteryText();
+			if (batteryInfo.length > 0) textLines.push(batteryInfo);
 			if (ClientPrefs.data.simpleInfoShowVersion)
 			{
 				var version:String = getCachedVersion();
@@ -239,6 +241,8 @@ class FPSCounter extends Sprite
 		if (ClientPrefs.data.fpsShowRAM) textLines.push('RAM: ${formatMemory(memory)}');
 		if (ClientPrefs.data.fpsShowMemPeak) textLines.push('MEM Peak: ${formatMemory(memoryPeakMegas)}');
 		if (ClientPrefs.data.fpsShowObjects) textLines.push('Objects: $objectCount');
+		var batteryInfo:String = MobileUtil.getBatteryText();
+		if (batteryInfo.length > 0) textLines.push(batteryInfo);
 
 		#if debug
 		// 资源缓存 / 内嵌统计（仅 Kathy 详细模式 + debug 构建显示）

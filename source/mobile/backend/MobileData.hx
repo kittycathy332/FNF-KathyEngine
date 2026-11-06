@@ -114,6 +114,9 @@ class MobileData
 		// 这里若再按列 0..3 覆盖，会改错非 4 键谱面/自定义样式列的配色，故直接返回。
 		if (Std.isOfType(buttonsInstance, Hitbox))
 			return buttonsInstance;
+		// ArrowsPad 是透明触控层，没有 label/可见配色，直接返回
+		if (Std.isOfType(buttonsInstance, ArrowsPad))
+			return buttonsInstance;
 
 		// Dynamic Controls Color
 		var data:Dynamic;

@@ -176,6 +176,8 @@ class PlayState extends MusicBeatState
 	// 存储原始设置以便恢复
 	var originalJudgmentSettings:Dynamic = null;
 	var originalGameplaySettings:Dynamic = null;
+	/** Arrows 模式临时强制 Downscroll 前的用户值（null 表示未强制） */
+	var _preArrowsDownScroll:Null<Bool> = null;
 	
 	var dancingLeft:Bool = false;
 	var icondancingLeft:Bool = false;
@@ -779,6 +781,9 @@ isReplaying = false;
 		// 重置回放游戏设置
 		replayGameplaySettings = null;
 		}
+
+		// Arrows 操作模式：临时强制 Downscroll（在 HUD/音符生成前生效，退出时恢复）
+		applyArrowsDownScrollOverride();
 
 		startCallback = startCountdown;
 		endCallback = endSong;
@@ -2069,6 +2074,7 @@ isReplaying = false;
 			applyMania((SONG != null && SONG.mania != null) ? SONG.mania : 3);
 			generateStaticArrows(0);
 			generateStaticArrows(1);
+			refreshArrowsPad();
 		createLaneCovers();
 		createHoldCovers();
 
@@ -2147,7 +2153,8 @@ isReplaying = false;
 						tick = START;
 				}
 
-				if(!skipArrowStartTween)
+				// Arrows 模式隐藏对手侧，不能把音符强制成 copyAlpha=false（否则会脱离 strum 的 0 透明度）
+				if(!skipArrowStartTween && !arrowsModeActive())
 				{
 					notes.forEachAlive(function(note:Note) {
 						if(ClientPrefs.data.opponentStrums || note.mustPress)
@@ -2712,6 +2719,13 @@ tempScore += '${lblScore}: ${songScore}';
 		else
 		{
 			applyMania((SONG != null && SONG.mania != null) ? SONG.mania : 3);
+		}
+
+		// Arrows 模式：覆盖多键/双侧的常规收缩，两侧统一按底部单排均分缩放
+		if (arrowsModeActive())
+		{
+			playerStrumScale = strumScale = calcArrowsScale(totalColumns);
+			opponentStrumScale = calcArrowsScale(isLeDualChart ? opponentColumns : totalColumns);
 		}
 
 		songSpeedType = ClientPrefs.getGameplaySetting('scrolltype');
@@ -3586,6 +3600,78 @@ tempScore += '${lblScore}: ${songScore}';
 	// 玩家实际操作侧的箭头组（playOpponent 时为对手侧箭头）
 	inline public function playerSideStrums():FlxTypedGroup<StrumNote>
 		return playOpponent ? opponentStrums : playerStrums;
+
+	/** Arrows 操作模式：仅 PlayState 且当前为 Hitbox 控制模式时生效（下次进入歌曲生效） */
+	public function arrowsModeActive():Bool
+	{
+		#if mobile
+		return controls != null && controls.mobileC && MobileData.mode == 3 && ClientPrefs.data.hitboxMode == 'Arrows';
+		#else
+		return false;
+		#end
+	}
+
+	/** 底部箭头行统一缩放：N 列等宽均分，上限 1.25x（与 psychmobile 一致） */
+	public static function calcArrowsScale(lanes:Int):Float
+	{
+		if (lanes < 1) lanes = 4;
+		return Math.min(1.25, (FlxG.width / lanes) / Note.swagWidth);
+	}
+
+	/** 当前是否处于 Arrows 强制 Downscroll 状态（供 ClientPrefs.saveSettings 保护真实值） */
+	public static function getArrowsDownScrollSnapshot():Null<Bool>
+		return instance != null ? instance._preArrowsDownScroll : null;
+
+	/** 进入歌曲时临时强制 Downscroll（只改运行时，不写入存档） */
+	function applyArrowsDownScrollOverride():Void
+	{
+		if (!arrowsModeActive() || _preArrowsDownScroll != null) return;
+		_preArrowsDownScroll = ClientPrefs.data.downScroll;
+		ClientPrefs.data.downScroll = true;
+	}
+
+	/** 退出歌曲时恢复用户原本的 Downscroll 设置 */
+	function restoreArrowsDownScrollOverride():Void
+	{
+		if (_preArrowsDownScroll == null) return;
+		ClientPrefs.data.downScroll = _preArrowsDownScroll;
+		_preArrowsDownScroll = null;
+	}
+
+	/** 按底部箭头按钮的屏幕矩形刷新 ArrowsPad 触控区（外扩 26px） */
+	public function refreshArrowsPad():Void
+	{
+		if (mobileControls == null || !Std.isOfType(mobileControls, ArrowsPad)) return;
+		var pad:ArrowsPad = cast mobileControls;
+		var rects:Array<Array<Float>> = [];
+		for (strum in playerSideStrums())
+		{
+			if (strum == null) continue;
+			var bounds:flixel.math.FlxRect = strum.getScreenBounds(null, camGame);
+			rects.push([
+				bounds.x - ArrowsPad.TOUCH_PADDING, bounds.y - ArrowsPad.TOUCH_PADDING, bounds.width + ArrowsPad.TOUCH_PADDING * 2,
+				bounds.height + ArrowsPad.TOUCH_PADDING * 2
+			]);
+		}
+		pad.relayout(rects);
+	}
+
+	/**
+	 * Arrows 模式：每帧强制隐藏 CPU 侧 strums。
+	 * 曲中脚本/事件经常直接改 strum.alpha / visible，这里每帧覆盖，避免对手箭头重新出现并与玩家同位置重叠。
+	 */
+	public function forceHideCpuArrowsSide():Void
+	{
+		var group:FlxTypedGroup<StrumNote> = opponentSideStrums();
+		if (group == null) return;
+		group.visible = false;
+		for (strum in group)
+		{
+			if (strum == null) continue;
+			strum.visible = false;
+			strum.alpha = 0;
+		}
+	}
 	// 对手/CPU 自动演奏侧的箭头组（playOpponent 时为玩家侧箭头），用于对手飞溅定位
 	inline public function opponentSideStrums():FlxTypedGroup<StrumNote>
 		return playOpponent ? playerStrums : opponentStrums;
@@ -3701,6 +3787,13 @@ tempScore += '${lblScore}: ${songScore}';
 
 	private function generateStaticArrows(player:Int, ?instant:Bool = false):Void
 	{
+		// Arrows 操作模式：底部单排大箭头（4K 与 ExtraKeys 均适用）
+		if (arrowsModeActive())
+		{
+			generateArrowStrums(player, instant);
+			return;
+		}
+
 		var strumLineX:Float = ClientPrefs.data.middleScroll ? STRUM_X_MIDDLESCROLL : STRUM_X;
 		var strumLineY:Float = ClientPrefs.data.downScroll ? (FlxG.height - 150) : 50;
 
@@ -3805,6 +3898,42 @@ tempScore += '${lblScore}: ${songScore}';
 			+ ' lastX=' + ((centerX - groupWidth / 2) - legacyOffset + spacing * (totalColumns - 1))
 			+ ' lastEdge=' + ((centerX - groupWidth / 2) - legacyOffset + spacing * (totalColumns - 1) + Note.swagWidth * strumScale)
 			+ ' screenW=' + FlxG.width);*/
+	}
+
+	/**
+	 * Arrows 操作模式：两侧 strums 都排到屏幕底部一行，N 列等宽均分。
+	 * CPU 侧保持占位（供判定/动画引用）但 alpha=0，等效于隐藏对手轨道。
+	 */
+	private function generateArrowStrums(player:Int, ?instant:Bool = false):Void
+	{
+		var sideCols:Int = (player == 1) ? totalColumns : (isLeDualChart ? opponentColumns : totalColumns);
+		if (sideCols < 1) sideCols = 4;
+
+		var laneScale:Float = calcArrowsScale(sideCols);
+		var laneWidth:Float = FlxG.width / sideCols;
+		var isCpuSide:Bool = (player < 1) != playOpponent;
+
+		for (i in 0...sideCols)
+		{
+			var babyArrow:StrumNote = new StrumNote(0, 0, i, player);
+			babyArrow.downScroll = ClientPrefs.data.downScroll;
+			// 与多键路径一致：在 0.7 基准上乘算缩放（不能用 scale.set，否则 strum 会比音符大 1/0.7 倍）
+			babyArrow.scale.scale(laneScale, laneScale);
+			babyArrow.updateHitbox();
+			babyArrow.centerOffsets();
+			babyArrow.centerOrigin();
+
+			babyArrow.x = laneWidth * i + (laneWidth - babyArrow.width) / 2;
+			babyArrow.y = FlxG.height - babyArrow.height - 24;
+			babyArrow.alpha = isCpuSide ? 0 : 1;
+
+			if (player == 1)
+				playerStrums.add(babyArrow);
+			else
+				opponentStrums.add(babyArrow);
+
+			strumLineNotes.add(babyArrow);
+		}
 	}
 
 	/** 根据当前 strum 的实际位置，为每个 strum 组（对手/玩家）生成 Track 上的黑色半透明覆盖层（阴影）。 */
@@ -3999,9 +4128,12 @@ tempScore += '${lblScore}: ${songScore}';
 		curMania = mania;
 		totalColumns = mania + 1;
 		strumScale = 1;
+		// Arrows 模式：忽略多键收缩，统一按底部单排均分缩放（音符也跟随该 scale）
+		if (arrowsModeActive())
+			strumScale = playerStrumScale = calcArrowsScale(totalColumns);
 		// Extra Keys：键数已知后立即计算收缩系数（generateSong 的 Note 构造与 generateStaticArrows 共用；
 		// applyMania 会被 generateSong/ generateStaticArrows 各调一次，computeMultiKeyStrumScale 幂等）
-		if (totalColumns > 4) computeMultiKeyStrumScale();
+		else if (totalColumns > 4) computeMultiKeyStrumScale();
 
 		// 兜底：extrakeys.json 缺失时退回 4 键
 		if (ek == null || ek.keys == null || ek.keys.length <= mania) {
@@ -4217,7 +4349,12 @@ tempScore += '${lblScore}: ${songScore}';
 				if (savedHeldBefore[oldIdx])
 					replayHeldKeys[oldIdx % targetCols] = true;
 		}
-		if (totalColumns > 4 || opponentColumns > 4) computeMultiKeyStrumScale();
+		if (arrowsModeActive())
+		{
+			playerStrumScale = strumScale = calcArrowsScale(playerKeyCount);
+			opponentStrumScale = calcArrowsScale(oppKeyCount);
+		}
+		else if (totalColumns > 4 || opponentColumns > 4) computeMultiKeyStrumScale();
 		else { playerStrumScale = 1; opponentStrumScale = 1; strumScale = 1; }
 
 		// 重建两侧 strums（不播渐入）
@@ -4263,6 +4400,7 @@ tempScore += '${lblScore}: ${songScore}';
 		// 进曲时 Hitbox 只按 SONG.mania 生成一次，中途 changeKeyCounts 后不重建会停留在旧样式，
 		// 且多出的轨道因 trackedButtons 缺映射而按不到。
 		refreshMobileHitbox();
+		refreshArrowsPad();
 	}
 
 	/**
@@ -4273,6 +4411,17 @@ tempScore += '${lblScore}: ${songScore}';
 	private function refreshMobileHitbox():Void
 	{
 		if (mobileControls == null) return;
+
+		// Arrows 模式：重建透明 lane 按钮数量（位置由随后的 refreshArrowsPad 摆放）
+		if (Std.isOfType(mobileControls, ArrowsPad))
+		{
+			var pad:ArrowsPad = cast mobileControls;
+			var newCols:Int = sideCols();
+			if (ClientPrefs.data.touchLaneMode == '4k') newCols = 4;
+			pad.ensureLaneCount(newCols);
+			return;
+		}
+
 		var hb:Hitbox = cast mobileControls.instance;
 		if (hb == null) return;
 
@@ -4512,6 +4661,10 @@ tempScore += '${lblScore}: ${songScore}';
 			}
 			_deferredInitStep++;
 		}
+
+		// Arrows 模式：每帧强制隐藏 CPU（对手）侧 strums，防止脚本/事件在曲中重新点亮
+		if (arrowsModeActive())
+			forceHideCpuArrowsSide();
 
 		// Kade 风格 ms 文本淡出：按 240Hz 步进衰减（1/240 秒一步，每步 -0.005，约 0.83 秒淡完），与帧率解耦
 		if (msTimingShownActive)
@@ -5240,6 +5393,10 @@ tempScore += '${lblScore}: ${songScore}';
 									}
 								}
 								daNote.followStrumNote(strum, fakeCrochet, songSpeed / playbackRate);
+
+								// Arrows 模式：CPU 侧滚动音符一并隐藏，避免与玩家同位置重叠
+								if (arrowsModeActive() && !isPlayerNote(daNote))
+									daNote.visible = false;
 
 								if(isPlayerNote(daNote))
 								{
@@ -8055,6 +8212,7 @@ tempScore += '${lblScore}: ${songScore}';
 
 		// 对手侧 NoteSplash（兼容 playOpponent：此时对手侧箭头在 playerStrums 上）
 		if (ClientPrefs.data.opponentSplashes && ClientPrefs.data.cpuStrums
+			&& !arrowsModeActive()
 			&& !note.noteSplashData.disabled && !note.isSustainNote) {
 			var strum:StrumNote = opponentSideStrums().members[note.noteData];
 			if (strum != null)
@@ -8609,6 +8767,9 @@ tempScore += '${lblScore}: ${songScore}';
 			}
 		}
 		
+		// Arrows 模式：先恢复临时强制前的 Downscroll，再走回放设置恢复
+		restoreArrowsDownScrollOverride();
+
 		// 恢复原始游戏设置
 		if (originalGameplaySettings != null) {
 			if (Reflect.hasField(originalGameplaySettings, 'downScroll')) ClientPrefs.data.downScroll = originalGameplaySettings.downScroll;

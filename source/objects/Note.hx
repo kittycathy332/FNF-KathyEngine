@@ -1274,7 +1274,11 @@ class Note extends FlxSprite
 				{
 					y -= PlayState.daPixelZoom * 9.5;
 				}
-				y -= (frameHeight * scale.y) - (Note.swagWidth / 2);
+				// Arrows 模式 strum 比基准宽/高，尾部按实际 strum 半宽对齐；其他模式保持原常量，避免影响多键手感
+				var strumHalf:Float = Note.swagWidth / 2;
+				if (PlayState.instance != null && PlayState.instance.arrowsModeActive())
+					strumHalf = Note.swagWidth * (myStrum.scale.y / 0.7) / 2;
+				y -= (frameHeight * scale.y) - strumHalf;
 			}
 		}
 	}

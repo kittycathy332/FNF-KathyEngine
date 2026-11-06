@@ -58,7 +58,8 @@ class MusicBeatState extends FlxState
 			case 2: // CUSTOM
 				mobileControls = MobileData.getTouchPadCustom(new TouchPad('RIGHT_FULL', 'NONE', extraMode));
 			case 3: // HITBOX
-				mobileControls = new Hitbox(extraMode);
+				// Arrows 操作模式：底部箭头触控层（下次进入歌曲生效）
+				mobileControls = (ClientPrefs.data.hitboxMode == 'Arrows') ? new ArrowsPad(extraMode) : new Hitbox(extraMode);
 			case 4: // DOUBLE (左+右双 Pad)
 				mobileControls = new TouchPad('DOUBLE', 'NONE', extraMode);
 		}

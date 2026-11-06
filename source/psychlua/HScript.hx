@@ -442,6 +442,8 @@ class HScript extends Iris
 		set("isMobile", () -> MobileUtil.isMobile());
 		set("getPlatform", () -> MobileUtil.getPlatform());
 		set("toast", (text:String) -> MobileUtil.toast(text));
+		set("mobileToast", (text:String, ?longDuration:Bool = false) -> MobileUtil.toast(text, longDuration));
+		set("openDataFolder", () -> MobileUtil.openDataFolder());
 		set("getBatteryLevel", () -> MobileUtil.getBatteryLevel());
 		set("isCharging", () -> MobileUtil.isCharging());
 		set("setKeepScreenOn", (on:Bool) -> MobileUtil.setKeepScreenOn(on));

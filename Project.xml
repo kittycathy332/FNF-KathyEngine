@@ -122,6 +122,8 @@
 	<haxelib name="extension-androidtools" if="android"/>
 	<!-- 原生桥接（Toast / 电量 / 常亮 / SAF 图片导入），不新增 Gradle 模块 -->
 	<java path="project/android/jni" if="android"/>
+	<!-- 数据目录 DocumentsProvider（仅 Android，极简 Gradle 模块） -->
+	<dependency name="kathyengine-data" path="project/android/data" if="android"/>
 	<haxelib name="flixel-addons" version="4.0.2"/>
 	<haxelib name="flixel-ui" version="2.6.5"/>
 	<haxelib name="tjson" version="1.4.0"/>

@@ -24,7 +24,7 @@ import haxe.io.BytesInput;
 	public var hitboxPos:Bool = true; // hitbox extra button position option
 	public var dynamicColors:Bool = true; // yes cause its cool -Karim
 	public var controlsAlpha:Float = FlxG.onMobile ? 0.6 : 0;
-	public var screensaver:Bool = false;
+	public var keepScreenOn:Bool = true; // 保持屏幕常亮（全局生效）
 	public var wideScreen:Bool = false;
 	public var hitboxType:String = "Gradient";
 	public var hitboxAnimation:Bool = true; // whether hitbox button animations are enabled
@@ -39,6 +39,7 @@ import haxe.io.BytesInput;
 	public var storageType:String = 'External';
 	// ===== Hitbox 样式（Classic 表示沿用旧 hitboxType；其余为 psychmobile 的 10 种样式）=====
 	public var hitboxStyle:String = 'Classic';
+	public var hitboxMode:String = 'Four Lanes'; // Four Lanes / Arrows（移动端操作方式，下次进入歌曲生效）
 	public var hitboxColors:String = 'Notes'; // Notes / Classic / Pastel / White / RGB
 	public var hitboxImageFit:String = 'Stretch'; // Stretch / Fit / Fill
 	public var hitboxImageTint:Bool = true; // 自定义图片是否按轨道颜色着色
@@ -674,8 +675,17 @@ class ClientPrefs {
 	}
 
 	public static function saveSettings() {
+		// Arrows 模式会在运行时临时强制 downScroll；写盘前换回用户真实值，写完再恢复运行时覆盖，
+		// 避免"退出歌曲后设置被记住"。
+		var arrowsDownScrollSnapshot:Null<Bool> = PlayState.getArrowsDownScrollSnapshot();
+		if (arrowsDownScrollSnapshot != null)
+			data.downScroll = arrowsDownScrollSnapshot;
+
 		for (key in Reflect.fields(data))
 			Reflect.setField(FlxG.save.data, key, Reflect.field(data, key));
+
+		if (arrowsDownScrollSnapshot != null)
+			data.downScroll = true;
 
 		#if ACHIEVEMENTS_ALLOWED Achievements.save(); #end
 
@@ -807,6 +817,16 @@ class ClientPrefs {
 			data.mobileJudgmentCompensation = FlxG.onMobile;
 		if (!Reflect.hasField(FlxG.save.data, 'mobileJudgmentOffset') || data.mobileJudgmentOffset < 0)
 			data.mobileJudgmentOffset = 10.0;
+
+		// 旧存档兼容：screensaver（允许系统休眠）→ keepScreenOn（保持常亮），语义取反
+		if (!Reflect.hasField(FlxG.save.data, 'keepScreenOn'))
+		{
+			if (Reflect.hasField(FlxG.save.data, 'screensaver'))
+				data.keepScreenOn = Reflect.field(FlxG.save.data, 'screensaver') != true;
+		}
+		// hitboxMode 合法性兜底
+		if (data.hitboxMode == null || !['Four Lanes', 'Arrows'].contains(data.hitboxMode))
+			data.hitboxMode = 'Four Lanes';
 
 		// 存储位置：标记文件为准（设置页切换后立即生效，下次启动也保持一致）
 		#if android

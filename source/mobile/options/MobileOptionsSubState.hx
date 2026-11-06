@@ -35,6 +35,13 @@ class MobileOptionsSubState extends BaseOptionsMenu
 	final hintOptions:Array<String> = ["No Gradient", "No Gradient (Old)", "Gradient", "Hidden"];
 	var option:Option;
 
+	// 冲突项淡化：按 hitboxStyle 动态禁用/淡化
+	var hitboxTypeOption:Option;
+	var hitboxImageFitOption:Option;
+	var hitboxImageTintOption:Option;
+	var hitboxImageImportOption:Option;
+	var hitboxImageRemoveOption:Option;
+
 	public function new()
 	{
 		title = Language.get('mobile_options');
@@ -74,9 +81,9 @@ class MobileOptionsSubState extends BaseOptionsMenu
 		addOption(option);
 
 		#if mobile
-		option = new Option(Language.get('allow_phone_screensaver'),
-			Language.get("allow_phone_screensaver_desc"), 'screensaver', BOOL);
-		option.onChange = () -> lime.system.System.allowScreenTimeout = curOption.getValue();
+		option = new Option(Language.getWithFallback('keep_screen_on', 'Keep Screen On'),
+			Language.getWithFallback('keep_screen_on_desc', 'Prevents the screen from turning off while the game is running.'), 'keepScreenOn', BOOL);
+		option.onChange = () -> MobileUtil.setKeepScreenOn(curOption.getValue());
 		addOption(option);
 
 		option = new Option(Language.get('wide_screen_mode'),
@@ -97,6 +104,18 @@ class MobileOptionsSubState extends BaseOptionsMenu
 					mobileControls.instance.visible = true;
 			};
 
+			// Arrows 操作方式（下次进入歌曲生效）
+			option = new Option(Language.getWithFallback('hitbox_mode', 'Hitbox Mode'),
+				Language.getWithFallback('hitbox_mode_desc',
+					'Four Lanes: the screen is split into four touch lanes.\nArrows: tap the enlarged arrows at the bottom. Takes effect next song.'),
+				'hitboxMode', STRING, ['Four Lanes', 'Arrows']);
+			option.valueLocalizations = [
+				'Four Lanes' => Language.getWithFallback('hitbox_mode_val_four_lanes', 'Four Lanes'),
+				'Arrows' => Language.getWithFallback('hitbox_mode_val_arrows', 'Arrows')
+			];
+			option.onChange = rebuildHitbox;
+			addOption(option);
+
 			// ===== psychmobile 样式 / 配色 / 自定义图片 =====
 			option = new Option(Language.getWithFallback('hitbox_style', 'Hitbox Style'),
 				Language.getWithFallback('hitbox_style_desc', 'Choose the hitbox rendering style. Classic keeps the legacy design option below.'),
@@ -114,12 +133,14 @@ class MobileOptionsSubState extends BaseOptionsMenu
 				Language.getWithFallback('hitbox_image_fit_desc', 'How the custom image is scaled inside each lane (Image style only).'),
 				'hitboxImageFit', STRING, Hitbox.IMAGE_FITS);
 			option.onChange = rebuildHitbox;
+			hitboxImageFitOption = option;
 			addOption(option);
 
 			option = new Option(Language.getWithFallback('hitbox_image_tint', 'Image Tint'),
 				Language.getWithFallback('hitbox_image_tint_desc', 'Tint the custom image with the lane color (Image style only).'),
 				'hitboxImageTint', BOOL);
 			option.onChange = rebuildHitbox;
+			hitboxImageTintOption = option;
 			addOption(option);
 
 			option = new Option(Language.getWithFallback('hitbox_image_import', 'Import Hitbox Image'),
@@ -142,6 +163,7 @@ class MobileOptionsSubState extends BaseOptionsMenu
 						CoolUtil.showPopUp(Language.getWithFallback('hitbox_image_import_fail', 'Import cancelled or failed.'), 'Hitbox');
 				});
 			};
+			hitboxImageImportOption = option;
 			addOption(option);
 
 			option = new Option(Language.getWithFallback('hitbox_image_remove', 'Remove Hitbox Image'),
@@ -154,6 +176,7 @@ class MobileOptionsSubState extends BaseOptionsMenu
 				ClientPrefs.saveSettings();
 				rebuildHitbox();
 			};
+			hitboxImageRemoveOption = option;
 			addOption(option);
 
 			// ===== 旧版 Hitbox 设计（hitboxStyle='Classic' 时生效）=====
@@ -164,6 +187,7 @@ class MobileOptionsSubState extends BaseOptionsMenu
 				hintOptions[2] => Language.get('hitbox_design_val_gradient'),
 				hintOptions[3] => Language.get('hitbox_design_val_hidden')
 			];
+			hitboxTypeOption = option;
 			addOption(option);
 
 			option = new Option(Language.get('hitbox_position'), Language.get("hitbox_position_desc"),
@@ -209,11 +233,54 @@ class MobileOptionsSubState extends BaseOptionsMenu
 		};
 		addOption(option);
 
+		// 打开数据目录（Android 走 DocumentsProvider；桌面打开工作目录）
+		option = new Option(Language.getWithFallback('open_data_folder', 'Open Data Folder'),
+			Language.getWithFallback('open_data_folder_desc', 'Open the game data folder in a file manager.'), '_openDataFolder', BUTTON);
+		option.onChange = () ->
+		{
+			if (!MobileUtil.openDataFolder())
+				CoolUtil.showPopUp(Language.getWithFallback('open_data_folder_failed', 'Could not open the data folder.'), 'Data Folder');
+		};
+		addOption(option);
+
 		option = new Option(Language.get('dynamic_controls_color'),
 			Language.get("dynamic_controls_color_desc"), 'dynamicColors',
 			BOOL);
 		addOption(option);
 
 		super();
+	}
+
+	override function update(elapsed:Float)
+	{
+		super.update(elapsed);
+		refreshHitboxOptionStates();
+	}
+
+	/**
+	 * 冲突项淡化：hitboxType 只在 Classic 样式下可用；图片相关项只在 Image 样式下可用。
+	 * disabled 会影响标签淡化与交互拦截（BaseOptionsMenu 内统一处理）。
+	 */
+	function refreshHitboxOptionStates():Void
+	{
+		var style:String = ClientPrefs.data.hitboxStyle;
+		var classic:Bool = style == 'Classic';
+		var image:Bool = style == 'Image';
+		var classicRequirement:String = Language.getWithFallback('hitbox_requirement_classic', 'Classic render style');
+		var imageRequirement:String = Language.getWithFallback('hitbox_requirement_image', 'Image render style');
+
+		if (hitboxTypeOption != null)
+		{
+			hitboxTypeOption.disabled = !classic;
+			hitboxTypeOption.requirement = classicRequirement;
+		}
+		for (opt in [hitboxImageFitOption, hitboxImageTintOption, hitboxImageImportOption, hitboxImageRemoveOption])
+		{
+			if (opt != null)
+			{
+				opt.disabled = !image;
+				opt.requirement = imageRequirement;
+			}
+		}
 	}
 }

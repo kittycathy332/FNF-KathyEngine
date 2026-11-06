@@ -397,7 +397,8 @@ class Main extends Sprite
 
 		#if mobile
 		#if android FlxG.android.preventDefaultKeys = [BACK]; #end
-		LimeSystem.allowScreenTimeout = ClientPrefs.data.screensaver;
+		// 保持屏幕常亮（全局，默认开）；同时同步 Lime 超时与 Android 窗口 flag
+		MobileUtil.setKeepScreenOn(ClientPrefs.data.keepScreenOn);
 		#end
 
 		// Application.current.window.vsync = ClientPrefs.data.vsync;

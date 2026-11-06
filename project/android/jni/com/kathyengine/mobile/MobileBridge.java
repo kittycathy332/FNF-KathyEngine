@@ -33,14 +33,15 @@ public class MobileBridge {
 	}
 
 	/** 主线程 Toast */
-	public static void toast(final String text) {
+	public static void toast(final String text, final boolean longDuration) {
 		if (text == null) return;
 		Context c = ctx();
 		if (c == null) return;
 		new Handler(Looper.getMainLooper()).post(new Runnable() {
 			@Override
 			public void run() {
-				Toast.makeText(c.getApplicationContext(), text, Toast.LENGTH_SHORT).show();
+				Toast.makeText(c.getApplicationContext(), text,
+					longDuration ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT).show();
 			}
 		});
 	}

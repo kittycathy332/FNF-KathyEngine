@@ -28,6 +28,8 @@ class PauseSubState extends MusicBeatSubstate
 
 	var missingTextBG:FlxSprite;
 	var missingText:FlxText;
+	var batteryText:FlxText;
+	var batteryRefresh:Float = 0;
 
 	public static var songName:String = null;
 
@@ -174,6 +176,18 @@ class PauseSubState extends MusicBeatSubstate
 			blueballedTxt.y = 15 + 64;
 		}
 
+		// 移动端：信息列末行显示电量与充电状态（每 5 秒刷新）
+		if (FlxG.onMobile)
+		{
+			batteryText = new FlxText(20, blueballedTxt.y + 32, 0, MobileUtil.getBatteryText(), 32);
+			batteryText.scrollFactor.set();
+			batteryText.setFormat(Paths.font('vcr.ttf'), 32);
+			batteryText.updateHitbox();
+			batteryText.visible = batteryText.text.length > 0;
+			add(batteryText);
+			batteryRefresh = 5;
+		}
+
 		var sprcialInstText:FlxText = null;
 		var specialVocalText:FlxText = null;
 		
@@ -264,12 +278,14 @@ class PauseSubState extends MusicBeatSubstate
 		regenMenu();
 		cameras = [FlxG.cameras.list[FlxG.cameras.list.length - 1]];
 
-		// 动画返回按钮（关闭暂停菜单）
+		// 动画返回按钮（暂时注释：系统返回键已能关闭暂停菜单，如需恢复取消下面注释即可）
+		/*
 		if (FlxG.onMobile)
 		{
 			var backBtn:MobileButton = MobileButton.back(() -> close(), cameras[0], true);
 			add(backBtn);
 		}
+		*/
 
 		addTouchPad(menuItems.contains('Skip Time') ? 'LEFT_FULL' : 'UP_DOWN', 'A');
 		addTouchPadCamera();
@@ -293,6 +309,18 @@ class PauseSubState extends MusicBeatSubstate
 		cantUnpause -= elapsed;
 		if (pauseMusic.volume < 0.5)
 			pauseMusic.volume += 0.01 * elapsed;
+
+		// 电量信息每 5 秒刷新（MobileUtil 内部也有 5 秒缓存，不会频繁走 JNI）
+		if (batteryText != null)
+		{
+			batteryRefresh -= elapsed;
+			if (batteryRefresh <= 0)
+			{
+				batteryRefresh = 5;
+				batteryText.text = MobileUtil.getBatteryText();
+				batteryText.visible = batteryText.text.length > 0;
+			}
+		}
 
 		super.update(elapsed);
 
