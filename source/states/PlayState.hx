@@ -443,6 +443,8 @@ class PlayState extends MusicBeatState
 	public var camOther:FlxCamera;
 	public var camArchived:FlxCamera;
 	private var mobilePauseBtn:MobileButton;
+	/** 本次暂停是否由右上角移动端暂停按钮触发（暂停界面据此补播完整的按下动画） */
+	public static var pauseBtnPressed:Bool = false;
 	public var luaTpadCam:FlxCamera;
 	public var cameraSpeed:Float = 1;
 
@@ -4572,6 +4574,9 @@ tempScore += '${lblScore}: ${songScore}';
 			FlxTween.globalManager.forEach(function(twn:FlxTween) if(!twn.finished) twn.active = true);
 
 			paused = false;
+			// 暂停时按钮被隐藏、动画停在按下帧：恢复时直接回到静止帧，避免补播按下动画
+			if (mobilePauseBtn != null && mobilePauseBtn.animation.curAnim != null && mobilePauseBtn.animation.curAnim.name == 'press')
+				mobilePauseBtn.animation.play('idle');
 			callOnScripts('onResume');
 			resetRPC(startTimer != null && startTimer.finished);
 			runSongSyncThread();
@@ -6060,6 +6065,7 @@ tempScore += '${lblScore}: ${songScore}';
 				var ret:Dynamic = callOnScripts('onPause', null, true);
 				if(ret != LuaUtils.Function_Stop)
 				{
+					pauseBtnPressed = true;
 					mobilePauseBtn.visible = false;
 					openPauseMenu();
 				}

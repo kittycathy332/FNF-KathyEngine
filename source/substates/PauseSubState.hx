@@ -90,6 +90,34 @@ class PauseSubState extends MusicBeatSubstate
 		bg.scrollFactor.set();
 		add(bg);
 
+		// 移动端：游戏内暂停按钮按下后瞬间隐藏并打开本界面。
+		// 这里用纯视觉副本（不接收触摸）继续播放完整的"按下"动画，绘制在半透明黑底之上、
+		// 信息文本之下，让按钮看起来仍在 PlayState 画面上，只是被暂停界面压暗；
+		// 按下动画播放的同时直接淡出（1.5s ± 0.3s，easeIn），淡出过程不会被触摸状态打断。
+		if (FlxG.onMobile && PlayState.pauseBtnPressed)
+		{
+			PlayState.pauseBtnPressed = false;
+
+			var pauseGhost:FlxSprite = new FlxSprite();
+			pauseGhost.frames = Paths.getSparrowAtlas('mobile/pauseButton');
+			pauseGhost.animation.addByPrefix('press', 'pause', 24, false);
+			pauseGhost.animation.play('press');
+			pauseGhost.setGraphicSize(Std.int(pauseGhost.width * 0.8));
+			pauseGhost.updateHitbox();
+			pauseGhost.scrollFactor.set();
+			pauseGhost.antialiasing = ClientPrefs.data.antialiasing;
+			pauseGhost.alpha = 0.4;
+			pauseGhost.x = FlxG.width - pauseGhost.width - 15;
+			pauseGhost.y = 15;
+			add(pauseGhost); // 位于黑底之上、下方信息文本之前
+
+			var fadeTime:Float = FlxG.random.float(1.2, 1.8);
+			FlxTween.tween(pauseGhost, {alpha: 0}, fadeTime, {
+				ease: FlxEase.quadIn,
+				onComplete: _ -> pauseGhost.visible = false
+			});
+		}
+
 		var levelInfo:FlxText = new FlxText(20, 15, 0, 'SONG: ${PlayState.SONG.song}', 32);
 		levelInfo.scrollFactor.set();
 		levelInfo.setFormat(Paths.font("vcr.ttf"), 32);
