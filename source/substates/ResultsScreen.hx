@@ -292,13 +292,9 @@ class ResultsScreen extends FlxSubState
 			createMobileButton(FlxG.width - btnW - margin, btnY, btnW, btnH, Language.get('results_btn_exit'), 0xFFFF9999, 0xFF8B0000, exitGame);
 		else
 		{
-			// 退出（对应桌面端 ENTER：非命令行返回选歌），二次确认已在按钮上实现
+			// 退出（对应桌面端 ENTER：非命令行返回选歌），不受其他按钮状态影响
 			createMobileButton(FlxG.width - btnW - margin, btnY, btnW, btnH, Language.get('results_btn_exit'), 0xFFFF9999, 0xFF8B0000,
-				() ->
-				{
-					if (!replayPressed && !savePressed)
-						handleContinue();
-				});
+				() -> handleContinue());
 			// 观看回放（对应桌面端 F8），二次确认已在按钮上实现
 			if (canReplay)
 				createMobileButton(FlxG.width - 2 * btnW - gap - margin, btnY, btnW, btnH, Language.get('results_btn_replay'), 0xFF99FF99, 0xFF006400,
@@ -310,16 +306,17 @@ class ResultsScreen extends FlxSubState
 							handleReplay();
 						}
 					});
-			// 保存回放（对应桌面端 F9），二次确认已在按钮上实现
-			createMobileButton(FlxG.width - 3 * btnW - 2 * gap - margin, btnY, btnW, btnH, Language.get('results_btn_save'), 0xFF99CCFF, 0xFF00008B,
-				() ->
-				{
-					if (!savePressed)
+			// 保存回放（对应桌面端 F9），二次确认已在按钮上实现；有回放数据才显示
+			if (canReplay)
+				createMobileButton(FlxG.width - 3 * btnW - 2 * gap - margin, btnY, btnW, btnH, Language.get('results_btn_save'), 0xFF99CCFF, 0xFF00008B,
+					() ->
 					{
-						savePressed = true;
-						saveReplay();
-					}
-				});
+						if (!savePressed)
+						{
+							savePressed = true;
+							saveReplay();
+						}
+					});
 		}
 		#end
 
