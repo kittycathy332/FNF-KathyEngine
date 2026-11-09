@@ -301,10 +301,6 @@ class OldChartingState073 extends OldEditorState
 		updateJsonData();
 		currentSongName = Paths.formatToSongPath(_song.song);
 		loadSong();
-		reloadGridLayer();
-		Conductor.bpm = _song.bpm;
-		Conductor.mapBPMChanges(_song);
-		if(curSec >= _song.notes.length) curSec = _song.notes.length - 1;
 
 		bpmTxt = new FlxText(1000, 50, 0, "", 16);
 		bpmTxt.scrollFactor.set();
@@ -320,6 +316,11 @@ class OldChartingState073 extends OldEditorState
 		quant.xAdd = -32;
 		quant.yAdd = 8;
 		add(quant);
+
+		reloadGridLayer();
+		Conductor.bpm = _song.bpm;
+		Conductor.mapBPMChanges(_song);
+		if(curSec >= _song.notes.length) curSec = _song.notes.length - 1;
 
 		strumLineNotes = new FlxTypedGroup<StrumNote>();
 		for (i in 0...((_song.mania + 1) * 2)){

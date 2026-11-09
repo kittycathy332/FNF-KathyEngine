@@ -328,9 +328,6 @@ class OldChartingState063 extends OldEditorState
 
 		currentSongName = Paths.formatToSongPath(_song.song);
 		loadSong();
-		reloadGridLayer();
-		Conductor.bpm = _song.bpm;
-		Conductor.mapBPMChanges(_song);
 
 		bpmTxt = new FlxText(1000, 50, 0, "", 16);
 		bpmTxt.scrollFactor.set();
@@ -346,6 +343,10 @@ class OldChartingState063 extends OldEditorState
 		quant.xAdd = -32;
 		quant.yAdd = 8;
 		add(quant);
+
+		reloadGridLayer();
+		Conductor.bpm = _song.bpm;
+		Conductor.mapBPMChanges(_song);
 
 		strumLineNotes = new FlxTypedGroup<StrumNote>();
 		for (i in 0...8){
