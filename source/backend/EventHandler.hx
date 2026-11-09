@@ -355,6 +355,20 @@ class EventHandler
                 var showPreviewAfter:Bool = true;
                 if (value3 != null && value3 != '' && (value3 == '0' || value3.toLowerCase() == 'false' || value3.toLowerCase() == 'no')) showPreviewAfter = false;
                 playState.changeKeyCounts(plrKeys, oppKeys, showPreviewAfter);
+
+            // Psych EK 0.3 compatible alias used by the legacy 0.6.3 chart editor:
+            // value1 = 0-based mania tier (0 = 1K ... 17 = 18K), both sides change together;
+            // value2 = 'true' skips the key preview (0.3 used it to skip the strum fade).
+            case 'Change Mania', 'change mania':
+                var maniaTier:Int = (value1 != null && value1 != '' && !Math.isNaN(Std.parseFloat(value1))) ? Std.parseInt(value1) : 3;
+                if (maniaTier < 0 || maniaTier > 17) maniaTier = 3;
+                var newKeyCount:Int = maniaTier + 1;
+                var skipKeyPreview:Bool = (value2 != null && value2.toLowerCase() == 'true');
+                var wasDual:Bool = playState.isLeDualChart;
+                playState.changeKeyCounts(newKeyCount, newKeyCount, !skipKeyPreview);
+                // changeKeyCounts() forces LTS dual-side mode; a plain EK chart has no
+                // playerKeyCount, so put the flag back to keep parse semantics unchanged.
+                if (!wasDual) playState.isLeDualChart = false;
         }
 
         playState.stagesFunc(function(stage:BaseStage) stage.eventCalled(eventName, value1, value2, flValue1, flValue2, strumTime));

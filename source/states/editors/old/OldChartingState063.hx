@@ -13,6 +13,9 @@ import backend.Song;
 import backend.StageData;
 import backend.Mods;
 import backend.CoolUtil;
+import backend.ExtraKeysHandler;
+import backend.ui.StyledButton;
+import backend.ui.StyledButtonStyle;
 import objects.Character;
 import objects.Character.CharacterFile;
 import objects.HealthIcon;
@@ -93,8 +96,38 @@ class OldChartingState063 extends OldEditorState
 	private var noteTypeMap:Map<String, Null<Int>> = new Map<String, Null<Int>>();
 	public var ignoreWarnings = false;
 	var _virtualpad:FlxVirtualPad;
-	var undos = [];
-	var redos = [];
+
+	// === Extra Keys: multi-key support ===
+	/** lanes per side = mania + 1 */
+	function laneCount():Int return ((_song != null && _song.mania != null) ? _song.mania : 3) + 1;
+	/** grid columns = 1 event column + both sides */
+	function getColumns():Int return 1 + laneCount() * 2;
+	var columns:Int = 9;
+	var maniaStepper:FlxUINumericStepper;
+	var suppressManiaEvent:Bool = false;
+
+	// === horizontal track scrolling (mirrors 0.7.3 editor) ===
+	var trackScrollX:Float = GRID_SIZE;
+	var trackScrollTargetX:Float = GRID_SIZE;
+	var trackButtonScrollSpeed:Float = 240;
+	var btnTrackLeft:StyledButton;
+	var btnTrackRight:StyledButton;
+
+	// === stashed notes (reversible down-shift, mirrors 0.7.3) ===
+	static inline var STASH_FIELD:String = 'editorStashedNotes';
+	static inline var STASHED_NOTE_ORANGE:Int = 0xFFFFA500;
+	static inline var STASHED_NOTE_ORANGE_DARK:Int = 0xFF8C3A00;
+	static inline var STASHED_NOTE_HIGHLIGHT:Int = 0xFFFFFFFF;
+	static var sessionStashBySong:Map<String, Array<Dynamic>> = new Map<String, Array<Dynamic>>();
+	var stashedNotes:Array<Dynamic> = [];
+	var stashedRenderedNotes:FlxTypedGroup<Note>;
+	/** Raw note type names, index-aligned with the Note type dropdown (0.7.3 style). */
+	var curNoteTypes:Array<String> = [];
+
+	// === undo / redo snapshots ===
+	var undoHistory:Array<Dynamic> = [];
+	var redoHistory:Array<Dynamic> = [];
+	var UNDO_MAX:Int = 100;
 	var eventStuff:Array<Dynamic> =
 	[
 		['', "Nothing. Yep, that's right."],
@@ -112,7 +145,8 @@ class OldChartingState063 extends OldEditorState
 		['Screen Shake', "Value 1: Camera shake\nValue 2: HUD shake\n\nEvery value works as the following example: \"1, 0.05\".\nThe first number (1) is the duration.\nThe second number (0.05) is the intensity."],
 		['Change Character', "Value 1: Character to change (Dad, BF, GF)\nValue 2: New character's name"],
 		['Change Scroll Speed', "Value 1: Scroll Speed Multiplier (1 is default)\nValue 2: Time it takes to change fully in seconds."],
-		['Set Property', "Value 1: Variable name\nValue 2: New value"]
+		['Set Property', "Value 1: Variable name\nValue 2: New value"],
+		['Change Mania', "Runtime key-count change (Psych EK 0.3 style).\nValue 1: new mania (0 = 1K ... 17 = 18K)\nValue 2: 'true' skips the key preview"]
 	];
 
 	var _file:FileReference;
@@ -129,6 +163,11 @@ class OldChartingState063 extends OldEditorState
 	private static var lastSong:String = '';
 
 	var bpmTxt:FlxText;
+	/** Cached format that paints only the stashed-note warning line orange. */
+	var stashWarnFormat:FlxTextFormat = null;
+	/** Last applied format range; start = -1 means no warning line is active. */
+	var stashWarnStart:Int = -1;
+	var stashWarnEnd:Int = -1;
 
 	var camPos:FlxObject;
 	var strumLine:FlxSprite;
@@ -162,6 +201,11 @@ class OldChartingState063 extends OldEditorState
 
 	// 保存谱面时写入的出处标记
 	static var GENERATED_BY(get, never):String;
+	// 0.7.3 layout fonts
+	static inline var SONG_INFO_FONT:String = 'assets/fonts/arturito-slab.ttf';
+	static inline var TIP_INFO_FONT:String = 'assets/fonts/Quantico-Bold.ttf';
+	/** FlxTextFormat needs 0xRRGGBB (no alpha); low 24 bits of STASHED_NOTE_ORANGE. */
+	static inline var STASHED_INFO_ORANGE:Int = 0xFFA500;
 	static function get_GENERATED_BY():String
 		return 'KathyEngine - Chart Editor Legacy v0.6.3';
 
@@ -183,7 +227,6 @@ class OldChartingState063 extends OldEditorState
 	var value2InputText:FlxUIInputText;
 	var currentSongName:String;
 
-	var zoomTxt:FlxText;
 
 	var zoomList:Array<Float> = [
 		0.25,
@@ -231,17 +274,11 @@ class OldChartingState063 extends OldEditorState
 	public var mouseQuant:Bool = false;
 	override function create()
 	{
-		// Safety net: this editor's grid/notes are hardcoded to 4 lanes, so a multi-key chart
-		// would render (and save) garbage. ChartingRouter normally catches this first.
-		if (!ChartingRouter.currentChartIsFourKey())
-		{
-			trace('OldChartingState063: "${PlayState.SONG.song}" is not a 4K chart, opening the 1.0 editor instead.');
-			MusicBeatState.switchState(new ChartingState());
-			return;
-		}
+		// Extra Keys: this editor now handles 1K-18K charts directly, no fallback needed.
 		if (PlayState.SONG != null)
 		{
 			_song = PlayState.SONG;
+			if (_song.mania == null) _song.mania = 3;
 			// Charts always reach us as psych_v1 (Song.parseJSON upgrades on load), but this editor
 			// reads/writes lanes relative to mustHitSection like 0.6.3 did.
 			LegacyChartFormat.toLegacy(_song, LegacyChartFormat.FORMAT_063);
@@ -264,11 +301,16 @@ class OldChartingState063 extends OldEditorState
 				speed: 1,
 				stage: 'stage',
 				offset: 0,
-				format: '0.6.3'
+				format: '0.6.3',
+				mania: 3
 			};
 			addSection();
 			PlayState.SONG = _song;
 		}
+
+		ExtraKeysHandler.ensure();
+		syncChartManiaGlobals();
+		restoreStashedNotes();
 
 		// Paths.clearMemory();
 
@@ -305,8 +347,7 @@ class OldChartingState063 extends OldEditorState
 		add(leftIcon);
 		add(rightIcon);
 
-		leftIcon.setPosition(GRID_SIZE + 10, -100);
-		rightIcon.setPosition(GRID_SIZE * 5.2, -100);
+		updateIconPositions();
 
 		curRenderedSustains = new FlxTypedGroup<FlxSprite>();
 		curRenderedNotes = new FlxTypedGroup<Note>();
@@ -329,11 +370,14 @@ class OldChartingState063 extends OldEditorState
 		currentSongName = Paths.formatToSongPath(_song.song);
 		loadSong();
 
+		// Song info (time / section / beat / step / snap / zoom) uses arturito-slab,
+		// same as the 0.7.3 editor. Its position is set once UI_box exists.
 		bpmTxt = new FlxText(1000, 50, 0, "", 16);
+		bpmTxt.setFormat(SONG_INFO_FONT, 16, FlxColor.WHITE, LEFT);
 		bpmTxt.scrollFactor.set();
 		add(bpmTxt);
 
-		strumLine = new FlxSprite(0, 50).makeGraphic(Std.int(GRID_SIZE * 9), 4);
+		strumLine = new FlxSprite(0, 50).makeGraphic(Std.int(GRID_SIZE * getColumns()), 4);
 		add(strumLine);
 
 		quant = new AttachedSprite('chart_quant','chart_quant');
@@ -349,20 +393,14 @@ class OldChartingState063 extends OldEditorState
 		Conductor.mapBPMChanges(_song);
 
 		strumLineNotes = new FlxTypedGroup<StrumNote>();
-		for (i in 0...8){
-			var note:StrumNote = new StrumNote(GRID_SIZE * (i+1), strumLine.y, i % 4, 0);
-			note.setGraphicSize(GRID_SIZE, GRID_SIZE);
-			note.updateHitbox();
-			note.playAnim('static', true);
-			strumLineNotes.add(note);
-			note.scrollFactor.set(1, 1);
-		}
 		add(strumLineNotes);
+		rebuildStrumLineNotes();
 
 		camPos = new FlxObject(0, 0, 1, 1);
 		camPos.setPosition(strumLine.x + CAM_OFFSET, strumLine.y);
 
 		dummyArrow = new FlxSprite().makeGraphic(GRID_SIZE, GRID_SIZE);
+		dummyArrow.antialiasing = ClientPrefs.data.antialiasing;
 		add(dummyArrow);
 
 		var tabs = [
@@ -375,10 +413,15 @@ class OldChartingState063 extends OldEditorState
 
 		UI_box = new FlxUITabMenu(null, tabs, true);
 
+		// Align to the right edge like 0.7.3 so the box never overlaps the tracks on mobile.
 		UI_box.resize(300, 400);
-		UI_box.x = 640 + GRID_SIZE / 2;
+		UI_box.x = FlxG.width - UI_box.width - 30;
 		UI_box.y = 25;
 		UI_box.scrollFactor.set();
+
+		// Keep the song info to the left of the box (0.7.3 layout).
+		bpmTxt.x = UI_box.x - 210;
+		bpmTxt.y = 50;
 
 		text =
 		"W/S or Mouse Wheel - Change Conductor's strum time
@@ -394,13 +437,15 @@ class OldChartingState063 extends OldEditorState
 		Backspace - Go back to Editor Menu
 		Enter - Play your chart
 		Q/E - Decrease/Increase Note Sustain Length
+		Alt + Wheel / < > - Scroll tracks left/right
 		Space - Stop/Resume song" + (controls.mobileC ? "\nTouch Pad: use on-screen buttons (B button exits to Editor Menu)" : "");
 
 		var tipTextArray:Array<String> = text.split('\n');
 		for (i in 0...tipTextArray.length) {
-			var tipText:FlxText = new FlxText(UI_box.x, UI_box.y + UI_box.height + 8, 0, tipTextArray[i], 16);
+			var tipText:FlxText = new FlxText(UI_box.x - 210, UI_box.y + UI_box.height + 8, 0, tipTextArray[i], 16);
 			tipText.y += i * 16;
-			tipText.setFormat(Paths.font("vcr.ttf"), 14, FlxColor.WHITE, LEFT/*, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK*/);
+			// 0.7.3 uses Quantico-Bold for the help text.
+			tipText.setFormat(TIP_INFO_FONT, 14, FlxColor.WHITE, LEFT/*, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK*/);
 			//tipText.borderSize = 2;
 			tipText.scrollFactor.set();
 			add(tipText);
@@ -416,20 +461,30 @@ class OldChartingState063 extends OldEditorState
 		updateWaveform();
 		//UI_box.selected_tab = 4;
 
+		stashedRenderedNotes = new FlxTypedGroup<Note>();
 		add(curRenderedSustains);
 		add(curRenderedNotes);
+		add(stashedRenderedNotes);
 		add(curRenderedNoteType);
 		add(nextRenderedSustains);
 		add(nextRenderedNotes);
+
+		// === horizontal track scroll buttons (mirrors 0.7.3) ===
+		var trackBtnStyle:StyledButtonStyle = StyledButtonStyle.flixelClassic();
+		trackBtnStyle.size = 44;
+		btnTrackLeft = new StyledButton(UI_box.x - 46, UI_box.y + UI_box.height - 88, StyledButton.LEFT, trackBtnStyle);
+		btnTrackLeft.hitPadding = 4;
+		add(btnTrackLeft);
+		btnTrackRight = new StyledButton(UI_box.x - 46, UI_box.y + UI_box.height - 44, StyledButton.RIGHT, trackBtnStyle);
+		btnTrackRight.hitPadding = 4;
+		add(btnTrackRight);
+		bringTrackButtonsToFront();
+		updateTrackButtonsVisibility();
 
 		if(lastSong != currentSongName) {
 			changeSection();
 		}
 		lastSong = currentSongName;
-
-		zoomTxt = new FlxText(10, 10, 0, "Zoom: 1 / 1", 16);
-		zoomTxt.scrollFactor.set();
-		add(zoomTxt);
 
 		updateGrid();
 		super.create();
@@ -461,7 +516,7 @@ class OldChartingState063 extends OldEditorState
 
 		var saveButton:FlxButton = new FlxButton(110, 8, "Save", function()
 		{
-			saveLevel();
+			confirmChartMania(saveLevel);
 		});
 
 		var reloadSong:FlxButton = new FlxButton(saveButton.x + 90, saveButton.y, "Reload Audio", function()
@@ -647,6 +702,13 @@ class OldChartingState063 extends OldEditorState
 			updateGrid();
 		});
 
+		ExtraKeysHandler.ensure();
+		maniaStepper = new FlxUINumericStepper(stepperSpeed.x + 110, stepperSpeed.y, 1, 3,
+			ExtraKeysHandler.instance.data.minKeys, ExtraKeysHandler.instance.data.maxKeys, 1);
+		maniaStepper.value = (_song.mania != null) ? _song.mania : 3;
+		maniaStepper.name = 'song_mania';
+		blockPressWhileTypingOnStepper.push(maniaStepper);
+
 		var tab_group_song = new FlxUI(null, UI_box);
 		tab_group_song.name = "Song";
 		tab_group_song.add(UI_songTitle);
@@ -662,12 +724,14 @@ class OldChartingState063 extends OldEditorState
 		tab_group_song.add(loadEventJson);
 		tab_group_song.add(stepperBPM);
 		tab_group_song.add(stepperSpeed);
+		tab_group_song.add(maniaStepper);
 		tab_group_song.add(reloadNotesButton);
 		tab_group_song.add(noteSkinInputText);
 		tab_group_song.add(noteSplashesInputText);
 		tab_group_song.add(new FlxText(stepperBPM.x, stepperBPM.y - 15, 0, 'Song BPM:'));
 		tab_group_song.add(new FlxText(stepperBPM.x + 100, stepperBPM.y - 15, 0, 'Song Offset:'));
 		tab_group_song.add(new FlxText(stepperSpeed.x, stepperSpeed.y - 15, 0, 'Song Speed:'));
+		tab_group_song.add(new FlxText(maniaStepper.x, maniaStepper.y - 15, 0, 'Mania (Keys):'));
 		tab_group_song.add(new FlxText(player2DropDown.x, player2DropDown.y - 15, 0, 'Opponent:'));
 		tab_group_song.add(new FlxText(gfVersionDropDown.x, gfVersionDropDown.y - 15, 0, 'Girlfriend:'));
 		tab_group_song.add(new FlxText(player1DropDown.x, player1DropDown.y - 15, 0, 'Boyfriend:'));
@@ -839,10 +903,11 @@ class OldChartingState063 extends OldEditorState
 
 		var swapSection:FlxButton = new FlxButton(10, check_notesSec.y + 40, "Swap section", function()
 		{
+			pushUndo();
 			for (i in 0..._song.notes[curSec].sectionNotes.length)
 			{
 				var note:Array<Dynamic> = _song.notes[curSec].sectionNotes[i];
-				note[1] = (note[1] + 4) % 8;
+				note[1] = (note[1] + laneCount()) % (laneCount() * 2);
 				_song.notes[curSec].sectionNotes[i] = note;
 			}
 			updateGrid();
@@ -862,6 +927,7 @@ class OldChartingState063 extends OldEditorState
 
 
 				var copiedNote:Array<Dynamic> = [strum, note[1], note[2], note[3]];
+				if (note.length > 4) copiedNote.push(note[4]);
 				_song.notes[daSec].sectionNotes.push(copiedNote);
 			}
 
@@ -896,10 +962,10 @@ class OldChartingState063 extends OldEditorState
 			for (note in _song.notes[curSec].sectionNotes)
 			{
 				var boob = note[1];
-				if (boob>3){
-					boob -= 4;
+				if (boob > _song.mania){
+					boob -= laneCount();
 				}else{
-					boob += 4;
+					boob += laneCount();
 				}
 
 				var copiedNote:Array<Dynamic> = [note[0], boob, note[2], note[3]];
@@ -918,9 +984,9 @@ class OldChartingState063 extends OldEditorState
 			var duetNotes:Array<Array<Dynamic>> = [];
 			for (note in _song.notes[curSec].sectionNotes)
 			{
-				var boob = note[1]%4;
-				boob = 3 - boob;
-				if (note[1] > 3) boob += 4;
+				var boob = note[1] % laneCount();
+				boob = _song.mania - boob;
+				if (note[1] > _song.mania) boob += laneCount();
 
 				note[1] = boob;
 				var copiedNote:Array<Dynamic> = [note[0], boob, note[2], note[3]];
@@ -979,6 +1045,7 @@ class OldChartingState063 extends OldEditorState
 		var displayNameList:Array<String> = [];
 		while (key < noteTypeList.length) {
 			displayNameList.push(noteTypeList[key]);
+			curNoteTypes.push(noteTypeList[key]);
 			noteTypeMap.set(noteTypeList[key], key);
 			noteTypeIntMap.set(key, noteTypeList[key]);
 			key++;
@@ -1001,6 +1068,7 @@ class OldChartingState063 extends OldEditorState
 					if (!noteTypeMap.exists(fileToCheck))
 					{
 						displayNameList.push(fileToCheck);
+						curNoteTypes.push(fileToCheck);
 						noteTypeMap.set(fileToCheck, key);
 						noteTypeIntMap.set(key, fileToCheck);
 						key++;
@@ -1033,6 +1101,7 @@ class OldChartingState063 extends OldEditorState
 							if (!noteTypeMap.exists(pFileToCheck))
 							{
 								displayNameList.push(pFileToCheck);
+								curNoteTypes.push(pFileToCheck);
 								noteTypeMap.set(pFileToCheck, key);
 								noteTypeIntMap.set(key, pFileToCheck);
 								perSongNoteTypeNames.push(pFileToCheck);
@@ -1585,6 +1654,23 @@ class OldChartingState063 extends OldEditorState
 			{
 				_song.speed = nums.value;
 			}
+			else if (wname == 'song_mania')
+			{
+				if (!suppressManiaEvent)
+				{
+					pushUndo();
+					var newMania:Int = Std.int(nums.value);
+					var oldMania:Int = (_song.mania != null) ? _song.mania : 3;
+					if (oldMania != newMania) remapChartNotesForMania(oldMania, newMania);
+					_song.mania = newMania;
+					Reflect.setField(_song, 'keyCount', newMania + 1);
+					if (PlayState.SONG != null) PlayState.SONG.mania = newMania;
+					trackScrollX = GRID_SIZE;
+					trackScrollTargetX = GRID_SIZE;
+					updateTrackButtonsVisibility();
+					reloadGridLayer();
+				}
+			}
 			else if (wname == 'song_bpm')
 			{
 				tempBpm = nums.value;
@@ -1652,6 +1738,8 @@ class OldChartingState063 extends OldEditorState
 			{
 				_virtualpad = new FlxVirtualPad(FlxDPadMode.CHART_EDITOR, FlxActionMode.CHART_EDITOR);
 				add(_virtualpad);
+				// The virtual pad is added lazily; keep the track scroll buttons above it.
+				bringTrackButtonsToFront();
 			}
 		}
 	}
@@ -1699,9 +1787,22 @@ class OldChartingState063 extends OldEditorState
 		_song.song = UI_songTitle.text;
 
 		strumLineUpdateY();
-		for (i in 0...8){
-			strumLineNotes.members[i].y = strumLine.y;
+		for (arrow in strumLineNotes)
+			if (arrow != null) arrow.y = strumLine.y;
+
+		// === horizontal track camera (mirrors 0.7.3) ===
+		var wheelConsumedForHorizontal:Bool = false;
+		var wheelDelta:Float = FlxG.mouse.wheel;
+		if (wheelDelta != 0 && altHeld)
+		{
+			trackScrollTargetX -= wheelDelta * GRID_SIZE;
+			wheelConsumedForHorizontal = true;
 		}
+		var btnStep:Float = trackButtonScrollSpeed * Math.min(elapsed, 1 / 30);
+		if (btnTrackLeft != null && btnTrackLeft.pressed) trackScrollTargetX += btnStep;
+		if (btnTrackRight != null && btnTrackRight.pressed) trackScrollTargetX -= btnStep;
+		trackScrollX = FlxMath.lerp(trackScrollX, trackScrollTargetX, 0.25);
+		camPos.x = -80 + (GRID_SIZE * (laneCount() * 2)) + trackScrollX;
 
 		FlxG.mouse.visible = true;//cause reasons. trust me
 		camPos.y = strumLine.y;
@@ -1722,7 +1823,24 @@ class OldChartingState063 extends OldEditorState
 		FlxG.watch.addQuick('daStep', curStep);
 
 
-		if (FlxG.mouse.x > gridBG.x
+		// Screen-space guard: after horizontal scrolling, world mouse coords no longer match
+		// the fixed UI_box / button rects. Mirrors 0.7.3's anti-click-through logic.
+		var smx:Float = FlxG.mouse.x - FlxG.camera.scroll.x;
+		var smy:Float = FlxG.mouse.y - FlxG.camera.scroll.y;
+		var suppressMouse:Bool = false;
+		if (UI_box != null)
+			suppressMouse = smx >= UI_box.x - 5 && smx <= UI_box.x + UI_box.width + 5
+				&& smy >= UI_box.y - 5 && smy <= UI_box.y + UI_box.height + 5;
+		if (!suppressMouse && btnTrackLeft != null && btnTrackLeft.visible
+			&& smx >= btnTrackLeft.x - 4 && smx <= btnTrackLeft.x + btnTrackLeft.width + 4
+			&& smy >= btnTrackLeft.y - 4 && smy <= btnTrackLeft.y + btnTrackLeft.height + 4)
+			suppressMouse = true;
+		if (!suppressMouse && btnTrackRight != null && btnTrackRight.visible
+			&& smx >= btnTrackRight.x - 4 && smx <= btnTrackRight.x + btnTrackRight.width + 4
+			&& smy >= btnTrackRight.y - 4 && smy <= btnTrackRight.y + btnTrackRight.height + 4)
+			suppressMouse = true;
+
+		if (!suppressMouse && FlxG.mouse.x > gridBG.x
 			&& FlxG.mouse.x < gridBG.x + gridBG.width
 			&& FlxG.mouse.y > gridBG.y
 			&& FlxG.mouse.y < gridBG.y + (GRID_SIZE * getSectionBeats() * 4) * zoomList[curZoom])
@@ -1740,7 +1858,7 @@ class OldChartingState063 extends OldEditorState
 			dummyArrow.visible = false;
 		}
 
-		if (FlxG.mouse.justPressed)
+		if (FlxG.mouse.justPressed && !suppressMouse)
 		{
 			if (FlxG.mouse.overlaps(curRenderedNotes))
 			{
@@ -1768,7 +1886,7 @@ class OldChartingState063 extends OldEditorState
 			}
 			else
 			{
-				if (FlxG.mouse.x > gridBG.x
+				if (!suppressMouse && FlxG.mouse.x > gridBG.x
 					&& FlxG.mouse.x < gridBG.x + gridBG.width
 					&& FlxG.mouse.y > gridBG.y
 					&& FlxG.mouse.y < gridBG.y + (GRID_SIZE * getSectionBeats() * 4) * zoomList[curZoom])
@@ -1823,19 +1941,11 @@ class OldChartingState063 extends OldEditorState
 
 			if (FlxG.keys.justPressed.ESCAPE || (_virtualpad != null && _virtualpad.buttonC.justPressed))
 			{
-				openEditorPlayState();
+				confirmChartMania(openEditorPlayState);
 			}
 			if (FlxG.keys.justPressed.ENTER || (_virtualpad != null && _virtualpad.buttonA.justPressed))
 			{
-				autosaveSong();
-				FlxG.mouse.visible = false;
-				PlayState.SONG = prepareSongForPlayState();
-				FlxG.sound.music.stop();
-				if(vocals != null) vocals.stop();
-
-				//if(_song.stage == null) _song.stage = stageDropDown.selectedLabel;
-				StageData.loadDirectory(_song);
-				LoadingState.loadAndSwitchState(new PlayState());
+				confirmChartMania(goPlayState);
 			}
 
 			if(curSelectedNote != null && curSelectedNote[1] > -1) {
@@ -1861,6 +1971,9 @@ class OldChartingState063 extends OldEditorState
 			if(FlxG.keys.justPressed.Z && ctrlHeld) {
 				undo();
 			}
+			if(FlxG.keys.justPressed.Y && ctrlHeld) {
+				redo();
+			}
 
 
 
@@ -1879,12 +1992,12 @@ class OldChartingState063 extends OldEditorState
 				{
 					UI_box.selected_tab -= 1;
 					if (UI_box.selected_tab < 0)
-						UI_box.selected_tab = 2;
+						UI_box.selected_tab = 4;
 				}
 				else
 				{
 					UI_box.selected_tab += 1;
-					if (UI_box.selected_tab >= 3)
+					if (UI_box.selected_tab >= 5)
 						UI_box.selected_tab = 0;
 				}
 			}
@@ -1916,7 +2029,7 @@ class OldChartingState063 extends OldEditorState
 					resetSection();
 			}
 
-			if (FlxG.mouse.wheel != 0)
+			if (FlxG.mouse.wheel != 0 && !wheelConsumedForHorizontal)
 			{
 				FlxG.sound.music.pause();
 				if (!mouseQuant)
@@ -2122,9 +2235,11 @@ class OldChartingState063 extends OldEditorState
 		Conductor.songPosition = FlxG.sound.music.time;
 		strumLineUpdateY();
 		camPos.y = strumLine.y;
-		for (i in 0...8){
-			strumLineNotes.members[i].y = strumLine.y;
-			strumLineNotes.members[i].alpha = FlxG.sound.music.playing ? 1 : 0.35;
+		for (arrow in strumLineNotes)
+		{
+			if (arrow == null) continue;
+			arrow.y = strumLine.y;
+			arrow.alpha = FlxG.sound.music.playing ? 1 : 0.35;
 		}
 
 		// PLAYBACK SPEED CONTROLS //
@@ -2150,19 +2265,29 @@ class OldChartingState063 extends OldEditorState
 		FlxG.sound.music.pitch = playbackSpeed;
 		vocals.pitch = playbackSpeed;
 
-		bpmTxt.text =
+		// 0.7.3 layout: compact single line breaks and Zoom on the last line.
+		var songInfo:String =
 		Std.string(FlxMath.roundDecimal(Conductor.songPosition / 1000, 2)) + " / " + Std.string(FlxMath.roundDecimal(FlxG.sound.music.length / 1000, 2)) +
 		"\nSection: " + curSec +
 		"\n\nBeat: " + Std.string(curDecBeat).substring(0,4) +
-		"\n\nStep: " + curStep +
-		"\n\nBeat Snap: " + quantization + "th";
+		"\nStep: " + curStep +
+		"\n\nBeat Snap: " + quantization + "th" +
+		"\nZoom: " + (zoomList[curZoom] >= 1 ? '1 / ' + zoomList[curZoom] : Math.round(1 / zoomList[curZoom]) + ' / 1');
+		// Persistent warning while notes are parked outside the current layout.
+		var stashWarn:String = (stashedNotes.length > 0)
+			? "\n\n! " + stashedNotes.length + " note(s) out of " + laneCount() + "K"
+			: "";
+		bpmTxt.text = songInfo + stashWarn;
+		// +2 skips the two separating newlines; -1 removes the format.
+		updateStashWarnFormat(stashWarn.length > 0 ? songInfo.length + 2 : -1);
 
-		var playedSound:Array<Bool> = [false, false, false, false]; //Prevents ouchy GF sex sounds
+		var playedSound:Array<Bool> = [];
+		for (i in 0...laneCount()) playedSound.push(false);
 		curRenderedNotes.forEachAlive(function(note:Note) {
 			note.alpha = 1;
 			if(curSelectedNote != null) {
 				var noteDataToCheck:Int = note.noteData;
-				if(noteDataToCheck > -1 && note.mustPress != _song.notes[curSec].mustHitSection) noteDataToCheck += 4;
+				if(noteDataToCheck > -1 && note.mustPress != _song.notes[curSec].mustHitSection) noteDataToCheck += laneCount();
 
 				if (curSelectedNote[0] == note.strumTime && ((curSelectedNote[2] == null && noteDataToCheck < 0) || (curSelectedNote[2] != null && curSelectedNote[1] == noteDataToCheck)))
 				{
@@ -2175,11 +2300,14 @@ class OldChartingState063 extends OldEditorState
 			if(note.strumTime <= Conductor.songPosition) {
 				note.alpha = 0.4;
 				if(note.strumTime > lastConductorPos && FlxG.sound.music.playing && note.noteData > -1) {
-					var data:Int = note.noteData % 4;
+					var data:Int = note.noteData % laneCount();
 					var noteDataToCheck:Int = note.noteData;
-					if(noteDataToCheck > -1 && note.mustPress != _song.notes[curSec].mustHitSection) noteDataToCheck += 4;
-						strumLineNotes.members[noteDataToCheck].playAnim('confirm', true);
-						strumLineNotes.members[noteDataToCheck].resetAnim = (note.sustainLength / 1000) + 0.15;
+					if(noteDataToCheck > -1 && note.mustPress != _song.notes[curSec].mustHitSection) noteDataToCheck += laneCount();
+						if (noteDataToCheck >= 0 && noteDataToCheck < strumLineNotes.members.length)
+						{
+							strumLineNotes.members[noteDataToCheck].playAnim('confirm', true);
+							strumLineNotes.members[noteDataToCheck].resetAnim = (note.sustainLength / 1000) + 0.15;
+						}
 					if(!playedSound[data]) {
 						if((playSoundBf.checked && note.mustPress) || (playSoundDad.checked && !note.mustPress)){
 							var soundToPlay = 'hitsound';
@@ -2187,14 +2315,14 @@ class OldChartingState063 extends OldEditorState
 								soundToPlay = 'GF_' + Std.string(data + 1);
 							}
 
-							FlxG.sound.play(Paths.sound(soundToPlay)).pan = note.noteData < 4? -0.3 : 0.3; //would be coolio
+							FlxG.sound.play(Paths.sound(soundToPlay)).pan = note.noteData < laneCount()? -0.3 : 0.3;
 							playedSound[data] = true;
 						}
 
 						data = note.noteData;
 						if(note.mustPress != _song.notes[curSec].mustHitSection)
 						{
-							data += 4;
+							data += laneCount();
 						}
 					}
 				}
@@ -2214,11 +2342,60 @@ class OldChartingState063 extends OldEditorState
 		super.update(elapsed);
 	}
 
+	/**
+	 * Paint only bpmTxt's trailing "! N note(s) out of XK" line orange.
+	 *
+	 * FlxText.set_text does NOT clear _formatRanges, so calling addFormat() every
+	 * frame would grow that array without bound. Cache one FlxTextFormat and only
+	 * re-apply when the range actually changes; clear once when the warning is gone.
+	 * font / size stay null in FlxTextFormat, so OpenFL's TextFormat.__merge()
+	 * leaves arturito-slab / 16px / LEFT untouched.
+	 *
+	 * @param start index of the warning line's first char; -1 = no warning line
+	 */
+	function updateStashWarnFormat(start:Int):Void
+	{
+		if (start < 0)
+		{
+			if (stashWarnStart >= 0)
+			{
+				bpmTxt.clearFormats();
+				stashWarnStart = -1;
+				stashWarnEnd = -1;
+			}
+			return;
+		}
+
+		var end:Int = bpmTxt.text.length;
+		if (start == stashWarnStart && end == stashWarnEnd) return;
+
+		bpmTxt.clearFormats();
+		if (stashWarnFormat == null) stashWarnFormat = new FlxTextFormat(STASHED_INFO_ORANGE);
+		bpmTxt.addFormat(stashWarnFormat, start, end);
+		stashWarnStart = start;
+		stashWarnEnd = end;
+	}
+
+	/**
+	 * Clear global note / shader state when leaving the editor (mirrors 0.7.3).
+	 * Without this the next state can inherit this chart's multi-key colArray,
+	 * cached RGB shaders and note-type data -> wrong colors / stale note types.
+	 */
+	override function destroy()
+	{
+		Note.globalRgbShaders = [];
+		backend.NoteTypesConfig.clearNoteTypesData();
+		Note.uiManiaOverride = -1;
+		Note.editorDualMode = false;
+		Note.editorPlrKeys = 4;
+		Note.editorOppKeys = 4;
+		Note.colArray = ['purple', 'blue', 'green', 'red'];
+		super.destroy();
+	}
+
 	function updateZoom() {
-		var daZoom:Float = zoomList[curZoom];
-		var zoomThing:String = '1 / ' + daZoom;
-		if(daZoom < 1) zoomThing = Math.round(1 / daZoom) + ' / 1';
-		zoomTxt.text = 'Zoom: ' + zoomThing;
+		// Zoom is the last line of bpmTxt (refreshed every frame), so only rebuild the grid.
+		// Matches 0.7.3.
 		reloadGridLayer();
 	}
 
@@ -2266,8 +2443,13 @@ class OldChartingState063 extends OldEditorState
 	var lastSecBeats:Float = 0;
 	var lastSecBeatsNext:Float = 0;
 	function reloadGridLayer() {
+		columns = getColumns();
+		syncChartManiaGlobals();
+		updateIconPositions();
+		// Re-size the judgement line in place (keeps quant.sprTracker valid).
+		if (strumLine != null) strumLine.makeGraphic(Std.int(GRID_SIZE * columns), 4);
 		gridLayer.clear();
-		gridBG = FlxGridOverlay.create(GRID_SIZE, GRID_SIZE, GRID_SIZE * 9, Std.int(GRID_SIZE * getSectionBeats() * 4 * zoomList[curZoom]));
+		gridBG = FlxGridOverlay.create(GRID_SIZE, GRID_SIZE, GRID_SIZE * columns, Std.int(GRID_SIZE * getSectionBeats() * 4 * zoomList[curZoom]));
 
 		#if desktop
 		if(FlxG.save.data.chart_waveformInst || FlxG.save.data.chart_waveformVoices) {
@@ -2279,7 +2461,7 @@ class OldChartingState063 extends OldEditorState
 		var foundNextSec:Bool = false;
 		if(sectionStartTime(1) <= FlxG.sound.music.length)
 		{
-			nextGridBG = FlxGridOverlay.create(GRID_SIZE, GRID_SIZE, GRID_SIZE * 9, Std.int(GRID_SIZE * getSectionBeats(curSec + 1) * 4 * zoomList[curZoom]));
+			nextGridBG = FlxGridOverlay.create(GRID_SIZE, GRID_SIZE, GRID_SIZE * columns, Std.int(GRID_SIZE * getSectionBeats(curSec + 1) * 4 * zoomList[curZoom]));
 			leHeight = Std.int(gridBG.height + nextGridBG.height);
 			foundNextSec = true;
 		}
@@ -2291,12 +2473,12 @@ class OldChartingState063 extends OldEditorState
 
 		if(foundNextSec)
 		{
-			var gridBlack:FlxSprite = new FlxSprite(0, gridBG.height).makeGraphic(Std.int(GRID_SIZE * 9), Std.int(nextGridBG.height), FlxColor.BLACK);
+			var gridBlack:FlxSprite = new FlxSprite(0, gridBG.height).makeGraphic(Std.int(GRID_SIZE * columns), Std.int(nextGridBG.height), FlxColor.BLACK);
 			gridBlack.alpha = 0.4;
 			gridLayer.add(gridBlack);
 		}
 
-		var gridBlackLine:FlxSprite = new FlxSprite(gridBG.x + gridBG.width - (GRID_SIZE * 4)).makeGraphic(2, leHeight, FlxColor.BLACK);
+		var gridBlackLine:FlxSprite = new FlxSprite(gridBG.x + gridBG.width - (GRID_SIZE * laneCount())).makeGraphic(2, leHeight, FlxColor.BLACK);
 		gridLayer.add(gridBlackLine);
 
 		for (i in 1...4) {
@@ -2309,6 +2491,8 @@ class OldChartingState063 extends OldEditorState
 
 		var gridBlackLine:FlxSprite = new FlxSprite(gridBG.x + GRID_SIZE).makeGraphic(2, leHeight, FlxColor.BLACK);
 		gridLayer.add(gridBlackLine);
+		rebuildStrumLineNotes();
+		updateTrackButtonsVisibility();
 		updateGrid();
 
 		lastSecBeats = getSectionBeats();
@@ -2326,7 +2510,7 @@ class OldChartingState063 extends OldEditorState
 	function updateWaveform() {
 		#if desktop
 		if(waveformPrinted) {
-			waveformSprite.makeGraphic(Std.int(GRID_SIZE * 8), Std.int(gridBG.height), 0x00FFFFFF);
+			waveformSprite.makeGraphic(Std.int(GRID_SIZE * (laneCount() * 2)), Std.int(gridBG.height), 0x00FFFFFF);
 			waveformSprite.pixels.fillRect(new Rectangle(0, 0, gridBG.width, gridBG.height), 0x00FFFFFF);
 		}
 		waveformPrinted = false;
@@ -2380,7 +2564,7 @@ class OldChartingState063 extends OldEditorState
 		}
 
 		// Draws
-		var gSize:Int = Std.int(GRID_SIZE * 8);
+		var gSize:Int = Std.int(GRID_SIZE * (laneCount() * 2));
 		var hSize:Int = Std.int(gSize / 2);
 
 		var lmin:Float = 0;
@@ -2694,14 +2878,12 @@ class OldChartingState063 extends OldEditorState
 		if (curSelectedNote != null) {
 			if(curSelectedNote[2] != null) {
 				stepperSusLength.value = curSelectedNote[2];
-				if(curSelectedNote[3] != null) {
-					currentType = noteTypeMap.get(curSelectedNote[3]);
-					if(currentType <= 0) {
-						noteTypeDropDown.selectedLabel = '';
-					} else {
-						noteTypeDropDown.selectedLabel = currentType + '. ' + curSelectedNote[3];
-					}
-				}
+				var typeName:String = resolveNoteTypeName(curSelectedNote);
+				currentType = curNoteTypes.indexOf(typeName);
+				if (currentType > 0)
+					noteTypeDropDown.selectedLabel = currentType + '. ' + typeName;
+				else
+					noteTypeDropDown.selectedLabel = '';
 			} else {
 				eventDropDown.selectedLabel = curSelectedNote[1][curEventSelected][0];
 				var selected:Int = Std.parseInt(eventDropDown.selectedId);
@@ -2722,6 +2904,11 @@ class OldChartingState063 extends OldEditorState
 		curRenderedNoteType.clear();
 		nextRenderedNotes.clear();
 		nextRenderedSustains.clear();
+		if (stashedRenderedNotes != null)
+		{
+			stashedRenderedNotes.forEachAlive(function(spr:Note) spr.destroy());
+			stashedRenderedNotes.clear();
+		}
 
 		if (_song.notes[curSec].changeBPM && _song.notes[curSec].bpm > 0)
 		{
@@ -2749,21 +2936,12 @@ class OldChartingState063 extends OldEditorState
 				curRenderedSustains.add(setupSusNote(note, beats));
 			}
 
-			if(i[3] != null && note.noteType != null && note.noteType.length > 0) {
-				var typeInt:Null<Int> = noteTypeMap.get(i[3]);
-				var theType:String = '' + typeInt;
-				if(typeInt == null) theType = '?';
-
-				var daText:AttachedFlxText = new AttachedFlxText(0, 0, 100, theType, 24);
-				daText.setFormat(Paths.font("vcr.ttf"), 24, FlxColor.WHITE, CENTER, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
-				daText.xAdd = -32;
-				daText.yAdd = 6;
-				daText.borderSize = 1;
-				curRenderedNoteType.add(daText);
-				daText.sprTracker = note;
-			}
+			// noteType label: index / '?' / nothing. Read-only, never rewrites i[3].
+			var typeLabel:String = noteTypeLabel(i);
+			if (typeLabel.length > 0)
+				curRenderedNoteType.add(makeNoteLabel(typeLabel, note));
 			note.mustPress = _song.notes[curSec].mustHitSection;
-			if(i[1] > 3) note.mustPress = !note.mustPress;
+			if(i[1] > _song.mania) note.mustPress = !note.mustPress;
 		}
 
 		// CURRENT EVENTS
@@ -2817,6 +2995,8 @@ class OldChartingState063 extends OldEditorState
 				nextRenderedNotes.add(note);
 			}
 		}
+
+		renderStashedNotes();
 	}
 
 	function setupNoteData(i:Array<Dynamic>, isNextSection:Bool):Note
@@ -2825,18 +3005,12 @@ class OldChartingState063 extends OldEditorState
 		var daStrumTime = i[0];
 		var daSus:Dynamic = i[2];
 
-		var note:Note = new Note(daStrumTime, daNoteInfo % 4, null, null, true);
+		var note:Note = new Note(daStrumTime, daNoteInfo % laneCount(), null, null, true);
 		if(daSus != null) { //Common note
-			if(!Std.isOfType(i[3], String)) //Convert old note type to new note type format
-			{
-				i[3] = noteTypeIntMap.get(i[3]);
-			}
-			if(i.length > 3 && (i[3] == null || i[3].length < 1))
-			{
-				i.remove(i[3]);
-			}
+			// Read-only resolution: the old code converted numeric indices in place
+			// and removed i[3] when empty, silently rewriting chart data on redraw.
 			note.sustainLength = daSus;
-			note.noteType = i[3];
+			note.noteType = resolveNoteTypeName(i);
 		} else { //Event note
 			note.loadGraphic(Paths.image('editors/eventIcon'));
 			note.eventName = getEventName(i[1]);
@@ -2854,10 +3028,10 @@ class OldChartingState063 extends OldEditorState
 		note.updateHitbox();
 		note.x = Math.floor(daNoteInfo * GRID_SIZE) + GRID_SIZE;
 		if(isNextSection && _song.notes[curSec].mustHitSection != _song.notes[curSec+1].mustHitSection) {
-			if(daNoteInfo > 3) {
-				note.x -= GRID_SIZE * 4;
+			if(daNoteInfo > _song.mania) {
+				note.x -= GRID_SIZE * laneCount();
 			} else if(daSus != null) {
-				note.x += GRID_SIZE * 4;
+				note.x += GRID_SIZE * laneCount();
 			}
 		}
 
@@ -2912,7 +3086,7 @@ class OldChartingState063 extends OldEditorState
 
 		if(noteDataToCheck > -1)
 		{
-			if(note.mustPress != _song.notes[curSec].mustHitSection) noteDataToCheck += 4;
+			if(note.mustPress != _song.notes[curSec].mustHitSection) noteDataToCheck += laneCount();
 			for (i in _song.notes[curSec].sectionNotes)
 			{
 				if (i != curSelectedNote && i.length > 2 && i[0] == note.strumTime && i[1] == noteDataToCheck)
@@ -2942,8 +3116,9 @@ class OldChartingState063 extends OldEditorState
 
 	function deleteNote(note:Note):Void
 	{
+		pushUndo();
 		var noteDataToCheck:Int = note.noteData;
-		if(noteDataToCheck > -1 && note.mustPress != _song.notes[curSec].mustHitSection) noteDataToCheck += 4;
+		if(noteDataToCheck > -1 && note.mustPress != _song.notes[curSec].mustHitSection) noteDataToCheck += laneCount();
 
 		if(note.noteData > -1) //Normal Notes
 		{
@@ -2980,12 +3155,13 @@ class OldChartingState063 extends OldEditorState
 	}
 
 	public function doANoteThing(cs, d, style){
+		if (d < 0 || d >= strumLineNotes.members.length) return;
 		var delnote = false;
 		if(strumLineNotes.members[d].overlaps(curRenderedNotes))
 		{
 			curRenderedNotes.forEachAlive(function(note:Note)
 			{
-				if (note.overlapsPoint(new FlxPoint(strumLineNotes.members[d].x + 1,strumLine.y+1)) && note.noteData == d%4)
+				if (note.overlapsPoint(new FlxPoint(strumLineNotes.members[d].x + 1,strumLine.y+1)) && note.noteData == d%laneCount())
 				{
 						//trace('tryin to delete note...');
 						if(!delnote) deleteNote(note);
@@ -2998,6 +3174,420 @@ class OldChartingState063 extends OldEditorState
 			addNote(cs, d, style);
 		}
 	}
+
+	// =====================================================================
+	// Extra Keys support (ported from the 0.7.3 editor + Psych EK 0.3 ideas)
+	// =====================================================================
+
+	/** Place the two health icons above the middle of each side's lanes. */
+	function updateIconPositions():Void
+	{
+		if (leftIcon == null || rightIcon == null) return;
+		var half:Float = GRID_SIZE * laneCount();
+		leftIcon.setPosition((half / 2) - (leftIcon.width / 2), -100);
+		rightIcon.setPosition(((half * 2) - (half / 2)) - (rightIcon.width / 2), -100);
+	}
+
+	/**
+	 * Keep the global Note / ExtraKeys static state in sync with _song.mania.
+	 * Note picks its frame prefix and colors from these globals, NOT from this
+	 * class, so without this a 9K chart would still draw 4-direction arrows.
+	 */
+	function syncChartManiaGlobals():Void
+	{
+		var m:Int = (_song != null && _song.mania != null) ? _song.mania : 3;
+		var cols:Int = m + 1;
+		ExtraKeysHandler.ensure();
+		ClientPrefs.ensureEKArrowColors();
+
+		if (PlayState.SONG != null) PlayState.SONG.mania = m;
+		Note.uiManiaOverride = -1;
+		Note.editorDualMode = false;
+		Note.editorPlrKeys = cols;
+		Note.editorOppKeys = cols;
+
+		var names:Array<String> = [];
+		var ek = (ExtraKeysHandler.instance != null) ? ExtraKeysHandler.instance.data : null;
+		if (ek != null && ek.keys != null && ek.keys.length > m)
+		{
+			var mode = ek.keys[m];
+			for (i in 0...cols)
+			{
+				var g:Int = (mode != null && mode.notes != null && i < mode.notes.length) ? mode.notes[i] : i;
+				var anim = (ek.animations != null && g >= 0 && g < ek.animations.length) ? ek.animations[g] : null;
+				names.push((anim != null && anim.note != null) ? anim.note : 'purple');
+			}
+		}
+		else names = ['purple', 'blue', 'green', 'red'];
+		Note.colArray = names;
+	}
+
+	/** Rebuild the vortex strum arrows for the current mania (count + texture tier). */
+	function rebuildStrumLineNotes():Void
+	{
+		if (strumLineNotes == null) return;
+		for (arrow in strumLineNotes)
+			if (arrow != null) arrow.destroy();
+		strumLineNotes.clear();
+
+		if (PlayState.SONG != null) PlayState.SONG.mania = (_song.mania != null) ? _song.mania : 3;
+		Note.uiManiaOverride = -1;
+		Note.editorDualMode = true;
+		Note.editorPlrKeys = laneCount();
+		Note.editorOppKeys = laneCount();
+
+		for (i in 0...(laneCount() * 2))
+		{
+			var arrow:StrumNote = new StrumNote(GRID_SIZE * (i + 1), strumLine.y, i % laneCount(), 0);
+			arrow.setGraphicSize(GRID_SIZE, GRID_SIZE);
+			arrow.updateHitbox();
+			arrow.playAnim('static', true);
+			arrow.scrollFactor.set(1, 1);
+			strumLineNotes.add(arrow);
+		}
+
+		Note.uiManiaOverride = -1;
+		Note.editorDualMode = false;
+		Note.editorPlrKeys = laneCount();
+		Note.editorOppKeys = laneCount();
+		strumLineNotes.visible = strumLineNotes.active = vortex;
+		remove(strumLineNotes);
+		add(strumLineNotes);
+	}
+
+	// --- horizontal track buttons -----------------------------------------
+	function bringTrackButtonsToFront():Void
+	{
+		if (btnTrackLeft != null) { remove(btnTrackLeft); add(btnTrackLeft); }
+		if (btnTrackRight != null) { remove(btnTrackRight); add(btnTrackRight); }
+	}
+
+	function updateTrackButtonsVisibility():Void
+	{
+		var show:Bool = ((_song.mania != null) ? _song.mania : 3) >= 3;
+		if (btnTrackLeft != null) btnTrackLeft.visible = show;
+		if (btnTrackRight != null) btnTrackRight.visible = show;
+	}
+
+	public function setTrackButtonTheme(useFlixel:Bool, ?customStyle:StyledButtonStyle):Void
+	{
+		if (btnTrackLeft == null || btnTrackRight == null) return;
+		var st:StyledButtonStyle = (customStyle != null) ? customStyle
+			: (useFlixel ? StyledButtonStyle.flixelClassic() : StyledButtonStyle.glassBlue());
+		st.size = 44;
+		btnTrackLeft.setStyle(st);
+		btnTrackRight.setStyle(st);
+	}
+
+	// --- stashed notes: reversible mania changes --------------------------
+	/** Restore stashed notes from the chart object, falling back to a session copy. */
+	function restoreStashedNotes():Void
+	{
+		var songKey:String = (_song != null) ? Std.string(_song.song) : '';
+		var fromSong:Array<Dynamic> = null;
+		if (_song != null)
+		{
+			var raw:Dynamic = Reflect.field(_song, STASH_FIELD);
+			if (raw != null) fromSong = sanitizeStashedNotes(raw);
+		}
+		if (fromSong != null && fromSong.length > 0)
+			stashedNotes = fromSong;
+		else
+		{
+			var cached:Array<Dynamic> = sessionStashBySong.get(songKey);
+			stashedNotes = (cached != null && cached.length > 0)
+				? haxe.Json.parse(haxe.Json.stringify(cached)) : [];
+		}
+		syncStashedNotes(songKey);
+	}
+
+	static function sanitizeStashedNotes(raw:Dynamic):Array<Dynamic>
+	{
+		var out:Array<Dynamic> = [];
+		if (raw == null || !Std.isOfType(raw, Array)) return out;
+		for (s in (cast raw:Array<Dynamic>))
+		{
+			if (s == null || s.sec == null || s.lane == null || s.key == null
+				|| s.side == null || s.data == null || !Std.isOfType(s.data, Array))
+				continue;
+			// Keep noteType in both directions so legacy stash records still restore.
+			if (s.type == null && s.data.length > 3) s.type = s.data[3];
+			if (s.type != null && (s.data.length < 4 || s.data[3] == null)) s.data[3] = s.type;
+			out.push(s);
+		}
+		return out;
+	}
+
+	/** Mirror the working copy into the chart object + session cache. */
+	function syncStashedNotes(?songKey:String):Void
+	{
+		if (_song == null) return;
+		var key:String = (songKey != null) ? songKey : Std.string(_song.song);
+		var copy:Array<Dynamic> = haxe.Json.parse(haxe.Json.stringify(stashedNotes));
+		if (copy.length == 0)
+			Reflect.deleteField(_song, STASH_FIELD);
+		else
+			Reflect.setField(_song, STASH_FIELD, copy);
+		sessionStashBySong.set(key, copy);
+	}
+
+	/**
+	 * Re-encode every existing note when the mania changes. Notes that no longer
+	 * fit are stashed (never deleted) and put back when the mania is raised again.
+	 * Stash records "side + lane within side", so 6K -> 4K -> 6K is lossless.
+	 */
+	function remapChartNotesForMania(oldMania:Int, newMania:Int):Void
+	{
+		var oldCols:Int = oldMania + 1;
+		var newCols:Int = newMania + 1;
+
+		for (secIdx in 0..._song.notes.length)
+		{
+			var section = _song.notes[secIdx];
+			if (section == null || section.sectionNotes == null) continue;
+			var kept:Array<Dynamic> = [];
+			for (note in section.sectionNotes)
+			{
+				var lane:Int = note[1];
+				if (lane < 0) { kept.push(note); continue; }
+				var isPlr:Bool = lane < oldCols;
+				var keyIdx:Int = isPlr ? lane : (lane - oldCols);
+				if (keyIdx > newMania)
+				{
+					stashedNotes.push({sec: secIdx, lane: lane, side: isPlr, key: keyIdx, data: note,
+						type: (note.length > 3) ? note[3] : null});
+					continue;
+				}
+				note[1] = isPlr ? keyIdx : (newCols + keyIdx);
+				kept.push(note);
+			}
+			section.sectionNotes = kept;
+		}
+
+		if (stashedNotes.length == 0) return;
+		var stillStashed:Array<Dynamic> = [];
+		var touched:Map<Int, Bool> = new Map();
+		for (s in stashedNotes)
+		{
+			if (s.key > newMania) { stillStashed.push(s); continue; }
+			var secIdx:Int = s.sec;
+			if (secIdx < 0 || secIdx >= _song.notes.length || _song.notes[secIdx] == null
+				|| _song.notes[secIdx].sectionNotes == null)
+			{
+				stillStashed.push(s);
+				continue;
+			}
+			s.data[1] = s.side ? s.key : (newCols + s.key);
+			if (s.data.length > 3 && s.data[3] == null && s.type != null) s.data[3] = s.type;
+			_song.notes[secIdx].sectionNotes.push(s.data);
+			touched.set(secIdx, true);
+		}
+		stashedNotes = stillStashed;
+		for (idx in touched.keys())
+			_song.notes[idx].sectionNotes.sort(function(a, b) return (a[0] < b[0]) ? -1 : ((a[0] > b[0]) ? 1 : 0));
+		syncStashedNotes();
+	}
+
+
+	/**
+	 * Read-only noteType name resolution. The original 0.6.3 editor converted numeric
+	 * indices in place on every redraw (and removed i[3] when empty), silently mutating
+	 * chart data. This never writes back.
+	 */
+	function resolveNoteTypeName(raw:Array<Dynamic>):String
+	{
+		if (raw == null || raw.length < 4) return '';
+		var v:Dynamic = raw[3];
+		if (v == null) return '';
+		if (!Std.isOfType(v, String))
+		{
+			var idx:Int = Std.int(v);
+			return (idx >= 0 && idx < curNoteTypes.length) ? curNoteTypes[idx] : '';
+		}
+		return cast(v, String);
+	}
+
+	/** '' = default, '?' = broken/unknown type, otherwise the dropdown index. */
+	function noteTypeLabel(raw:Array<Dynamic>):String
+	{
+		if (curNoteTypes.length == 0) return '';
+		if (raw == null || raw.length < 4) return '';
+		var v:Dynamic = raw[3];
+		if (v == null) return '';
+
+		var name:String = '';
+		if (Std.isOfType(v, String))
+			name = cast(v, String);
+		else
+		{
+			var idx:Int = Std.int(v);
+			if (idx < 0 || idx >= curNoteTypes.length) return '?';
+			name = curNoteTypes[idx];
+		}
+		if (name.length < 1) return '';
+		var typeInt:Int = curNoteTypes.indexOf(name);
+		if (typeInt < 0) return '?';
+		return (typeInt > 0) ? '' + typeInt : '';
+	}
+
+	/** Shared label style for noteType badges and stash warnings. */
+	function makeNoteLabel(text:String, note:Note):AttachedFlxText
+	{
+		var t:AttachedFlxText = new AttachedFlxText(0, 0, 100, text, 24);
+		t.setFormat(Paths.font("vcr.ttf"), 24, FlxColor.WHITE, CENTER, FlxTextBorderStyle.OUTLINE_FAST, FlxColor.BLACK);
+		t.xAdd = (GRID_SIZE - 100) / 2;
+		t.yAdd = 6;
+		t.borderSize = 1;
+		t.sprTracker = note;
+		return t;
+	}
+
+	function usingHSVNoteColors():Bool
+		return ClientPrefs.data.arrowColorMode == 'HSV';
+
+	function stashedSusColor():FlxColor
+		return usingHSVNoteColors() ? FlxColor.BLACK : STASHED_NOTE_ORANGE;
+
+	/**
+	 * Tint a stashed warning arrow through a LOCAL shader instance. Setting
+	 * FlxSprite.color directly is a multiply that the note shader eats, and
+	 * touching the shared RGB palette / ColorSwap would tint every normal note
+	 * of the same style.
+	 */
+	function applyStashedWarningColor(note:Note):Void
+	{
+		if (note == null) return;
+		if (usingHSVNoteColors())
+		{
+			var swap:shaders.ColorSwap = new shaders.ColorSwap();
+			swap.hue = 0;
+			swap.saturation = 0;
+			swap.brightness = -1.0;
+			note.colorSwap = swap;
+			note.shader = swap.shader;
+			note.color = FlxColor.WHITE;
+		}
+		else
+		{
+			var pal:shaders.RGBPalette = new shaders.RGBPalette();
+			pal.r = STASHED_NOTE_ORANGE;
+			pal.g = STASHED_NOTE_HIGHLIGHT;
+			pal.b = STASHED_NOTE_ORANGE_DARK;
+			var ref:shaders.RGBPalette.RGBShaderReference = new shaders.RGBPalette.RGBShaderReference(note, pal);
+			ref.allowNew = false;
+			note.rgbShader = ref;
+			note.shader = pal.shader;
+			note.color = FlxColor.WHITE;
+		}
+	}
+
+	/** Ghost-render stashed notes so the user can see data is still there. */
+	function renderStashedNotes():Void
+	{
+		if (stashedRenderedNotes == null || stashedNotes.length == 0) return;
+		for (s in stashedNotes)
+		{
+			var secIdx:Int = s.sec;
+			if (secIdx != curSec && secIdx != curSec + 1) continue;
+			var raw:Array<Dynamic> = s.data;
+			var copy:Array<Dynamic> = raw.copy();
+			copy[1] = s.lane;
+			if (s.type != null && (copy.length < 4 || copy[3] == null)) copy[3] = s.type;
+			var note:Note = setupNoteData(copy, false);
+			applyStashedWarningColor(note);
+			stashedRenderedNotes.add(note);
+			if (note.sustainLength > 0)
+			{
+				var sus:FlxSprite = setupSusNote(note, getSectionBeats());
+				sus.color = stashedSusColor();
+				curRenderedSustains.add(sus);
+			}
+			// '?!' broken type / '3!' known type / '!' default.
+			curRenderedNoteType.add(makeNoteLabel(noteTypeLabel(copy) + '!', note));
+		}
+	}
+
+	/** Warn before exporting / leaving when notes are parked outside the layout. */
+	function confirmChartMania(action:Void->Void):Void
+	{
+		if (stashedNotes.length == 0 || ignoreWarnings)
+		{
+			action();
+			return;
+		}
+		var secs:Map<Int, Bool> = new Map();
+		for (s in stashedNotes) secs.set(s.sec, true);
+		var secCount:Int = 0;
+		for (k in secs.keys()) secCount++;
+		openSubState(new Prompt(
+			stashedNotes.length + ' note(s) are outside the current ' + laneCount() + 'K layout'
+			+ '\n(spread over ' + secCount + ' section(s)).\n\n'
+			+ 'They are kept in the chart JSON and put back\n'
+			+ 'when you raise Mania again.\n\nProceed anyway?',
+			0, action, null, false, 'PROCEED', 'CANCEL'));
+	}
+
+	// --- undo / redo snapshots --------------------------------------------
+	function makeSnapshot():Dynamic
+	{
+		return {
+			notes: haxe.Json.parse(haxe.Json.stringify(_song.notes)),
+			events: haxe.Json.parse(haxe.Json.stringify(_song.events)),
+			mania: (_song.mania != null) ? _song.mania : 3,
+			stashed: haxe.Json.parse(haxe.Json.stringify(stashedNotes))
+		};
+	}
+
+	function pushUndo():Void
+	{
+		redoHistory = [];
+		undoHistory.push(makeSnapshot());
+		if (undoHistory.length > UNDO_MAX) undoHistory.shift();
+	}
+
+	function applySnapshot(snap:Dynamic):Void
+	{
+		_song.notes = snap.notes;
+		_song.events = snap.events;
+		stashedNotes = (snap.stashed != null) ? snap.stashed : [];
+		syncStashedNotes();
+		if (snap.mania != null)
+		{
+			_song.mania = snap.mania;
+			Reflect.setField(_song, 'keyCount', snap.mania + 1);
+			if (maniaStepper != null)
+			{
+				suppressManiaEvent = true;
+				maniaStepper.value = snap.mania;
+				suppressManiaEvent = false;
+			}
+		}
+		Conductor.mapBPMChanges(_song);
+		if (_song.notes == null || _song.notes.length == 0)
+		{
+			_song.notes = [];
+			addSection();
+		}
+		if (curSec < 0) curSec = 0;
+		if (curSec >= _song.notes.length) curSec = _song.notes.length - 1;
+		curSelectedNote = null;
+		reloadGridLayer();
+		updateSectionUI();
+		updateNoteUI();
+	}
+
+	/** Enter -> PlayState (extracted so confirmChartMania can wrap it). */
+	function goPlayState():Void
+	{
+		autosaveSong();
+		FlxG.mouse.visible = false;
+		PlayState.SONG = prepareSongForPlayState();
+		FlxG.sound.music.stop();
+		if(vocals != null) vocals.stop();
+		StageData.loadDirectory(_song);
+		LoadingState.loadAndSwitchState(new PlayState());
+	}
+
 	function clearSong():Void
 	{
 		for (daSection in 0..._song.notes.length)
@@ -3023,9 +3613,12 @@ class OldChartingState063 extends OldEditorState
 		if (data != null) noteData = data;
 		if (type != null) daType = type;
 
+		var maxLane:Int = laneCount() * 2 - 1;
+		if (noteData > maxLane) noteData = maxLane;
+		pushUndo();
 		if(noteData > -1)
 		{
-			_song.notes[curSec].sectionNotes.push([noteStrum, noteData, noteSus, noteTypeIntMap.get(daType)]);
+			_song.notes[curSec].sectionNotes.push([noteStrum, noteData % (laneCount() * 2), noteSus, noteTypeIntMap.get(daType)]);
 			curSelectedNote = _song.notes[curSec].sectionNotes[_song.notes[curSec].sectionNotes.length - 1];
 		}
 		else
@@ -3041,7 +3634,7 @@ class OldChartingState063 extends OldEditorState
 
 		if (FlxG.keys.pressed.CONTROL && noteData > -1)
 		{
-			_song.notes[curSec].sectionNotes.push([noteStrum, (noteData + 4) % 8, noteSus, noteTypeIntMap.get(daType)]);
+			_song.notes[curSec].sectionNotes.push([noteStrum, (noteData + laneCount()) % (laneCount() * 2), noteSus, noteTypeIntMap.get(daType)]);
 		}
 
 		//trace(noteData + ', ' + noteStrum + ', ' + curSec);
@@ -3051,19 +3644,21 @@ class OldChartingState063 extends OldEditorState
 		updateNoteUI();
 	}
 
-	// will figure this out l8r
-	function redo()
+	function redo():Void
 	{
-		//_song = redos[curRedoIndex];
+		if (redoHistory.length == 0) return;
+		var snap:Dynamic = redoHistory.pop();
+		undoHistory.push(makeSnapshot());
+		if (undoHistory.length > UNDO_MAX) undoHistory.shift();
+		applySnapshot(snap);
 	}
 
-	function undo()
+	function undo():Void
 	{
-		//redos.push(_song);
-		undos.pop();
-		//_song.notes = undos[undos.length - 1];
-		///trace(_song.notes);
-		//updateGrid();
+		if (undoHistory.length == 0) return;
+		var snap:Dynamic = undoHistory.pop();
+		redoHistory.push(makeSnapshot());
+		applySnapshot(snap);
 	}
 
 	function getStrumTime(yPos:Float, doZoomCalc:Bool = true):Float
@@ -3125,6 +3720,9 @@ class OldChartingState063 extends OldEditorState
 	 */
 	function prepareSongForPlayState():SwagSong
 	{
+		var m:Int = (_song.mania != null) ? _song.mania : 3;
+		Reflect.setField(_song, 'mania', m);
+		Reflect.setField(_song, 'keyCount', m + 1);
 		LegacyChartFormat.toPsychV1(_song);
 		return _song;
 	}
@@ -3161,8 +3759,8 @@ class OldChartingState063 extends OldEditorState
 				if (data < 0) continue; // inline event
 				var sustain:Float = raw[2];
 				var noteType:String = (raw[3] != null) ? raw[3] : '';
-				var col:Int = data % 4;
-				var mustPress:Bool = (data < 4);
+				var col:Int = data % laneCount();
+				var mustPress:Bool = (data < laneCount());
 				var n:Note = new Note(strumTime, col, null, false, true);
 				n.mustPress = mustPress;
 				n.sustainLength = sustain;
@@ -3178,6 +3776,7 @@ class OldChartingState063 extends OldEditorState
 	}
 
 	function clearEvents() {
+		pushUndo();
 		_song.events = [];
 		updateGrid();
 	}
@@ -3185,12 +3784,30 @@ class OldChartingState063 extends OldEditorState
 	private function saveLevel()
 	{
 		if(_song.events != null && _song.events.length > 1) _song.events.sort(sortByTime);
-		// 标记谱面出处（仅元信息，不参与玩法逻辑）
-		_song.generatedBy = GENERATED_BY;
-		// 旧版制谱器（0.6.3）输出不含引擎扩展字段：format（版本标记）
-		Reflect.deleteField(_song, "format");
+		syncStashedNotes();
+
+		// Export from a clone: the in-memory chart keeps mania/keyCount for editing,
+		// but a 4K chart must contain NO engine-specific fields so that a real
+		// Psych 0.6.3 build can still read it. Multi-key charts need mania+keyCount
+		// so Song.convert() picks the right column count on reload.
+		var out:Dynamic = haxe.Json.parse(haxe.Json.stringify(_song));
+		out.generatedBy = GENERATED_BY;
+		Reflect.deleteField(out, "format");
+		Reflect.deleteField(out, "mania");
+		Reflect.deleteField(out, "keyCount");
+		Reflect.deleteField(out, "playerKeyCount");
+		Reflect.deleteField(out, STASH_FIELD);
+		var m:Int = (_song.mania != null) ? _song.mania : 3;
+		if (m != 3)
+		{
+			Reflect.setField(out, "mania", m);
+			Reflect.setField(out, "keyCount", m + 1);
+		}
+		if (stashedNotes.length > 0)
+			Reflect.setField(out, STASH_FIELD, haxe.Json.parse(haxe.Json.stringify(stashedNotes)));
+
 		var json = {
-			"song": _song
+			"song": out
 		};
 
 		var data:String = Json.stringify(json, "\t");
