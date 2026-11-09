@@ -680,7 +680,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 		dummyArrow.scrollFactor.x = 0;
 		add(dummyArrow);
 
-		dragPreview = new FlxSprite().makeGraphic(1, 1, 0x4DD2FF);
+		dragPreview = new FlxSprite().makeGraphic(1, 1, 0xFF4DD2FF);
 		dragPreview.setGraphicSize(GRID_SIZE, 1);
 		dragPreview.updateHitbox();
 		dragPreview.scrollFactor.x = 0;
