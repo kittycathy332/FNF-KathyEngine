@@ -55,6 +55,11 @@ typedef SwagSong =
 	// Leather Engine 字段：modchart 脚本路径（data/modcharts/{modchartPath}.lua）、UI 皮肤名
 	@:optional var modchartPath:String;
 	@:optional var ui_Skin:String;
+
+	// 073 旧版制谱器私有：降档时「当前档位装不下」的超范围音符（网格上带 ! 警示）。
+	// 不放在 sectionNotes 里，因此不参与 lane 编码、也不进入试玩；其它引擎/工具忽略即可。
+	// 随谱面 JSON / autosave 一起保存，重开制谱器时原位恢复。
+	@:optional var editorStashedNotes:Array<Dynamic>;
 }
 
 typedef SwagSection =
@@ -94,6 +99,19 @@ class Song
 	public var specialInst:String;
 	public var specialVocal:String;
 	public var specialEvents:String;
+
+	/**
+	 * 旧式数字索引 -> 类型名。原版 `Note.defaultNoteTypes[note[3]]` 是无防护索引，
+	 * 遇到 null / 越界 / 浮点索引会读到 undefined 并把它写回 [3]，导致编辑器不显示
+	 * 类型编号、PlayState 里特殊音符效果失效。这里加边界检查，读不到就退回空类型。
+	 */
+	public static function safeDefaultNoteType(v:Dynamic):String
+	{
+		if (Std.isOfType(v, String)) return cast(v, String);
+		if (v == null) return '';
+		var idx:Int = Std.int(v);
+		return (idx >= 0 && idx < Note.defaultNoteTypes.length) ? Note.defaultNoteTypes[idx] : '';
+	}
 
 	public static function convert(songJson:Dynamic) // Convert old charts to psych_v1 format
 	{
@@ -158,12 +176,12 @@ class Song
 			{
 				// LE LTS 双侧模式：保留谱面原始连续 noteData（mustHit 段 0..playerKeyCount-1 = 玩家、
 				// playerKeyCount.. = 对手；非 mustHit 段反之），运行时按事件时间点映射。不做列折叠。
-				if (dualMode)
-				{
-					if(!Std.isOfType(note[3], String))
-						note[3] = Note.defaultNoteTypes[note[3]];
-					continue;
-				}
+			if (dualMode)
+			{
+				if(!Std.isOfType(note[3], String))
+					note[3] = safeDefaultNoteType(note[3]);
+				continue;
+			}
 				// 列数从硬编码 4 改成按 mania 档位动态计算。
 				// legacy 相对车道：0..sectCols-1 = 当前小节归属方，sectCols..2*sectCols-1 = 另一方。
 				// psych_v1 绝对车道：0..sectCols-1 永远是玩家，sectCols..2*sectCols-1 永远是对手。
@@ -171,7 +189,7 @@ class Song
 				note[1] = (note[1] % sectCols) + (gottaHitNote ? 0 : sectCols);
 
 				if(!Std.isOfType(note[3], String))
-					note[3] = Note.defaultNoteTypes[note[3]];
+					note[3] = safeDefaultNoteType(note[3]);
 			}
 		}
 	}

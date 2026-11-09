@@ -39,6 +39,8 @@ import states.editors.old.content.AttachedFlxText;
 import states.editors.old.content.FlxUIDropDownMenuCustom;
 import states.editors.old.content.LegacyChartFormat;
 import states.editors.old.content.OldEditorState;
+import backend.ui.StyledButton;
+import backend.ui.StyledButtonStyle;
 import states.editors.old.content.OldSlider;
 import states.editors.old.content.Prompt;
 import states.LoadingState;
@@ -109,6 +111,13 @@ class OldChartingState073 extends OldEditorState
 	private static var lastSong:String = '';
 
 	var bpmTxt:FlxText;
+	/** 只给 bpmTxt 末尾「! N note(s) out of XK」这一行上橙色的格式，缓存一份复用 */
+	var stashWarnFormat:FlxTextFormat = null;
+	/** 上一次套到 bpmTxt 上的格式范围；start = -1 表示当前没在应用 */
+	var stashWarnStart:Int = -1;
+	var stashWarnEnd:Int = -1;
+	var clear_events:FlxButton;
+	var clear_notes:FlxButton;
 
 	var camPos:FlxObject;
 	var strumLine:FlxSprite;
@@ -122,6 +131,47 @@ class OldChartingState073 extends OldEditorState
 
 	public static var GRID_SIZE:Int = 40;
 	var CAM_OFFSET:Int = 360;
+
+	// 固定字体：直接写 assets 目录路径，绕过 Paths.font() 的语言翻译层与 mods 覆盖，
+	// 保证任何语言 / 模组下这两处文本都用同一套字形。
+	static inline var SONG_INFO_FONT:String = 'assets/fonts/arturito-slab.ttf';
+	static inline var TIP_INFO_FONT:String = 'assets/fonts/Quantico-Bold.ttf';
+	/**
+	 * 暂存（超范围）音符的警示配色：照搬正常箭头预设的 [主体, 白高光, 深色描边] 三通道层次，
+	 *   r = 纯橙（主体）、g = 白（高光）、b = 深橙（描边）。
+	 * 三通道全刷成橙会让箭头失去立体感、发平，所以只让主体是橙，其余保持正常的明暗结构。
+	 */
+	static inline var STASHED_NOTE_ORANGE:Int = 0xFFFFA500;
+	static inline var STASHED_NOTE_HIGHLIGHT:Int = 0xFFFFFFFF;
+	static inline var STASHED_NOTE_ORANGE_DARK:Int = 0xFF8C3A00;
+	/** 信息文本里暂存警示行的橙色。FlxTextFormat 需要 0xRRGGBB（不带 alpha 通道），
+	 *  取箭头主体色 STASHED_NOTE_ORANGE 的低 24 位，保证两处橙色一致。 */
+	static inline var STASHED_INFO_ORANGE:Int = 0xFFA500;
+
+	/**
+	 * 超范围（!）音符的持久化字段名：挂到 _song（= PlayState.SONG）上，随
+	 * saveLevel() / autosaveSong() 的 Json.stringify 一起落盘，重开时由 create() 读回。
+	 * 暂存为空时该字段会被删除，正常谱面文件与 073 原版完全一致、零污染。
+	 */
+	static inline var STASH_FIELD:String = 'editorStashedNotes';
+
+	/** 会话级兜底：PlayState / Reload JSON / 换歌可能重建 SONG 对象导致挂载字段丢失。
+	 *  按歌曲名分别保存，避免切到别的歌再回来时把这份暂存冲掉（只活在本进程内）。 */
+	static var sessionStashBySong:Map<String, Array<Dynamic>> = new Map<String, Array<Dynamic>>();
+
+	// 轨道水平手动偏移量（多键时可手动左右滑动）
+	var trackScrollX:Float = GRID_SIZE;     // 默认右移一格，让 grid 整体左移，不挡右侧信息栏/帮助文本
+	var trackScrollTargetX:Float = GRID_SIZE; // 目标值（与默认偏移一致）
+	var trackScrollMax:Float = 0;        // 最大可左移量（轨道总宽 - 屏幕宽）
+	var btnTrackLeft:StyledButton;   // 自绘轨道左滑按钮
+	var btnTrackRight:StyledButton;  // 自绘轨道右滑按钮
+
+	// 触屏左右按钮按住时的轨道滚动速度（像素/秒，按 elapsed 推进，不受屏幕刷新率影响）。
+	// 演变：最初每帧 GRID_SIZE*0.5 → 减半成每帧 GRID_SIZE*0.25（60fps 下 600px/s）；
+	// 但「每帧固定步长」在 90/120Hz 高刷屏上会成比例变快，所以改成时间基准并再放慢。
+	// 240px/s ≈ 60fps 下每帧 4px ≈ 每秒 6 格（GRID_SIZE=40）。想再快/慢只改这一个数。
+	// 键鼠的 Alt+滚轮仍是 wheelDelta * GRID_SIZE、共用 lerp 系数 0.25，两者都不改动。
+	var trackButtonScrollSpeed:Float = 240;
 
 	var dummyArrow:FlxSprite;
 
@@ -238,9 +288,12 @@ class OldChartingState073 extends OldEditorState
 			PlayState.SONG = _song;
 		}
 
-		// Extra Keys：把键数档位同步到 PlayState.SONG（新版读取用）
+		// Extra Keys：把键数档位同步到全部全局态（PlayState.SONG / Note.colArray / EK 色表 / 编辑侧档）。
+		// 必须在任何 Note 构造之前完成，否则谱面音符的帧前缀会沿用上一次 State 残留的 4 键档。
 		if (_song.mania == null) _song.mania = 3;
-		PlayState.SONG.mania = _song.mania;
+		// 读回随谱面 JSON / autosave 落盘的暂存音符（或本会话的兜底副本），必须在首次 updateGrid() 之前
+		restoreStashedNotes();
+		syncChartManiaGlobals();
 
 		// Paths.clearMemory();
 
@@ -287,6 +340,7 @@ class OldChartingState073 extends OldEditorState
 		curRenderedSustains = new FlxTypedGroup<FlxSprite>();
 		curRenderedNotes = new FlxTypedGroup<Note>();
 		curRenderedNoteType = new FlxTypedGroup<FlxText>();
+		stashedRenderedNotes = new FlxTypedGroup<Note>();
 
 		nextRenderedSustains = new FlxTypedGroup<FlxSprite>();
 		nextRenderedNotes = new FlxTypedGroup<Note>();
@@ -303,6 +357,8 @@ class OldChartingState073 extends OldEditorState
 		loadSong();
 
 		bpmTxt = new FlxText(1000, 50, 0, "", 16);
+		// 歌曲信息（时间 / Section / Beat / Step / Snap / Zoom 多行实时刷新）固定用 arturito-slab
+		bpmTxt.setFormat(SONG_INFO_FONT, 16, FlxColor.WHITE, LEFT);
 		bpmTxt.scrollFactor.set();
 		add(bpmTxt);
 
@@ -317,21 +373,16 @@ class OldChartingState073 extends OldEditorState
 		quant.yAdd = 8;
 		add(quant);
 
+		// 先建好箭头组，再让 reloadGridLayer() 统一走 rebuildStrumLineNotes()。
+		// 旧写法在 reloadGridLayer() 之后才创建箭头组（首次重建被 null 判断跳过），
+		// 于是「创建」和「改 mania 时重建」是两份重复代码，档位同步只加在了后者。
+		strumLineNotes = new FlxTypedGroup<StrumNote>();
+		add(strumLineNotes);
+
 		reloadGridLayer();
 		Conductor.bpm = _song.bpm;
 		Conductor.mapBPMChanges(_song);
 		if(curSec >= _song.notes.length) curSec = _song.notes.length - 1;
-
-		strumLineNotes = new FlxTypedGroup<StrumNote>();
-		for (i in 0...((_song.mania + 1) * 2)){
-			var note:StrumNote = new StrumNote(GRID_SIZE * (i+1), strumLine.y, i % (_song.mania + 1), 0);
-			note.setGraphicSize(GRID_SIZE, GRID_SIZE);
-			note.updateHitbox();
-			note.playAnim('static', true);
-			strumLineNotes.add(note);
-			note.scrollFactor.set(1, 1);
-		}
-		add(strumLineNotes);
 
 		camPos = new FlxObject(0, 0, 1, 1);
 		camPos.setPosition(strumLine.x + CAM_OFFSET, strumLine.y);
@@ -351,10 +402,15 @@ class OldChartingState073 extends OldEditorState
 
 		UI_box = new FlxUITabMenu(null, tabs, true);
 
+		// 对齐 Minty 新版：相对定位贴右边缘，避免移动端与轨道重叠
 		UI_box.resize(300, 400);
-		UI_box.x = 640 + GRID_SIZE / 2;
+		UI_box.x = FlxG.width - UI_box.width - 30;
 		UI_box.y = 25;
 		UI_box.scrollFactor.set();
+
+		// 进度信息（时间/section/beat/step）放到 box 左侧，避免被 box 遮挡
+		bpmTxt.x = UI_box.x - 210;
+		bpmTxt.y = 50;
 
 		text =
 		"W/S or Mouse Wheel - Change Conductor's strum time
@@ -374,18 +430,22 @@ class OldChartingState073 extends OldEditorState
 		Backspace - Go back to Editor Menu
 		Enter - Play your chart
 		Q/E - Decrease/Increase Note Sustain Length
-		Space - Stop/Resume song" + (controls.mobileC ? "\nTouch Pad: use on-screen buttons (B button exits to Editor Menu)" : "");
+		Space - Stop/Resume song
+		Alt + Wheel / < > - Scroll tracks left/right" + (controls.mobileC ? "\nTouch Pad: use on-screen buttons (B button exits to Editor Menu)" : "");
 
 		var tipTextArray:Array<String> = text.split('\n');
 		for (i in 0...tipTextArray.length) {
-			var tipText:FlxText = new FlxText(UI_box.x, UI_box.y + UI_box.height + 8, 0, tipTextArray[i], 16);
+			var tipText:FlxText = new FlxText(UI_box.x - 210, UI_box.y + UI_box.height + 8, 0, tipTextArray[i], 16);
 			tipText.y += i * 16;
-			tipText.setFormat(Paths.font("vcr.ttf"), 14, FlxColor.WHITE, LEFT/*, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK*/);
+			// 下方操作提示固定用 Quantico-Bold
+			tipText.setFormat(TIP_INFO_FONT, 14, FlxColor.WHITE, LEFT/*, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK*/);
 			//tipText.borderSize = 2;
 			tipText.scrollFactor.set();
 			add(tipText);
 		}
 		add(UI_box);
+
+		// 轨道左右滑动按钮在 create() 末尾统一创建（保证绘制层级在轨道内容之上）
 
 		addSongUI();
 		addSectionUI();
@@ -399,18 +459,38 @@ class OldChartingState073 extends OldEditorState
 
 		add(curRenderedSustains);
 		add(curRenderedNotes);
+		add(stashedRenderedNotes);
 		add(curRenderedNoteType);
 		add(nextRenderedSustains);
 		add(nextRenderedNotes);
+
+		// === 轨道左右滑动按钮 ===
+		// 用的是 backend.ui.StyledButton（全项目通用的自绘按钮，非制谱器专属，也不依赖 FlxButton）。
+		// 默认 flixelClassic()：复刻 FlxButton 自带皮肤的灰阶方角观感，和本屏 Save / Reload 等
+		// FlxButton 是同一套视觉语言。蓝色玻璃 glassBlue() 仍保留，运行时调
+		// setTrackButtonTheme(false) 即可整组切回；两套都是纯矢量自绘，无贴图依赖。
+		// 放在所有轨道内容之后 add：避免被网格 / 音符盖住。
+		var btnLeftX:Float = UI_box.x - 46;
+		var btnLeftY:Float = UI_box.y + UI_box.height - 88;
+		var btnRightX:Float = UI_box.x - 46;
+		var btnRightY:Float = UI_box.y + UI_box.height - 44;
+
+		var trackBtnStyle:StyledButtonStyle = StyledButtonStyle.flixelClassic();
+		trackBtnStyle.size = 44;
+
+		btnTrackLeft = new StyledButton(btnLeftX, btnLeftY, StyledButton.LEFT, trackBtnStyle);
+		btnTrackLeft.hitPadding = 4; // 触屏扩大命中区，与下方 suppressMouse 的 ±4 判定保持一致
+		add(btnTrackLeft);
+		btnTrackRight = new StyledButton(btnRightX, btnRightY, StyledButton.RIGHT, trackBtnStyle);
+		btnTrackRight.hitPadding = 4;
+		add(btnTrackRight);
+
+		updateTrackButtonsVisibility();
 
 		if(lastSong != currentSongName) {
 			changeSection();
 		}
 		lastSong = currentSongName;
-
-		zoomTxt = new FlxText(10, 10, 0, "Zoom: 1 / 1", 16);
-		zoomTxt.scrollFactor.set();
-		add(zoomTxt);
 
 		updateGrid();
 		super.create();
@@ -444,7 +524,8 @@ class OldChartingState073 extends OldEditorState
 
 		var saveButton:FlxButton = new FlxButton(110, 8, "Save", function()
 		{
-			saveLevel();
+			// 降档期间有暂存音符时先确认：数据会随谱面 / autosave 一起保存，只是当前档位装不下
+			confirmChartMania(saveLevel);
 		});
 
 		var reloadSong:FlxButton = new FlxButton(saveButton.x + 90, saveButton.y, "Reload Audio", function()
@@ -492,18 +573,19 @@ class OldChartingState073 extends OldEditorState
 			saveEvents();
 		});
 
-		var clear_events:FlxButton = new FlxButton(320, 310, 'Clear events', function()
+		clear_events = new FlxButton(10, 310, 'Clear events', function()
 			{
 				openSubState(new Prompt('This action will clear current progress.\n\nProceed?', 0, clearEvents, null,ignoreWarnings));
 			});
 		clear_events.color = FlxColor.RED;
 		clear_events.label.color = FlxColor.WHITE;
 
-		var clear_notes:FlxButton = new FlxButton(320, clear_events.y + 30, 'Clear notes', function()
+		clear_notes = new FlxButton(10, clear_events.y + 30, 'Clear notes', function()
 			{
 				openSubState(new Prompt('This action will clear current progress.\n\nProceed?', 0, function(){for (sec in 0..._song.notes.length) {
 					_song.notes[sec].sectionNotes = [];
 				}
+				clearStashedNotes(); // 清空音符时一并清暂存（含落盘字段），避免改档后幽灵音符复活
 				updateGrid();
 			}, null,ignoreWarnings));
 
@@ -511,10 +593,17 @@ class OldChartingState073 extends OldEditorState
 		clear_notes.color = FlxColor.RED;
 		clear_notes.label.color = FlxColor.WHITE;
 
-		var stepperBPM:FlxUINumericStepper = new FlxUINumericStepper(10, 70, 1, 1, 1, 400, 3);
+		var stepperBPM:FlxUINumericStepper = new FlxUINumericStepper(10, 75, 1, 1, 1, 400, 3);
 		stepperBPM.value = Conductor.bpm;
 		stepperBPM.name = 'song_bpm';
 		blockPressWhileTypingOnStepper.push(stepperBPM);
+
+		// Song Offset（毫秒）：谱面时间对齐偏移，写入 _song.offset 并同步到 Conductor.offset
+		var stepperOffset:FlxUINumericStepper = new FlxUINumericStepper(stepperBPM.x + 100, 75, 10, -1000, 1000, 0, 100);
+		stepperOffset.value = _song.offset;
+		stepperOffset.name = 'song_offset';
+		blockPressWhileTypingOnStepper.push(stepperOffset);
+		Conductor.offset = stepperOffset.value;
 
 		var stepperSpeed:FlxUINumericStepper = new FlxUINumericStepper(10, stepperBPM.y + 35, 0.1, 1, 0.1, 10, 2);
 		stepperSpeed.value = _song.speed;
@@ -522,11 +611,12 @@ class OldChartingState073 extends OldEditorState
 		blockPressWhileTypingOnStepper.push(stepperSpeed);
 
 		// Extra Keys：键数档位（mania，4 键 = 3；范围取自 extrakeys.json）
+		// 放在 SongSpeed 右侧同一行
 		ExtraKeysHandler.ensure();
-		var stepperMania:FlxUINumericStepper = new FlxUINumericStepper(10, stepperSpeed.y + 35, 1, 3, ExtraKeysHandler.instance.data.minKeys, ExtraKeysHandler.instance.data.maxKeys, 1);
-		stepperMania.value = _song.mania;
-		stepperMania.name = 'song_mania';
-		blockPressWhileTypingOnStepper.push(stepperMania);
+		maniaStepper = new FlxUINumericStepper(stepperSpeed.x + 110, stepperSpeed.y, 1, 3, ExtraKeysHandler.instance.data.minKeys, ExtraKeysHandler.instance.data.maxKeys, 1);
+		maniaStepper.value = _song.mania;
+		maniaStepper.name = 'song_mania';
+		blockPressWhileTypingOnStepper.push(maniaStepper);
 		#if MODS_ALLOWED
 		var directories:Array<String> = [Paths.mods('characters/'), Paths.mods(Mods.currentModDirectory + '/characters/'), Paths.getSharedPath('characters/')];
 		for(mod in Mods.getGlobalMods())
@@ -647,11 +737,12 @@ class OldChartingState073 extends OldEditorState
 		tab_group_song.add(loadEventJson);
 		tab_group_song.add(stepperBPM);
 		tab_group_song.add(stepperSpeed);
+		tab_group_song.add(stepperOffset);
 		tab_group_song.add(new FlxText(stepperBPM.x, stepperBPM.y - 15, 0, 'Song BPM:'));
-		tab_group_song.add(new FlxText(stepperBPM.x + 100, stepperBPM.y - 15, 0, 'Song Offset:'));
+		tab_group_song.add(new FlxText(stepperOffset.x, stepperOffset.y - 15, 0, 'Song Offset:'));
 		tab_group_song.add(new FlxText(stepperSpeed.x, stepperSpeed.y - 15, 0, 'Song Speed:'));
-		tab_group_song.add(new FlxText(stepperMania.x, stepperMania.y - 15, 0, 'Mania (Keys):'));
-		tab_group_song.add(stepperMania);
+		tab_group_song.add(new FlxText(maniaStepper.x, maniaStepper.y - 15, 0, 'Mania (Keys):'));
+		tab_group_song.add(maniaStepper);
 		tab_group_song.add(new FlxText(player2DropDown.x, player2DropDown.y - 15, 0, 'Opponent:'));
 		tab_group_song.add(new FlxText(gfVersionDropDown.x, gfVersionDropDown.y - 15, 0, 'Girlfriend:'));
 		tab_group_song.add(new FlxText(player1DropDown.x, player1DropDown.y - 15, 0, 'Boyfriend:'));
@@ -790,6 +881,9 @@ class OldChartingState073 extends OldEditorState
 			if(check_notesSec.checked)
 			{
 				_song.notes[curSec].sectionNotes = [];
+				// 只清掉属于本小节的暂存音符，其它小节的不受影响
+				stashedNotes = stashedNotes.filter(function(s) return s.sec != curSec);
+				syncStashedNotes();
 			}
 
 			if(check_eventsSec.checked)
@@ -1257,6 +1351,43 @@ class OldChartingState073 extends OldEditorState
 		updateNoteUI();
 	}
 
+	// 虚拟方向键、提示层等后加入 state 时，把轨道按钮重新排到最上层
+	function bringTrackButtonsToFront():Void
+	{
+		if (btnTrackLeft != null) { remove(btnTrackLeft); add(btnTrackLeft); }
+		if (btnTrackRight != null) { remove(btnTrackRight); add(btnTrackRight); }
+	}
+
+	// 只有 4 键以上才需要横向滚动轨道
+	function updateTrackButtonsVisibility():Void
+	{
+		var show:Bool = (_song.mania >= 3);
+		if (btnTrackLeft != null) btnTrackLeft.visible = show;
+		if (btnTrackRight != null) btnTrackRight.visible = show;
+	}
+
+	/**
+	 * 运行时切换轨道按钮主题（不加可见 UI，供脚本 / 调试 / 以后重写 UI 时调用）。
+	 *   setTrackButtonTheme(true)  -> flixelClassic()：灰阶方角，与屏内 FlxButton 一致（默认）
+	 *   setTrackButtonTheme(false) -> glassBlue()：蓝色圆角玻璃
+	 * 也可以直接传自定义 style：setTrackButtonTheme(true, myStyle)。
+	 * 两个按钮共用一份 style，共享纹理缓存按字段生成 key，切换只重烘焙一次。
+	 */
+	public function setTrackButtonTheme(useFlixel:Bool, ?customStyle:StyledButtonStyle):Void
+	{
+		if (btnTrackLeft == null || btnTrackRight == null) return;
+		if (customStyle != null)
+		{
+			btnTrackLeft.setStyle(customStyle);
+			btnTrackRight.setStyle(customStyle);
+			return;
+		}
+		var st:StyledButtonStyle = useFlixel ? StyledButtonStyle.flixelClassic() : StyledButtonStyle.glassBlue();
+		st.size = 44;
+		btnTrackLeft.setStyle(st);
+		btnTrackRight.setStyle(st);
+	}
+
 	function setAllLabelsOffset(button:FlxButton, x:Float, y:Float)
 	{
 		for (point in button.labelOffsets)
@@ -1700,6 +1831,7 @@ class OldChartingState073 extends OldEditorState
 		{
 			var check:FlxUICheckBox = cast sender;
 			var label = check.getLabel().text;
+			pushUndo();
 			switch (label)
 			{
 				case 'Must hit section':
@@ -1725,6 +1857,10 @@ class OldChartingState073 extends OldEditorState
 		{
 			var nums:FlxUINumericStepper = cast sender;
 			var wname = nums.name;
+			// 音量/速度类不改谱面数据，不进 undo 栈；undo 同步 stepper 显示值时也不该压栈
+			if (!suppressManiaEvent && (wname == 'section_beats' || wname == 'song_bpm' || wname == 'song_mania'
+				|| wname == 'section_bpm' || wname == 'note_susLength'))
+				pushUndo();
 			//FlxG.log.add(wname);
 			switch(wname)
 			{
@@ -1735,11 +1871,34 @@ class OldChartingState073 extends OldEditorState
 				case 'song_speed':
 					_song.speed = nums.value;
 
+				case 'song_offset':
+					_song.offset = nums.value;
+					Conductor.offset = nums.value;
+
 				case 'song_mania':
-					// Extra Keys：切换键数档位，重建网格/判定线/箭头并同步到 SONG
-					_song.mania = Std.int(nums.value);
-					PlayState.SONG.mania = _song.mania;
-					reloadGridLayer();
+					// 改档是「非破坏性」的：降档只把超范围音符暂存，改回/升档自动原位还原，
+					// 因此 6K→5K→6K 不会丢任何箭头。undo 同步 stepper 显示值时置
+					// suppressManiaEvent，避免把一次 UI 同步误当成新的改档再重映射一遍。
+					if (!suppressManiaEvent)
+					{
+						var newMania:Int = Std.int(nums.value);
+						var oldMania:Int = _song.mania;
+						if (oldMania != newMania)
+							remapChartNotesForMania(oldMania, newMania);
+						_song.mania = newMania;
+						// 同步 keyCount 字段：Song.convert 优先读 keyCount-1 而不是 mania，
+						// 不同步会导致从 6k 谱面改成 9k 后，toPsychV1 仍用 6 列折叠 lane，音符飞轨。
+						if (Reflect.hasField(_song, 'keyCount'))
+							Reflect.setField(_song, 'keyCount', newMania + 1);
+						PlayState.SONG.mania = _song.mania;
+						// 重置轨道水平偏移 + 同步按钮与背景层的可见性（仅 4k+ 显示）
+						trackScrollX = GRID_SIZE;
+						trackScrollTargetX = GRID_SIZE;
+						updateTrackButtonsVisibility();
+						// reloadGridLayer() -> rebuildStrumLineNotes()：箭头数量、位置与
+						// 多键贴图档位一起按新 mania 重建（只改 _song.mania 不会换贴图）
+						reloadGridLayer();
+					}
 
 				case 'song_bpm':
 					_song.bpm = nums.value;
@@ -1826,6 +1985,8 @@ class OldChartingState073 extends OldEditorState
 			{
 				_virtualpad = new FlxVirtualPad(FlxDPadMode.CHART_EDITOR, FlxActionMode.CHART_EDITOR);
 				add(_virtualpad);
+				// 虚拟方向键是运行时后加入的，重新把轨道按钮置顶，避免触控层盖住背景
+				bringTrackButtonsToFront();
 			}
 		}
 	}
@@ -1869,18 +2030,51 @@ class OldChartingState073 extends OldEditorState
 			FlxG.sound.music.time = 0;
 			changeSection();
 		}
-		Conductor.songPosition = FlxG.sound.music.time;
+		Conductor.songPosition = FlxG.sound.music.time + Conductor.offset;
 		_song.song = UI_songTitle.text;
 
 		strumLineUpdateY();
-		for (i in 0...((_song.mania + 1) * 2)){
-			strumLineNotes.members[i].y = strumLine.y;
+		// 按实际成员遍历：改 mania 时若箭头数量尚未跟上，按 (_song.mania+1)*2 取下标会越界
+		if (strumLineNotes != null)
+		{
+			for (arrow in strumLineNotes)
+				if (arrow != null) arrow.y = strumLine.y;
 		}
 
 		FlxG.mouse.visible = true;//cause reasons. trust me
+
+		// === 轨道水平相机（自动跟随 mania + 手动偏移 + 平滑过渡）===
+		// 手动滚动：Alt/Shift + 鼠标滚轮 → 无限制，直接推进目标值
+		var wheelDelta:Float = FlxG.mouse.wheel;
+		var wheelConsumedForHorizontal:Bool = false;
+		if (wheelDelta != 0 && altHeld) {
+			trackScrollTargetX -= wheelDelta * GRID_SIZE;
+			wheelConsumedForHorizontal = true;
+		}
+
+		// 按钮按住 → 持续推进目标值（无限制）。按时间推进而非按帧，高刷屏不会变快；
+		// elapsed 上限 1/30 秒，避免卡顿恢复后单帧跳太远。
+		// 上方 Alt+滚轮分支与下方共用 lerp 系数保持不变，键鼠滚动速度不受影响。
+		var btnStep:Float = trackButtonScrollSpeed * Math.min(elapsed, 1 / 30);
+		if (btnTrackLeft != null && btnTrackLeft.pressed) {
+			trackScrollTargetX += btnStep;
+		}
+		if (btnTrackRight != null && btnTrackRight.pressed) {
+			trackScrollTargetX -= btnStep;
+		}
+
+		// 平滑过渡：lerp 当前值 → 目标值（系数 0.25 中等速度，键鼠与按钮共用，不改动）
+		trackScrollX = FlxMath.lerp(trackScrollX, trackScrollTargetX, 0.25);
+
+		// 相机中心 = Minty 新版自动跟随公式 + 平滑后的手动偏移
+		camPos.x = -80 + (GRID_SIZE * ((_song.mania + 1) * 2)) + trackScrollX;
 		camPos.y = strumLine.y;
+
 		if(!disableAutoScrolling.checked) {
-			if (Math.ceil(strumLine.y) >= gridBG.height)
+			// 直接用播放时间 vs section 起始时间判断跨段，不依赖 strumLine.y 与 gridBG.height 的
+			// 像素/格数比较（取模 + zoom 缩放后两者单位不一致，容易永远到不了阈值）。
+			var songPos:Float = Conductor.songPosition;
+			if (songPos >= sectionStartTime(1))
 			{
 				if (_song.notes[curSec + 1] == null)
 				{
@@ -1888,71 +2082,14 @@ class OldChartingState073 extends OldEditorState
 				}
 
 				changeSection(curSec + 1, false);
-			} else if(strumLine.y < -10) {
-				changeSection(curSec - 1, false);
+			} else if (songPos < sectionStartTime()) {
+				if (curSec > 0) changeSection(curSec - 1, false);
 			}
 		}
 		FlxG.watch.addQuick('daBeat', curBeat);
 		FlxG.watch.addQuick('daStep', curStep);
 
-
-		if (FlxG.mouse.x > gridBG.x
-			&& FlxG.mouse.x < gridBG.x + gridBG.width
-			&& FlxG.mouse.y > gridBG.y
-			&& FlxG.mouse.y < gridBG.y + (GRID_SIZE * getSectionBeats() * 4) * zoomList[curZoom])
-		{
-			dummyArrow.visible = true;
-			dummyArrow.x = Math.floor(FlxG.mouse.x / GRID_SIZE) * GRID_SIZE;
-			if (shiftHeld)
-				dummyArrow.y = FlxG.mouse.y;
-			else
-			{
-				var gridmult = GRID_SIZE / (quantization / 16);
-				dummyArrow.y = Math.floor(FlxG.mouse.y / gridmult) * gridmult;
-			}
-		} else {
-			dummyArrow.visible = false;
-		}
-
-		if (FlxG.mouse.justPressed)
-		{
-			if (FlxG.mouse.overlaps(curRenderedNotes))
-			{
-				curRenderedNotes.forEachAlive(function(note:Note)
-				{
-					if (FlxG.mouse.overlaps(note))
-					{
-						if (ctrlHeld)
-						{
-							selectNote(note);
-						}
-						else if (altHeld)
-						{
-							selectNote(note);
-							curSelectedNote[3] = curNoteTypes[currentType];
-							updateGrid();
-						}
-						else
-						{
-							//trace('tryin to delete note...');
-							deleteNote(note);
-						}
-					}
-				});
-			}
-			else
-			{
-				if (FlxG.mouse.x > gridBG.x
-					&& FlxG.mouse.x < gridBG.x + gridBG.width
-					&& FlxG.mouse.y > gridBG.y
-					&& FlxG.mouse.y < gridBG.y + (GRID_SIZE * getSectionBeats() * 4) * zoomList[curZoom])
-				{
-					FlxG.log.add('added note');
-					addNote();
-				}
-			}
-		}
-
+		// 提前计算 blockInput，让它同时保护鼠标事件（防止 UI box 穿透到轨道）
 		var blockInput:Bool = false;
 		for (inputText in blockPressWhileTypingOn) {
 			if(inputText.hasFocus) {
@@ -1984,26 +2121,99 @@ class OldChartingState073 extends OldEditorState
 			}
 		}
 
+		// blockInput=true 时（UI 输入/下拉在交互中），阻止轨道穿透：不显示 dummyArrow、不响应点击
+		var mouseInGrid:Bool = FlxG.mouse.x > gridBG.x
+			&& FlxG.mouse.x < gridBG.x + gridBG.width
+			&& FlxG.mouse.y > gridBG.y
+			&& FlxG.mouse.y < gridBG.y + (GRID_SIZE * getSectionBeats() * 4) * zoomList[curZoom];
+
+		// 额外防护：鼠标是否在 UI box 矩形内。
+		// UI_box.scrollFactor=(0,0)，它的 x/y/width/height 是屏幕坐标；
+		// FlxG.mouse.x/y 是世界坐标。Flixel 里：屏幕坐标 = 世界坐标 - camera.scroll。
+		// trackScrollX 改变 camera.scroll.x 后，必须反算屏幕坐标再和 UI_box 矩形比较，
+		// 否则轨道滑到 box 下方时点 box 内容会穿透到 grid。
+		var mouseInUIBox:Bool = false;
+		var smx:Float = FlxG.mouse.x - FlxG.camera.scroll.x;
+		var smy:Float = FlxG.mouse.y - FlxG.camera.scroll.y;
+		if (UI_box != null) {
+			mouseInUIBox = smx >= UI_box.x - 5
+				&& smx <= UI_box.x + UI_box.width + 5
+				&& smy >= UI_box.y - 5
+				&& smy <= UI_box.y + UI_box.height + 5;
+		}
+		var suppressMouse = blockInput || mouseInUIBox;
+
+		// 轨道左右滑动按钮也在屏幕上（scrollFactor=0），点按钮时不能穿透到 grid
+		if (!suppressMouse && btnTrackLeft != null && btnTrackLeft.visible) {
+			if (smx >= btnTrackLeft.x - 4 && smx <= btnTrackLeft.x + btnTrackLeft.width + 4
+				&& smy >= btnTrackLeft.y - 4 && smy <= btnTrackLeft.y + btnTrackLeft.height + 4)
+				suppressMouse = true;
+		}
+		if (!suppressMouse && btnTrackRight != null && btnTrackRight.visible) {
+			if (smx >= btnTrackRight.x - 4 && smx <= btnTrackRight.x + btnTrackRight.width + 4
+				&& smy >= btnTrackRight.y - 4 && smy <= btnTrackRight.y + btnTrackRight.height + 4)
+				suppressMouse = true;
+		}
+
+		if (!suppressMouse && mouseInGrid)
+		{
+			dummyArrow.visible = true;
+			dummyArrow.x = Math.floor(FlxG.mouse.x / GRID_SIZE) * GRID_SIZE;
+			if (shiftHeld)
+				dummyArrow.y = FlxG.mouse.y;
+			else
+			{
+				var gridmult = GRID_SIZE / (quantization / 16);
+				dummyArrow.y = Math.floor(FlxG.mouse.y / gridmult) * gridmult;
+			}
+		} else {
+			dummyArrow.visible = false;
+		}
+
+		if (FlxG.mouse.justPressed && !suppressMouse)
+		{
+			if (FlxG.mouse.overlaps(curRenderedNotes))
+			{
+				curRenderedNotes.forEachAlive(function(note:Note)
+				{
+					if (FlxG.mouse.overlaps(note))
+					{
+						if (ctrlHeld)
+						{
+							selectNote(note);
+						}
+						else if (altHeld)
+						{
+							selectNote(note);
+							curSelectedNote[3] = curNoteTypes[currentType];
+							updateGrid();
+						}
+						else
+						{
+							//trace('tryin to delete note...');
+							deleteNote(note);
+						}
+					}
+				});
+			}
+			else if (mouseInGrid)
+			{
+				FlxG.log.add('added note');
+				addNote();
+			}
+		}
+
 		if (!blockInput)
 		{
 	
 
 		if (FlxG.keys.justPressed.ESCAPE || (_virtualpad != null && _virtualpad.buttonC.justPressed))
 			{
-				openEditorPlayState();
+				confirmChartMania(openEditorPlayState);
 			}
 			else if (FlxG.keys.justPressed.ENTER || (_virtualpad != null && _virtualpad.buttonA.justPressed))
 			{
-				autosaveSong();
-				FlxG.mouse.visible = false;
-				PlayState.SONG = prepareSongForPlayState();
-				FlxG.sound.music.stop();
-				if(vocals != null) vocals.stop();
-				if(opponentVocals != null) opponentVocals.stop();
-
-				//if(_song.stage == null) _song.stage = stageDropDown.selectedLabel;
-				StageData.loadDirectory(_song);
-				LoadingState.loadAndSwitchState(new PlayState());
+				confirmChartMania(goPlayState);
 			}
 
 			if(curSelectedNote != null && curSelectedNote[1] > -1) {
@@ -2030,6 +2240,10 @@ class OldChartingState073 extends OldEditorState
 
 			if(FlxG.keys.justPressed.Z && ctrlHeld) {
 				undo();
+			}
+
+			if((FlxG.keys.justPressed.Y && ctrlHeld) || (FlxG.keys.justPressed.Z && ctrlHeld && shiftHeld)) {
+				redo();
 			}
 
 			if((FlxG.keys.justPressed.Z || (_virtualpad != null && _virtualpad.buttonV.justPressed)) && curZoom > 0 && !ctrlHeld) {
@@ -2079,7 +2293,7 @@ class OldChartingState073 extends OldEditorState
 					resetSection();
 			}
 
-			if (FlxG.mouse.wheel != 0)
+			if (FlxG.mouse.wheel != 0 && !wheelConsumedForHorizontal)
 			{
 				FlxG.sound.music.pause();
 				if (!mouseQuant)
@@ -2264,12 +2478,19 @@ class OldChartingState073 extends OldEditorState
 			FlxG.sound.music.time = 0;
 			changeSection();
 		}
-		Conductor.songPosition = FlxG.sound.music.time;
+		Conductor.songPosition = FlxG.sound.music.time + Conductor.offset;
 		strumLineUpdateY();
+		// 播放时也应用相机水平跟随
+		camPos.x = -80 + (GRID_SIZE * ((_song.mania + 1) * 2)) + trackScrollX;
 		camPos.y = strumLine.y;
-		for (i in 0...((_song.mania + 1) * 2)){
-			strumLineNotes.members[i].y = strumLine.y;
-			strumLineNotes.members[i].alpha = FlxG.sound.music.playing ? 1 : 0.35;
+		if (strumLineNotes != null)
+		{
+			for (arrow in strumLineNotes)
+			{
+				if (arrow == null) continue;
+				arrow.y = strumLine.y;
+				arrow.alpha = FlxG.sound.music.playing ? 1 : 0.35;
+			}
 		}
 
 		#if FLX_PITCH
@@ -2294,16 +2515,24 @@ class OldChartingState073 extends OldEditorState
 			playbackSpeed = 3;
 
 		FlxG.sound.music.pitch = playbackSpeed;
-		vocals.pitch = playbackSpeed;
-		opponentVocals.pitch = playbackSpeed;
+		if (vocals != null) vocals.pitch = playbackSpeed;
+		if (opponentVocals != null) opponentVocals.pitch = playbackSpeed;
 		#end
 
-		bpmTxt.text =
+		var songInfo:String =
 		Std.string(FlxMath.roundDecimal(Conductor.songPosition / 1000, 2)) + " / " + Std.string(FlxMath.roundDecimal(FlxG.sound.music.length / 1000, 2)) +
 		"\nSection: " + curSec +
 		"\n\nBeat: " + Std.string(curDecBeat).substring(0,4) +
-		"\n\nStep: " + curStep +
-		"\n\nBeat Snap: " + quantization + "th";
+		"\nStep: " + curStep +
+		"\n\nBeat Snap: " + quantization + "th" +
+		"\nZoom: " + (zoomList[curZoom] >= 1 ? '1 / ' + zoomList[curZoom] : Math.round(1/zoomList[curZoom]) + ' / 1');
+		// 降档期间常驻提示：这些音符会随谱面文件 / autosave 一起保存，升档即可原位还原
+		var stashWarn:String = (stashedNotes.length > 0)
+			? "\n\n! " + stashedNotes.length + " note(s) out of " + (_song.mania + 1) + "K"
+			: "";
+		bpmTxt.text = songInfo + stashWarn;
+		// +2 跳过分隔用的两个换行；没有警示行时传 -1 表示撤掉格式
+		updateStashWarnFormat(stashWarn.length > 0 ? songInfo.length + 2 : -1);
 
 		var playedSound:Array<Bool> = []; //Prevents ouchy GF sex sounds（多键下按列数动态扩展）
 		for (i in 0...(_song.mania + 1)) playedSound.push(false);
@@ -2379,10 +2608,6 @@ class OldChartingState073 extends OldEditorState
 	}
 
 	function updateZoom() {
-		var daZoom:Float = zoomList[curZoom];
-		var zoomThing:String = '1 / ' + daZoom;
-		if(daZoom < 1) zoomThing = Math.round(1 / daZoom) + ' / 1';
-		zoomTxt.text = 'Zoom: ' + zoomThing;
 		reloadGridLayer();
 	}
 
@@ -2397,7 +2622,350 @@ class OldChartingState073 extends OldEditorState
 	var lastSecBeatsNext:Float = 0;
 	// Extra Keys：网格列数 = 双方轨道 + 事件列（4键 = 3*2+3 = 9，与原生一致）
 	var columns:Int = 9;
+
+	/**
+	 * 降档时「暂时移出」谱面的音符 —— 绝不删除。
+	 * 每项：{sec:Int, lane:Int(原始完整 lane), side:Bool(false=本节拍方侧), key:Int(侧内列), data:Array<Dynamic>}
+	 * 侧内列与档位无关，因此只要目标档位装得下这个 key，就能按目标档位重算 lane 原位还原；
+	 * 多级降档（6K→4K→6K）也能逐级还原。
+	 *
+	 * 持久化：本数组是工作副本，另有一份同步到 _song.editorStashedNotes（随谱面 JSON /
+	 * autosave 落盘）和一份会话级静态副本（防 PlayState / Reload JSON 重建 SONG 后字段丢失）。
+	 * 暂存项不进 sectionNotes、不参与 lane 编码、不进入试玩，只做警示渲染，
+	 * 因此 _song.notes 的 lane 与 _song.mania 始终自洽。
+	 */
+	var stashedNotes:Array<Dynamic> = [];
+	/** 暂存音符的警示渲染层（独立于 curRenderedNotes，避免干扰选中/删除命中） */
+	var stashedRenderedNotes:FlxTypedGroup<Note>;
+
+	/** 从谱面对象 / 会话兜底恢复暂存音符。谱面字段优先（跨重启、跨文件），会话副本兜底（切 state）。 */
+	function restoreStashedNotes():Void
+	{
+		var songKey:String = (_song != null) ? Std.string(_song.song) : '';
+		var fromSong:Array<Dynamic> = null;
+		if (_song != null)
+		{
+			var raw:Dynamic = Reflect.field(_song, STASH_FIELD);
+			if (raw != null) fromSong = sanitizeStashedNotes(raw);
+		}
+		if (fromSong != null && fromSong.length > 0)
+			stashedNotes = fromSong;
+		else
+		{
+			var cached:Array<Dynamic> = sessionStashBySong.get(songKey);
+			stashedNotes = (cached != null && cached.length > 0)
+				? sanitizeStashedNotes(haxe.Json.parse(haxe.Json.stringify(cached))) : [];
+		}
+		// 恢复后立刻回写，保证后续 Save / autosave 拿到的是同一份
+		syncStashedNotes(songKey);
+	}
+
+	/**
+	 * 把音符的 noteType 值规范化成引擎能稳定识别的字符串。
+	 *
+	 * 073 / 旧谱面里 [3] 可能是字符串类型名、旧式数字索引、null 或空串。
+	 * 旧式数字索引必须在这里就转成名字：PlayState 与 Song.convert() 都是直接
+	 * `Note.defaultNoteTypes[songNotes[3]]` 索引，遇到 null / 浮点索引会读不到值，
+	 * 结果整支音符退化成默认类型（编辑器不显示编号、游戏里没有特殊效果）。
+	 * 未知字符串原样保留（noteTypeLabel() 会画 '?'），越界数字保留原值文本。
+	 */
+	static function normalizeNoteType(v:Dynamic):String
+	{
+		if (v == null) return '';
+		if (Std.isOfType(v, String)) return cast(v, String);
+		var idx:Int = Std.int(v);
+		if (idx >= 0 && idx < objects.Note.defaultNoteTypes.length)
+			return objects.Note.defaultNoteTypes[idx];
+		return Std.string(v);
+	}
+
+	/** 取暂存项里最可信的 noteType：显式 type 优先，data[3] 兜底，空串视为缺失。 */
+	static function stashedNoteType(s:Dynamic):String
+	{
+		var t:String = Reflect.hasField(s, 'type') ? normalizeNoteType(Reflect.field(s, 'type')) : '';
+		if (t.length > 0) return t;
+		var data:Array<Dynamic> = Reflect.hasField(s, 'data') ? Reflect.field(s, 'data') : null;
+		return (data != null && data.length > 3) ? normalizeNoteType(data[3]) : '';
+	}
+
+	/**
+	 * 让暂存项的 type 与 data[3] 完全对齐，并保证 data 至少 4 项。
+	 * 每次落盘 / 读回 / 渲染前都跑一遍：无论中间哪一步把第 4 项抹成 null、'' 或删掉，
+	 * 都能从另一份冗余里救回来，升档还原时音符类型不会凭空消失。
+	 */
+	static function normalizeStashedNote(s:Dynamic):Void
+	{
+		if (s == null) return;
+		var data:Array<Dynamic> = Reflect.hasField(s, 'data') ? Reflect.field(s, 'data') : null;
+		if (data == null || !Std.isOfType(data, Array)) return;
+		while (data.length < 3) data.push(null);
+		var t:String = stashedNoteType(s);
+		if (data.length < 4) data.push(t);
+		else data[3] = t;
+		Reflect.setField(s, 'type', t);
+	}
+
+	/** 校验外部读回的暂存数据：坏项直接跳过，避免 renderStashedNotes() 里空引用崩溃。
+	 *  读回时立刻做一次 noteType 双向兜底，保证升档还原后音符类型不会消失。 */
+	static function sanitizeStashedNotes(raw:Dynamic):Array<Dynamic>
+	{
+		var out:Array<Dynamic> = [];
+		if (raw == null || !Std.isOfType(raw, Array)) return out;
+		for (s in (cast raw:Array<Dynamic>))
+		{
+			if (s == null || s.sec == null || s.lane == null || s.key == null
+				|| s.side == null || s.data == null || !Std.isOfType(s.data, Array))
+				continue;
+			normalizeStashedNote(s);
+			out.push(s);
+		}
+		return out;
+	}
+
+	/**
+	 * 把工作副本同步到谱面对象与会话兜底。所有改动 stashedNotes 的地方都要调一次。
+	 * 深拷贝是为了让落盘副本与工作副本互不引用：undo 快照替换数组时不会误改 _song。
+	 * 暂存为空时直接删掉字段 —— 正常谱面文件与 073 原版逐字节一致，零污染。
+	 */
+	function syncStashedNotes(?songKey:String):Void
+	{
+		if (_song == null) return;
+		// 落盘前统一对齐 type / data[3]，保证写进 JSON 与 autosave 的每一支暂存音符
+		// 都带着可识别的 noteType，不依赖第 4 项在中间环节是否还活着。
+		for (s in stashedNotes) normalizeStashedNote(s);
+		var key:String = (songKey != null) ? songKey : Std.string(_song.song);
+		var copy:Array<Dynamic> = haxe.Json.parse(haxe.Json.stringify(stashedNotes));
+		if (copy.length == 0)
+			Reflect.deleteField(_song, STASH_FIELD);
+		else
+			Reflect.setField(_song, STASH_FIELD, copy);
+		sessionStashBySong.set(key, copy);
+	}
+
+	/** 清空暂存（Clear notes / Clear song），同时抹掉落盘字段与会话兜底，避免幽灵音符复活。 */
+	function clearStashedNotes():Void
+	{
+		stashedNotes = [];
+		syncStashedNotes();
+	}
+	/** Song 页签的 Mania stepper，供 undo 同步显示值 */
+	var maniaStepper:FlxUINumericStepper;
+	/** undo 同步 stepper.value 时屏蔽其 CHANGE_EVENT，避免触发一次多余的重映射/压栈 */
+	var suppressManiaEvent:Bool = false;
+
+	/**
+	 * 切换键数档位时对谱面音符做「可逆重编码」，绝不删除任何音符。
+	 *
+	 * 073 的 lane 是相对当前键数编码的（0..cols-1 = 本节拍方侧，cols..2cols-1 = 对方侧），
+	 * 所以改档必须重编码。旧实现把 keyIdx > newMania 的音符直接 drop，导致 6K→5K→6K 后
+	 * 玩家侧第 6 列与对方侧第 6 列永久丢失（保存后重开仍缺）。这里改为：
+	 *   1) 先把谱面里现有的音符按 oldCols -> newCols 重映射，保持「侧 + 侧内列」语义；
+	 *      目标档位装不下的，连同原始 lane / 小节 / 侧 / 侧内列暂存到 stashedNotes。
+	 *   2) 再把 stashedNotes 里目标档位能容纳的音符按目标档位重算 lane，放回原小节。
+	 * 顺序必须是「先重映射、后还原」，否则刚放回的音符会被二次重映射算错侧。
+	 * 暂存记录的是「侧 + 侧内列」而不是 lane，因此多级降档（6K→4K→6K）能逐级还原；
+	 * 降档期间新放的音符按当前档位编码进 _song.notes，也不会与旧音符混编码。
+	 */
+	function remapChartNotesForMania(oldMania:Int, newMania:Int):Void
+	{
+		var oldCols:Int = oldMania + 1;
+		var newCols:Int = newMania + 1;
+
+		// 1) 重映射现有音符；超范围的暂存而不是丢弃
+		for (secIdx in 0..._song.notes.length)
+		{
+			var section = _song.notes[secIdx];
+			if (section == null || section.sectionNotes == null) continue;
+			var kept:Array<Dynamic> = [];
+			for (note in section.sectionNotes)
+			{
+				var lane:Int = note[1];
+				if (lane < 0) { kept.push(note); continue; } // 事件列 / inline event
+				var isPlr:Bool = lane < oldCols;
+				var keyIdx:Int = isPlr ? lane : (lane - oldCols);
+				if (keyIdx > newMania)
+				{
+					// 完全自包含的快照：data 用副本（不再与 sectionNotes 共享引用），
+					// type 是规范化后的 noteType 字符串。两者互为冗余，任一被抹掉都能互相恢复。
+					stashedNotes.push({sec: secIdx, lane: lane, side: isPlr, key: keyIdx,
+						type: (note.length > 3 ? normalizeNoteType(note[3]) : ''), data: note.copy()});
+					continue;
+				}
+				note[1] = isPlr ? keyIdx : (newCols + keyIdx);
+				kept.push(note);
+			}
+			section.sectionNotes = kept;
+		}
+
+		// 2) 还原目标档位能容纳的暂存音符
+		if (stashedNotes.length == 0) return;
+		var stillStashed:Array<Dynamic> = [];
+		var touched:Map<Int, Bool> = new Map();
+		for (s in stashedNotes)
+		{
+			if (s.key > newMania) { stillStashed.push(s); continue; }
+			var secIdx:Int = s.sec;
+			if (secIdx < 0 || secIdx >= _song.notes.length || _song.notes[secIdx] == null
+				|| _song.notes[secIdx].sectionNotes == null)
+			{
+				// 小节已被删掉：继续暂存，绝不丢数据
+				stillStashed.push(s);
+				continue;
+			}
+			var src:Array<Dynamic> = s.data;
+			while (src.length < 3) src.push(null);
+			// 显式重建音符数组：第 4 项一定来自规范化后的 noteType 冗余，不再隐式依赖
+			// src[3] 在暂存期间是否幸存。旧写法直接 push 原数组引用，只要 [3] 被任何
+			// 路径写成 null / ''，升档后箭头编号与游戏内的特殊效果就会一起消失。
+			// 第 5 项起的扩展字段（Leather 谱面的 [4] 类型等）原样保留。
+			var rebuilt:Array<Dynamic> = [src[0], s.side ? s.key : (newCols + s.key),
+				src[2], stashedNoteType(s)];
+			for (k in 4...src.length) rebuilt.push(src[k]);
+			_song.notes[secIdx].sectionNotes.push(rebuilt);
+			// 数组是新建的：若用户降档前正选中这支音符，把选中引用一起指过去，
+			// 否则之后改 sustain / strum time 会写到一个已不在谱面里的旧数组上。
+			if (curSelectedNote == src) curSelectedNote = rebuilt;
+			touched.set(secIdx, true);
+		}
+		stashedNotes = stillStashed;
+		for (idx in touched.keys())
+			_song.notes[idx].sectionNotes.sort(function(a, b) return (a[0] < b[0]) ? -1 : ((a[0] > b[0]) ? 1 : 0));
+		syncStashedNotes();
+	}
+
+	/**
+	 * 把「当前谱面键数」同步到 Note / Extra Keys 的全局静态档位。
+	 *
+	 * 073 的 updateGrid() 每次都 new Note(...)，而 Note 构造时：
+	 *   - 动画帧前缀取 colAt(noteData) -> 全局静态 Note.colArray
+	 *   - RGB / HSV 取色取 styleIndex(noteData) -> Note.uiManiaOverride / PlayState.SONG.mania
+	 * 073 原先只同步了 PlayState.SONG.mania，从未同步 Note.colArray。这个全局表由
+	 * PlayState.applyMania() 或新版 ChartingState.applySectionColumns() 设置，直接打开 073
+	 * 时它往往仍是上一次 State 的档位（常见是 4 键 ['purple','blue','green','red']）。
+	 * 于是改 mania 后音符的数量/位置按新键数变了，帧前缀却仍按 %4 循环成四方向箭头；
+	 * 且 arrowRGB / arrowHSV 未补齐到 18 色时，高列 initializeGlobalRGBShader() 读不到
+	 * 颜色会退回默认洋红/绿/蓝 —— 这就是「新放的、实际可玩的箭头显示不正常」。
+	 * 进 PlayState 会调 applyMania() 重设全局表并补齐色表，所以试玩回来（或再重进制谱器）
+	 * 就恢复正常；重开进程又可能变回去。
+	 *
+	 * 做法：按 PlayState.applyMania() / 新版 applySectionColumns() 的同一规则生成 colArray，
+	 * 补齐 18 色，钉住编辑侧档；在任何 new Note() / new StrumNote() 之前调用即可。
+	 */
+	function syncChartManiaGlobals():Void
+	{
+		var mania:Int = (_song.mania != null) ? _song.mania : 3;
+		var laneCount:Int = mania + 1;
+
+		ExtraKeysHandler.ensure();
+		// 幂等：补齐 arrowRGB / arrowRGBPixel / arrowHSV 到 18 色，缺色时多键音符会显示成默认三原色
+		ClientPrefs.ensureEKArrowColors();
+
+		if (PlayState.SONG != null) PlayState.SONG.mania = mania;
+		Note.uiManiaOverride = -1;
+		Note.editorDualMode = false;
+		Note.editorPlrKeys = laneCount;
+		Note.editorOppKeys = laneCount;
+
+		var cols:Array<String> = [];
+		var ek = (ExtraKeysHandler.instance != null) ? ExtraKeysHandler.instance.data : null;
+		if (ek != null && ek.keys != null && ek.keys.length > mania)
+		{
+			var mode = ek.keys[mania];
+			for (i in 0...laneCount)
+			{
+				var g:Int = (mode != null && mode.notes != null && i < mode.notes.length) ? mode.notes[i] : i;
+				var anim = (ek.animations != null && g >= 0 && g < ek.animations.length) ? ek.animations[g] : null;
+				cols.push((anim != null && anim.note != null) ? anim.note : 'purple');
+			}
+		}
+		else cols = ['purple', 'blue', 'green', 'red'];
+
+		Note.colArray = cols;
+	}
+
+	/**
+	 * 重建 Vortex 判定线的静态箭头：数量、位置，以及最容易被漏掉的「多键贴图档位」。
+	 *
+	 * StrumNote.reloadNote() 的帧前缀（LEFT/DOWN/UP/RIGHT/ROMBUS/CIRCLE…）不是按本类的
+	 * _song.mania 取，而是按 Note.uiManiaOverride -> PlayState.SONG.mania ->
+	 * 编辑器侧档(Note.editorPlrKeys / editorOppKeys) 取档。073 从未初始化这几个全局态，
+	 * 新版制谱器 / 颜色菜单退出后可能残留旧档（常见是 4 键档），于是改 mania 时
+	 * 箭头数量按 _song.mania 变了，贴图却仍停在 4K 方向。
+	 *
+	 * 做法：重建期间把编辑器侧档钉在当前键数（该分支优先级最高，同时修正取色与
+	 * shader 绑定），重建完把全局态归位到 073 应有的干净值，避免污染其它 State。
+	 */
+	function rebuildStrumLineNotes():Void
+	{
+		if (strumLineNotes == null) return;
+
+		// 旧箭头必须真正销毁：clear() 只摘除引用，残留对象仍持有共享 shader / 动画
+		for (arrow in strumLineNotes)
+			if (arrow != null) arrow.destroy();
+		strumLineNotes.clear();
+
+		// SONG.mania 是流动音符的取档来源，保持为新键数（不要恢复成旧值）
+		if (PlayState.SONG != null) PlayState.SONG.mania = _song.mania;
+
+		Note.uiManiaOverride = -1;
+		Note.editorDualMode = true;
+		Note.editorPlrKeys = _song.mania + 1;
+		Note.editorOppKeys = _song.mania + 1;
+
+		for (i in 0...((_song.mania + 1) * 2))
+		{
+			var arrow:StrumNote = new StrumNote(GRID_SIZE * (i + 1), strumLine.y, i % (_song.mania + 1), 0);
+			arrow.setGraphicSize(GRID_SIZE, GRID_SIZE);
+			arrow.updateHitbox();
+			arrow.playAnim('static', true);
+			arrow.scrollFactor.set(1, 1);
+			strumLineNotes.add(arrow);
+		}
+
+		// 归位到 073 的干净默认：非双侧、无 UI 档位覆盖，侧档数值与当前键数一致。
+		// 原本残留的脏全局态就此清掉；新版制谱器进入时会自行重设这几个字段。
+		Note.uiManiaOverride = -1;
+		Note.editorDualMode = false;
+		Note.editorPlrKeys = _song.mania + 1;
+		Note.editorOppKeys = _song.mania + 1;
+
+		strumLineNotes.visible = strumLineNotes.active = vortex;
+		// reloadGridLayer() 每次 add(strumLine) 会把判定线放到最上层，箭头组要重新置顶
+		remove(strumLineNotes);
+		add(strumLineNotes);
+	}
+
 	function reloadGridLayer() {
+		// 对齐 Minty 新版：mania 改变时同步到 PlayState.SONG（确保运行态按键映射正确）
+		if (PlayState.SONG == null) {
+			PlayState.SONG = {
+				song: 'DUMMY',
+				notes: [],
+				events: [],
+				bpm: 1,
+				offset: 0,
+				mania: _song.mania,
+				needsVoices: true,
+				player1: 'bf',
+				player2: 'bf',
+				gfVersion: 'bf',
+				speed: 1,
+				stage: 'stage',
+				format: 'mrek_v0.0.1',
+			};
+		} else {
+			PlayState.SONG.mania = _song.mania;
+		}
+		// 改键数 / 缩放 / section beats 变化时先重同步全局档位，再重建任何 Note / StrumNote
+		syncChartManiaGlobals();
+
+		// 对齐 Minty 新版：mania 改变时重建左右 icon 位置
+		var gridLaneMidPoint:Float = (GRID_SIZE * (_song.mania + 1)) / 2;
+		var leftIconX:Float = (GRID_SIZE + gridLaneMidPoint) - (leftIcon.width / 2);
+		var rightIconX:Float = leftIconX + (GRID_SIZE * (_song.mania + 1));
+		leftIcon.setPosition(leftIconX, -100);
+		rightIcon.setPosition(rightIconX, -100);
+
 		columns = (_song.mania * 2) + 3;
 		gridLayer.clear();
 		gridBG = FlxGridOverlay.create(1, 1, columns, Std.int(getSectionBeats() * 4 * zoomList[curZoom]));
@@ -2451,30 +3019,21 @@ class OldChartingState073 extends OldEditorState
 			if(vortex) gridLayer.add(beatsep);
 		}
 
-		var gridBlackLine:FlxSprite = new FlxSprite(gridBG.x + GRID_SIZE).makeGraphic(1, 1, FlxColor.BLACK);
-		gridBlackLine.setGraphicSize(2, leHeight);
-		gridBlackLine.updateHitbox();
-		gridBlackLine.antialiasing = false;
-		gridLayer.add(gridBlackLine);
-
-		// Extra Keys：按当前 mania 重建判定线与其上的箭头（列数可能已变化）
+		// 对齐 Minty 新版：先重建 strumLine 与 quant 跟踪，再画左侧分隔线
 		remove(strumLine);
 		strumLine = new FlxSprite(0, 50).makeGraphic(Std.int(GRID_SIZE * columns), 4);
 		add(strumLine);
 		quant.sprTracker = strumLine;
 
-		if (strumLineNotes != null)
-		{
-			strumLineNotes.clear();
-			for (i in 0...((_song.mania + 1) * 2)){
-				var note:StrumNote = new StrumNote(GRID_SIZE * (i+1), strumLine.y, i % (_song.mania + 1), 0);
-				note.setGraphicSize(GRID_SIZE, GRID_SIZE);
-				note.updateHitbox();
-				note.playAnim('static', true);
-				strumLineNotes.add(note);
-				note.scrollFactor.set(1, 1);
-			}
-		}
+		// 数量、位置与多键贴图档位统一由 rebuildStrumLineNotes() 重建
+		rebuildStrumLineNotes();
+
+		var gridBlackLineLeft:FlxSprite = new FlxSprite(gridBG.x + GRID_SIZE).makeGraphic(1, 1, FlxColor.BLACK);
+		gridBlackLineLeft.setGraphicSize(2, leHeight);
+		gridBlackLineLeft.updateHitbox();
+		gridBlackLineLeft.antialiasing = false;
+		gridLayer.add(gridBlackLineLeft);
+
 		updateGrid();
 
 		lastSecBeats = getSectionBeats();
@@ -2484,25 +3043,46 @@ class OldChartingState073 extends OldEditorState
 
 	function strumLineUpdateY()
 	{
-		strumLine.y = getYfromStrum((Conductor.songPosition - sectionStartTime()) / zoomList[curZoom] % (Conductor.stepCrochet * 16)) / (getSectionBeats() / 4);
+		var raw:Float = (Conductor.songPosition - sectionStartTime()) / zoomList[curZoom];
+		var mod:Float = Conductor.stepCrochet * 16;
+		// 刚切 section 时 songPosition 可能 < sectionStartTime()，原生 % 会返回负值，
+		// 导致 strumLine 跳到错误位置。用数学取模把它折回 [0, mod)。
+		var pos:Float = ((raw % mod) + mod) % mod;
+		strumLine.y = getYfromStrum(pos) / (getSectionBeats() / 4);
 	}
 
 	var waveformPrinted:Bool = true;
 	var wavData:Array<Array<Array<Float>>> = [[[0], [0]], [[0], [0]]];
 
-	var lastWaveformHeight:Int = 0;
 	function updateWaveform() {
 		#if desktop
-		if(waveformPrinted) {
-			var width:Int = Std.int(GRID_SIZE * ((_song.mania + 1) * 2));
-			var height:Int = Std.int(gridBG.height);
-			if(lastWaveformHeight != height && waveformSprite.pixels != null)
+		var width:Int = Std.int(GRID_SIZE * ((_song.mania + 1) * 2));
+		var height:Int = Std.int(gridBG.height);
+
+		/**
+		 * 位图尺寸每次都要核对，且不能只按 height 缓存。
+		 * width 随 mania（列数）变化，但 gridBG.height 只由 sectionBeats / zoom 决定；
+		 * 073 原版仅在 lastWaveformHeight != height 时重建，改档时位图仍是旧宽度，
+		 * 而清屏 fillRect 与波形绘制都按新的 gSize 算，超出旧位图右边界的部分被裁掉
+		 * —— 看起来像隔了一层空气墙。重进编辑器时缓存归零才重建，所以「重进就好了」。
+		 * 这里直接以位图自身尺寸为准，且不受 waveformPrinted（上次是否画过）影响，
+		 * 顺带修掉「关着波形改档、之后再开启波形」时依旧裁切的情况。
+		 */
+		if (waveformSprite != null)
+		{
+			var pixels = waveformSprite.pixels;
+			if (pixels == null || pixels.width != width || pixels.height != height)
 			{
-				waveformSprite.pixels.dispose();
-				waveformSprite.pixels.disposeImage();
+				if (pixels != null)
+				{
+					pixels.dispose();
+					pixels.disposeImage();
+				}
 				waveformSprite.makeGraphic(width, height, 0x00FFFFFF);
-				lastWaveformHeight = height;
 			}
+		}
+
+		if(waveformPrinted) {
 			waveformSprite.pixels.fillRect(new Rectangle(0, 0, width, height), 0x00FFFFFF);
 		}
 		waveformPrinted = false;
@@ -2542,7 +3122,7 @@ class OldChartingState073 extends OldEditorState
 		}
 
 		// Draws
-		var gSize:Int = Std.int(GRID_SIZE * ((_song.mania + 1) * 2));
+		var gSize:Int = width; // 与位图宽度同源：中心点 hSize 不会和位图右边界错位
 		var hSize:Int = Std.int(gSize / 2);
 		var size:Float = 1;
 
@@ -2684,6 +3264,7 @@ class OldChartingState073 extends OldEditorState
 	{
 		if (curSelectedNote != null)
 		{
+			pushUndo();
 			if (curSelectedNote[2] != null)
 			{
 				curSelectedNote[2] += Math.ceil(value);
@@ -2770,7 +3351,7 @@ class OldChartingState073 extends OldEditorState
 		{
 			changeSection();
 		}
-		Conductor.songPosition = FlxG.sound.music.time;
+		Conductor.songPosition = FlxG.sound.music.time + Conductor.offset;
 		if(!waveformChanged) updateWaveform();
 	}
 
@@ -2854,14 +3435,15 @@ class OldChartingState073 extends OldEditorState
 		if (curSelectedNote != null) {
 			if(curSelectedNote[2] != null) {
 				stepperSusLength.value = curSelectedNote[2];
-				if(curSelectedNote[3] != null) {
-					currentType = curNoteTypes.indexOf(curSelectedNote[3]);
-					if(currentType <= 0) {
-						noteTypeDropDown.selectedLabel = '';
-					} else {
-						noteTypeDropDown.selectedLabel = currentType + '. ' + curSelectedNote[3];
-					}
-				}
+				// 统一走只读解析：旧式数字索引与字符串都能映射到下拉列表，
+				// 避免「箭头上有编号、选中后 Note type 却显示为空」的假丢失。
+				// 也不再依赖 curSelectedNote[3] != null，选中无类型音符时会清掉上一次的残留显示。
+				var typeName:String = resolveNoteTypeName(curSelectedNote);
+				currentType = curNoteTypes.indexOf(typeName);
+				if (currentType > 0)
+					noteTypeDropDown.selectedLabel = currentType + '. ' + typeName;
+				else
+					noteTypeDropDown.selectedLabel = '';
 			} else {
 				eventDropDown.selectedLabel = curSelectedNote[1][curEventSelected][0];
 				var selected:Int = Std.parseInt(eventDropDown.selectedId);
@@ -2877,6 +3459,10 @@ class OldChartingState073 extends OldEditorState
 
 	function updateGrid():Void
 	{
+		// 073 里谱面音符只在这里创建。全局静态可能被 PlayState / 新版制谱器 / 颜色菜单改写，
+		// 所以每次重建前都核对一次档位，保证 new Note() 读到当前 mania 的帧前缀与色表。
+		syncChartManiaGlobals();
+
 		curRenderedNotes.forEachAlive(function(spr:Note) spr.destroy());
 		curRenderedNotes.clear();
 		curRenderedSustains.forEachAlive(function(spr:FlxSprite) spr.destroy());
@@ -2914,19 +3500,11 @@ class OldChartingState073 extends OldEditorState
 				curRenderedSustains.add(setupSusNote(note, beats));
 			}
 
-			if(i[3] != null && note.noteType != null && note.noteType.length > 0) {
-				var typeInt:Int = curNoteTypes.indexOf(i[3]);
-				var theType:String = '' + typeInt;
-				if(typeInt < 0) theType = '?';
-
-				var daText:AttachedFlxText = new AttachedFlxText(0, 0, 100, theType, 24);
-				daText.setFormat(Paths.font("vcr.ttf"), 24, FlxColor.WHITE, CENTER, FlxTextBorderStyle.OUTLINE_FAST, FlxColor.BLACK);
-				daText.xAdd = -32;
-				daText.yAdd = 6;
-				daText.borderSize = 1;
-				curRenderedNoteType.add(daText);
-				daText.sprTracker = note;
-			}
+			// noteType 标签：已知类型显示编号，预设不存在/越界索引显示 '?'，默认空类型不画。
+			// noteTypeLabel() 只读解析，绝不改写 i[3]，保存时谱面数据保持原样。
+			var typeLabel:String = noteTypeLabel(i);
+			if (typeLabel.length > 0)
+				curRenderedNoteType.add(makeNoteLabel(typeLabel, note));
 			note.mustPress = _song.notes[curSec].mustHitSection;
 			if(i[1] > _song.mania) note.mustPress = !note.mustPress;
 		}
@@ -2982,6 +3560,180 @@ class OldChartingState073 extends OldEditorState
 				nextRenderedNotes.add(note);
 			}
 		}
+
+		// 超范围音符照常按原始 lane 画出来并加警示（独立于 curRenderedNotes）
+		renderStashedNotes();
+	}
+
+	/**
+	 * 只读解析音符的 noteType 名字（交给 new Note 用），绝不改写原始数组。
+	 *
+	 * 073 原版 setupNoteData() 会把旧式数字索引就地转成字符串写回 i[3]，空值还会
+	 * i.remove(i[3]) 把第 4 项整个删掉 —— 每次重绘网格都在悄悄改写谱面数据，
+	 * 保存时异常 noteType / 旧格式的 [3] 就无法保持原样。这里统一改为只读解析。
+	 */
+	function resolveNoteTypeName(raw:Array<Dynamic>):String
+	{
+		if (raw == null || raw.length < 4) return '';
+		var v:Dynamic = raw[3];
+		if (v == null) return '';
+		if (!Std.isOfType(v, String))
+		{
+			var idx:Int = Std.int(v);
+			return (idx >= 0 && idx < curNoteTypes.length) ? curNoteTypes[idx] : '';
+		}
+		return cast(v, String);
+	}
+
+	/**
+	 * 音符的 noteType 标签文本：
+	 *   ''  = 默认/空类型，不画标签
+	 *   '?' = 类型异常（预设不存在、越界数字索引、未知字符串）
+	 *   '3' = 已知类型在下拉列表中的编号
+	 * 数字索引先按 curNoteTypes 解析，解析得出来就按正常类型处理、解析不出来才算异常，
+	 * 这样改档重绘不会平白让每个音符都扣一个 '?'。全程只读，不回写谱面数据。
+	 */
+	function noteTypeLabel(raw:Array<Dynamic>):String
+	{
+		// 类型列表还没建好时不要急着判定「异常」，否则会把每个音符都误标成 '?'
+		if (curNoteTypes.length == 0) return '';
+		if (raw == null || raw.length < 4) return '';
+		var v:Dynamic = raw[3];
+		if (v == null) return '';
+
+		var name:String = '';
+		if (Std.isOfType(v, String))
+			name = cast(v, String);
+		else
+		{
+			var idx:Int = Std.int(v);
+			if (idx < 0 || idx >= curNoteTypes.length) return '?';
+			name = curNoteTypes[idx];
+		}
+		if (name.length < 1) return '';
+		var typeInt:Int = curNoteTypes.indexOf(name);
+		if (typeInt < 0) return '?'; // 预设不存在：真正的 noteType 异常
+		return (typeInt > 0) ? '' + typeInt : '';
+	}
+
+	/** 统一的 noteType / 警示标签：24px vcr 白字 + 1px 黑描边，居中贴在音符上 */
+	function makeNoteLabel(text:String, note:Note):AttachedFlxText
+	{
+		var t:AttachedFlxText = new AttachedFlxText(0, 0, 100, text, 24);
+		t.setFormat(Paths.font("vcr.ttf"), 24, FlxColor.WHITE, CENTER, FlxTextBorderStyle.OUTLINE_FAST, FlxColor.BLACK);
+		t.xAdd = (GRID_SIZE - 100) / 2; // 100 宽 CENTER -> 文本中心正好落在箭头中心
+		t.yAdd = 6;
+		t.borderSize = 1;
+		t.sprTracker = note;
+		return t;
+	}
+
+	/**
+	 * 把暂存的超范围音符按「原始 lane 位置」照常渲染，并加警示染色 + '!' 叠加标签。
+	 *
+	 * 染色必须走 Note 自己的着色通道：RGB 模式按 [橙主体, 白高光, 深橙描边] 三通道
+	 * 着色（与普通箭头预设的层次一致）；HSV 模式（ColorSwap 只能做色相/亮度偏移，
+	 * 凑不出纯橙）改用本地 ColorSwap 压成纯黑剪影。直接设 FlxSprite.color 是乘色，
+	 * 会被箭头 shader 吃掉，结果仍是各方向原色。
+	 *
+	 * 警示 '!' 不再单独画在右上角，而是与 noteType 标签拼成一个居中文本：
+	 *   异常 noteType -> '?!'，已知类型 -> '3!'，默认空类型 -> '!'
+	 *
+	 * 用独立的 stashedRenderedNotes 组、不进 curRenderedNotes：这样不会干扰既有
+	 * 的选中/删除命中（update() 按 curSelectedNote 匹配 curRenderedNotes），也不会
+	 * 被误当作当前谱面里可编辑的音符。它们只是「数据还在，但当前档位装不下」的提示。
+	 * 警示标签复用 curRenderedNoteType，updateGrid() 开头会统一销毁重建。
+	 */
+	function renderStashedNotes():Void
+	{
+		if (stashedRenderedNotes == null) return;
+		stashedRenderedNotes.forEachAlive(function(spr:Note) spr.destroy());
+		stashedRenderedNotes.clear();
+		if (stashedNotes.length == 0) return;
+
+		for (s in stashedNotes)
+		{
+			var secIdx:Int = s.sec;
+			// 与 curRenderedNotes / nextRenderedNotes 的可见范围保持一致
+			if (secIdx != curSec && secIdx != curSec + 1) continue;
+
+			var raw:Array<Dynamic> = s.data;
+			// 完整复制原始音符数组（含第 4 项 noteType 与之后的扩展字段），只替换 lane。
+			// setupNoteData() 只读，不会回写 raw。
+			var copy:Array<Dynamic> = raw.copy();
+			while (copy.length < 3) copy.push(null);
+			copy[1] = s.lane;
+			while (copy.length < 4) copy.push('');
+			// 标签与 Note.noteType 都从规范化冗余取，避免 raw[3] 被污染时「3!」退化成「!」
+			copy[3] = stashedNoteType(s);
+			var note:Note = setupNoteData(copy, false);
+			applyStashedWarningColor(note);
+			stashedRenderedNotes.add(note);
+			// 长条也照常画出来（同样染成警示色），否则会只剩一个孤零零的箭头
+			if (note.sustainLength > 0)
+			{
+				var sus:FlxSprite = setupSusNote(note, getSectionBeats());
+				sus.color = stashedSusColor();
+				curRenderedSustains.add(sus);
+			}
+
+			// 警示 '!' 与 noteType 标签合成一个居中文本，样式与普通音符的 '?' 标签完全一致：
+			//   异常 noteType -> '?!'，已知类型 -> '3!'，默认空类型 -> '!'
+			curRenderedNoteType.add(makeNoteLabel(noteTypeLabel(copy) + '!', note));
+		}
+	}
+
+	/** 当前箭头是否走 HSV（ColorSwap）着色，而不是 RGB 调色板 */
+	function usingHSVNoteColors():Bool
+		return ClientPrefs.data.arrowColorMode == 'HSV';
+
+	/** 警示长条跟随箭头：RGB 模式纯橙，HSV 模式纯黑 */
+	function stashedSusColor():FlxColor
+		return usingHSVNoteColors() ? FlxColor.BLACK : STASHED_NOTE_ORANGE;
+
+	/**
+	 * 暂存警示箭头染色 —— 按当前着色模式分支，绝不污染全局共享 shader。
+	 *
+	 * RGB 模式：Note 的箭头贴图由 RGBPalette 接管（红/绿/蓝通道分别映射成 r/g/b 三色）。
+	 *   照搬正常箭头预设 [主体色, 白高光, 深色描边] 的结构，只把主体换成橙：
+	 *   r = 纯橙、g = 白、b = 深橙。三通道全橙会让箭头发平、失去立体感。
+	 *   直接新建一份本地 RGBPalette 并重建 rgbShader 引用，完全不碰全局共享实例，
+	 *   同 style 的正常音符颜色不会被带歪。
+	 * HSV 模式：ColorSwap 是「色相/饱和度/亮度」偏移，无论如何都凑不出纯橙；
+	 *   改挂一个本地 ColorSwap，brightness = -1 使 V *= (1 + brightness) = 0，得到纯黑剪影。
+	 *   必须新建本地实例 —— 构造时挂的是全局共享 ColorSwap，直接改它会影响所有音符。
+	 * 两条分支都把 FlxSprite.color 复位为白色，避免旧的橙红乘色再叠一层导致发暗。
+	 */
+	function applyStashedWarningColor(note:Note):Void
+	{
+		if (note == null) return;
+		if (usingHSVNoteColors())
+		{
+			var swap:shaders.ColorSwap = new shaders.ColorSwap();
+			swap.hue = 0;
+			swap.saturation = 0;
+			swap.brightness = -1.0;
+			note.colorSwap = swap;
+			note.shader = swap.shader;
+			note.color = FlxColor.WHITE;
+		}
+		else
+		{
+			// RGB：给这支警示箭头挂一份**完全本地**的 RGBPalette，按正常箭头的三通道
+			// 层次上色（橙主体 / 白高光 / 深橙描边）。
+			// 不直接写 note.rgbShader.r=... 的原因：RGBShaderReference 只在「新值 != 原色」
+			// 时才 cloneOriginal()，万一某列主色恰好也是这个橙，就会直接写进全局共享
+			// palette，把同 style 的正常音符一起染橙。本地 palette 彻底隔离、零污染。
+			var pal:shaders.RGBPalette = new shaders.RGBPalette();
+			pal.r = STASHED_NOTE_ORANGE;
+			pal.g = STASHED_NOTE_HIGHLIGHT;
+			pal.b = STASHED_NOTE_ORANGE_DARK;
+			var ref:shaders.RGBPalette.RGBShaderReference = new shaders.RGBPalette.RGBShaderReference(note, pal);
+			ref.allowNew = false; // parent 已是本地调色板，后续 setter 不必再 clone
+			note.rgbShader = ref; // defaultRGB()/set_enabled() 也只会操作这份本地 palette
+			note.shader = pal.shader;
+			note.color = FlxColor.WHITE;
+		}
 	}
 
 	function setupNoteData(i:Array<Dynamic>, isNextSection:Bool):Note
@@ -2992,16 +3744,11 @@ class OldChartingState073 extends OldEditorState
 
 		var note:Note = new Note(daStrumTime, daNoteInfo % (_song.mania + 1), null, null, true);
 		if(daSus != null) { //Common note
-			if(!Std.isOfType(i[3], String)) //Convert old note type to new note type format
-			{
-				i[3] = curNoteTypes[i[3]];
-			}
-			if(i.length > 3 && (i[3] == null || i[3].length < 1))
-			{
-				i.remove(i[3]);
-			}
+			// 只读解析 noteType：073 原版会把旧式数字索引就地转成字符串写回 i[3]，
+			// 空值还会 i.remove(i[3]) 删掉第 4 项。那样每次重绘网格都在改写谱面数据，
+			// 保存时异常 noteType / 旧格式的 [3] 就保持不了原样。这里绝不回写 i。
 			note.sustainLength = daSus;
-			note.noteType = i[3];
+			note.noteType = resolveNoteTypeName(i);
 		} else { //Event note
 			note.loadGraphic(Paths.image('editors/eventIcon'));
 			note.rgbShader.enabled = false;
@@ -3078,7 +3825,7 @@ class OldChartingState073 extends OldEditorState
 
 		if(noteDataToCheck > -1)
 		{
-			if(note.mustPress != _song.notes[curSec].mustHitSection) noteDataToCheck += 4;
+			if(note.mustPress != _song.notes[curSec].mustHitSection) noteDataToCheck += (_song.mania + 1);
 			for (i in _song.notes[curSec].sectionNotes)
 			{
 				if (i != curSelectedNote && i.length > 2 && i[0] == note.strumTime && i[1] == noteDataToCheck)
@@ -3108,8 +3855,10 @@ class OldChartingState073 extends OldEditorState
 
 	function deleteNote(note:Note):Void
 	{
+		pushUndo();
+
 		var noteDataToCheck:Int = note.noteData;
-		if(noteDataToCheck > -1 && note.mustPress != _song.notes[curSec].mustHitSection) noteDataToCheck += 4;
+		if(noteDataToCheck > -1 && note.mustPress != _song.notes[curSec].mustHitSection) noteDataToCheck += (_song.mania + 1);
 
 		if(note.noteData > -1) //Normal Notes
 		{
@@ -3166,21 +3915,26 @@ class OldChartingState073 extends OldEditorState
 	}
 	function clearSong():Void
 	{
+		pushUndo();
 		for (daSection in 0..._song.notes.length)
 		{
 			_song.notes[daSection].sectionNotes = [];
 		}
+		// 清空音符时暂存也要一起清，否则改档后幽灵音符会重新冒出来
+		clearStashedNotes();
 
 		updateGrid();
 	}
 
 	private function addNote(strum:Null<Float> = null, data:Null<Int> = null, type:Null<Int> = null):Void
 	{
+		pushUndo();
+
 		//curUndoIndex++;
 		//var newsong = _song.notes;
 		//	undos.push(newsong);
 		var noteStrum = getStrumTime(dummyArrow.y * (getSectionBeats() / 4), false) + sectionStartTime();
-		var noteData = Math.floor((FlxG.mouse.x - GRID_SIZE) / GRID_SIZE);
+		var noteData:Int = Math.floor((FlxG.mouse.x - GRID_SIZE) / GRID_SIZE);
 		var noteSus = 0;
 		var daAlt = false;
 		var daType = currentType;
@@ -3188,6 +3942,12 @@ class OldChartingState073 extends OldEditorState
 		if (strum != null) noteStrum = strum;
 		if (data != null) noteData = data;
 		if (type != null) daType = type;
+
+		// 边界钳制：合法轨道 0..(mania+1)*2-1，事件列 -1。
+		// 鼠标在 grid 右边缘外 / vortex 小键盘按到不存在的高键时不再写入越轨 lane。
+		var maxLane:Int = (_song.mania + 1) * 2 - 1;
+		if (noteData > maxLane) noteData = maxLane;
+		if (noteData < -1) noteData = -1;
 
 		if(noteData > -1)
 		{
@@ -3217,19 +3977,82 @@ class OldChartingState073 extends OldEditorState
 		updateNoteUI();
 	}
 
-	// will figure this out l8r
-	function redo()
+	// === Undo / Redo（快照式：深拷贝 notes + events）===
+	// 旧版这里是空壳（注释掉了），现在补齐。所有会改谱面的操作前先 pushUndo()。
+	var undoHistory:Array<Dynamic> = [];
+	var redoHistory:Array<Dynamic> = [];
+	var UNDO_MAX:Int = 100;
+
+	/** 快照必须连 mania 与暂存音符一起存：否则 undo 后谱面 lane 编码与档位会错开，
+	 *  暂存音符也可能重复（既在 notes 里又留在 stashed 里）。 */
+	function makeSnapshot():Dynamic
 	{
-		//_song = redos[curRedoIndex];
+		return {
+			notes: haxe.Json.parse(haxe.Json.stringify(_song.notes)),
+			events: haxe.Json.parse(haxe.Json.stringify(_song.events)),
+			mania: _song.mania,
+			stashed: haxe.Json.parse(haxe.Json.stringify(stashedNotes))
+		};
 	}
 
-	function undo()
+	function pushUndo():Void
 	{
-		//redos.push(_song);
-		undos.pop();
-		//_song.notes = undos[undos.length - 1];
-		///trace(_song.notes);
-		//updateGrid();
+		redoHistory = [];
+		undoHistory.push(makeSnapshot());
+		if (undoHistory.length > UNDO_MAX) undoHistory.shift();
+	}
+
+	function applySnapshot(snap:Dynamic):Void
+	{
+		_song.notes = snap.notes;
+		_song.events = snap.events;
+		stashedNotes = (snap.stashed != null) ? sanitizeStashedNotes(snap.stashed) : [];
+		syncStashedNotes();
+		if (snap.mania != null)
+		{
+			_song.mania = snap.mania;
+			if (Reflect.hasField(_song, 'keyCount'))
+				Reflect.setField(_song, 'keyCount', snap.mania + 1);
+			// stepper.value 的 setter 会派发 CHANGE_EVENT，用标志挡掉，避免把一次
+			// 「同步 UI 显示值」误当成用户改档而再跑一次重映射 / 压栈
+			if (maniaStepper != null)
+			{
+				suppressManiaEvent = true;
+				maniaStepper.value = snap.mania;
+				suppressManiaEvent = false;
+			}
+		}
+		Conductor.mapBPMChanges(_song);
+		// 兜底：undo 到空谱面时至少保留一个空 section，避免 updateGrid 空引用
+		if (_song.notes == null || _song.notes.length == 0)
+		{
+			_song.notes = [];
+			addSection();
+		}
+		if (curSec < 0) curSec = 0;
+		if (curSec >= _song.notes.length) curSec = _song.notes.length - 1;
+		curSelectedNote = null;
+		reloadGridLayer();
+		updateSectionUI();
+		updateNoteUI();
+	}
+
+	function redo():Void
+	{
+		if (redoHistory.length == 0) return;
+		var snap:Dynamic = redoHistory.pop();
+		undoHistory.push(makeSnapshot());
+		if (undoHistory.length > UNDO_MAX) undoHistory.shift();
+		applySnapshot(snap);
+	}
+
+	function undo():Void
+	{
+		if (undoHistory.length == 0) return;
+		var snap:Dynamic = undoHistory.pop();
+		redoHistory.push(makeSnapshot());
+		if (redoHistory.length > UNDO_MAX) redoHistory.shift();
+		applySnapshot(snap);
 	}
 
 	function getStrumTime(yPos:Float, doZoomCalc:Bool = true):Float
@@ -3308,8 +4131,90 @@ class OldChartingState073 extends OldEditorState
 		}
 	}
 
+	/** Enter 键：切到 PlayState 试玩（从按键分支抽出，供确认框回调使用） */
+	function goPlayState():Void
+	{
+		autosaveSong();
+		FlxG.mouse.visible = false;
+		PlayState.SONG = prepareSongForPlayState();
+		FlxG.sound.music.stop();
+		if(vocals != null) vocals.stop();
+		if(opponentVocals != null) opponentVocals.stop();
+		StageData.loadDirectory(_song);
+		LoadingState.loadAndSwitchState(new PlayState());
+	}
+
+	/**
+	 * 只把 bpmTxt 末尾「! N note(s) out of XK」这一行染成橙色，其余行保持白色。
+	 *
+	 * bpmTxt.text 每帧都会重写，但 FlxText 的 set_text 不会清 _formatRanges ——
+	 * 若每帧直接 addFormat() 会让格式范围数组无限增长。所以缓存一份 FlxTextFormat，
+	 * 只在「范围确实变了」时才 clearFormats() + addFormat() 重设一次；没有警示行时
+	 * 只清一次。FlxTextFormat 的 font / size 为 null，OpenFL 的 TextFormat.__merge()
+	 * 只在非 null 时覆盖，因此 arturito-slab 字体、16px、LEFT 对齐都不受影响。
+	 *
+	 * @param start 警示行首字符在 bpmTxt.text 中的索引；-1 = 当前没有警示行
+	 */
+	function updateStashWarnFormat(start:Int):Void
+	{
+		if (start < 0)
+		{
+			if (stashWarnStart >= 0)
+			{
+				bpmTxt.clearFormats();
+				stashWarnStart = -1;
+				stashWarnEnd = -1;
+			}
+			return;
+		}
+
+		var end:Int = bpmTxt.text.length;
+		if (start == stashWarnStart && end == stashWarnEnd) return;
+
+		bpmTxt.clearFormats();
+		if (stashWarnFormat == null) stashWarnFormat = new FlxTextFormat(STASHED_INFO_ORANGE);
+		bpmTxt.addFormat(stashWarnFormat, start, end);
+		stashWarnStart = start;
+		stashWarnEnd = end;
+	}
+
+	/**
+	 * 保存 / 试玩前的确认：提醒当前档位装不下这些音符，但它们不会丢 ——
+	 * 会随谱面 JSON / autosave 一起保存，刷新 state 或重开后仍在，升档即可原位还原；
+	 * 只有试玩不带入（超范围 lane 在 PlayState 会越界）。
+	 * 无暂存、或勾选「Ignore Progress Warnings」时直接执行，零弹窗 —— 与 073 原版的
+	 * Reload JSON / Clear notes 等进度警告共用同一个 ignoreWarnings 开关。
+	 */
+	function confirmChartMania(action:Void->Void):Void
+	{
+		if (stashedNotes.length == 0 || ignoreWarnings)
+		{
+			action();
+			return;
+		}
+		var secs:Map<Int, Bool> = new Map();
+		for (s in stashedNotes)
+		{
+			var secIdx:Int = s.sec;
+			secs.set(secIdx, true);
+		}
+		var secCount:Int = 0;
+		for (k in secs.keys()) secCount++;
+
+		openSubState(new Prompt(
+			stashedNotes.length + ' note(s) are outside the current ' + (_song.mania + 1) + 'K layout'
+			+ '\n(spread over ' + secCount + ' section(s)).\n\n'
+			+ 'They are kept: saved into the chart JSON and autosave,\n'
+			+ 'restored after a state reload, and put back in place\n'
+			+ 'when you raise Mania again.\n'
+			+ 'Only playtest will skip them.\n\nProceed anyway?',
+			0, action, null, false, 'PROCEED', 'CANCEL'));
+	}
+
 	function autosaveSong():Void
 	{
+		// 保证 autosave 里带上最新的暂存音符：没点 Save 就退出 / 重启也能通过 Load Autosave 找回
+		syncStashedNotes();
 		FlxG.save.data.autosave = haxe.Json.stringify({
 			"song": _song
 		});
@@ -3322,8 +4227,14 @@ class OldChartingState073 extends OldEditorState
 	 */
 	function prepareSongForPlayState():SwagSong
 	{
-		LegacyChartFormat.toPsychV1(_song);
-		return _song;
+		// LegacyChartFormat.toPsychV1() -> Song.convert() 会**原地**改写 lane 与 [3]。
+		// 旧写法直接传 _song，等于把试玩用的转换结果留在编辑器正在编辑的数据上：
+		// 回来后音符类型可能被写成空串，编号与游戏内特殊效果一起消失。
+		// 改成深拷贝（与 openEditorPlayState 一致），编辑器数据零污染；副本仍带
+		// editorStashedNotes，回到编辑器时 create() 能正常读回暂存。
+		var song:SwagSong = cast haxe.Json.parse(haxe.Json.stringify(_song));
+		LegacyChartFormat.toPsychV1(song);
+		return song;
 	}
 
 	/**
@@ -3374,12 +4285,15 @@ class OldChartingState073 extends OldEditorState
 	}
 
 	function clearEvents() {
+		pushUndo();
 		_song.events = [];
 		updateGrid();
 	}
 
 	private function saveLevel()
 	{
+		// 让 _song.editorStashedNotes 与当前工作副本一致；暂存为空时字段已被删掉，导出文件保持原样
+		syncStashedNotes();
 		if(_song.events != null && _song.events.length > 1) _song.events.sort(sortByTime);
 		// 标记谱面出处（仅元信息，不参与玩法逻辑）
 		_song.generatedBy = GENERATED_BY;

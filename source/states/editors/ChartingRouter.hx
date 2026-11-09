@@ -11,10 +11,10 @@ import states.editors.old.OldChartingState073;
  *  - '1.0.4-Kathy'  -> 现有 ChartingState (KathyEngine 改版，支持多键 + 触屏) [默认]
  *  - '1.0.4-Official'-> Vanilla104ChartingState (PE 1.0.4 原版，仅 4 键，无触屏)
  *  - '0.7.3'        -> OldChartingState073 (0.7.3 复刻，Extra Keys 多键版，+触屏) —— EK 制谱器复刻
- *  - '0.6.3'        -> OldChartingState063 (0.6.3 复刻，仅 4 键，+触屏)
+ *  - '0.6.3'        -> OldChartingState063 (0.6.3 复刻，现已补齐 1K-18K 多键 + 轨道横滚，+触屏)
  *
- * 除 1.0 改版与 0.7.3（已打 Extra Keys 补丁）外，其余版本仍是 4 键时代产物（网格/音符/判定线硬编码 4 轨），
- * 因此遇到多键谱面时通过 currentChartIsFourKey() 自动回落到 1.0 改版制谱器，避免进入后画面错位或崩溃。
+ * 1.0 改版 / 0.7.3 / 0.6.3 均已支持多键；仅 1.0.4-Official 仍是 4 键时代产物，
+ * 因此遇到多键谱面时由该编辑器自己通过 currentChartIsFourKey() 回落到 1.0 改版制谱器。
  */
 class ChartingRouter
 {
