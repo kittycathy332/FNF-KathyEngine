@@ -105,6 +105,16 @@ class OldChartingState063 extends OldEditorState
 	var columns:Int = 9;
 	var maniaStepper:FlxUINumericStepper;
 	var suppressManiaEvent:Bool = false;
+	/** mania stepper 存 0-based 索引；这个标签换算成实际每侧键数（5 -> "Mania (6K):"） */
+	var maniaKeysLabel:FlxText;
+
+	/** 刷新 mania 标签：实际键数 = stepper.value + 1。 */
+	function refreshManiaKeysLabel():Void
+	{
+		if (maniaKeysLabel == null || maniaStepper == null) return;
+		maniaKeysLabel.text = 'Mania (' + (Std.int(maniaStepper.value) + 1) + 'K):';
+	}
+
 
 	// === horizontal track scrolling (mirrors 0.7.3 editor) ===
 	var trackScrollX:Float = GRID_SIZE;
@@ -311,6 +321,7 @@ class OldChartingState063 extends OldEditorState
 		ExtraKeysHandler.ensure();
 		syncChartManiaGlobals();
 		restoreStashedNotes();
+		captureNoteTypeMirror(); // 刚加载的数据最干净，作为改档镜像的基准
 
 		// Paths.clearMemory();
 
@@ -584,6 +595,16 @@ class OldChartingState063 extends OldEditorState
 		stepperBPM.name = 'song_bpm';
 		blockPressWhileTypingOnStepper.push(stepperBPM);
 
+		// Song Offset（毫秒）：谱面时间对齐偏移，写入 _song.offset 并同步到 Conductor.offset。
+		// 参数按 FlxUINumericStepper 的 (x, y, stepSize, defaultValue, min, max, decimals) 顺序。
+		var stepperOffset:FlxUINumericStepper = new FlxUINumericStepper(stepperBPM.x + 100, stepperBPM.y, 10, 0, -1000, 1000, 0);
+		// offset 在 SwagSong 里是 Float，静态平台不能直接与 null 比；先用 Dynamic 接住再兜底，兼容旧谱面缺该字段
+		var chartOffset:Dynamic = _song.offset;
+		stepperOffset.value = (chartOffset == null) ? 0 : chartOffset;
+		stepperOffset.name = 'song_offset';
+		blockPressWhileTypingOnStepper.push(stepperOffset);
+		Conductor.offset = stepperOffset.value;
+
 		var stepperSpeed:FlxUINumericStepper = new FlxUINumericStepper(10, stepperBPM.y + 35, 0.1, 1, 0.1, 10, 1);
 		stepperSpeed.value = _song.speed;
 		stepperSpeed.name = 'song_speed';
@@ -703,7 +724,8 @@ class OldChartingState063 extends OldEditorState
 		});
 
 		ExtraKeysHandler.ensure();
-		maniaStepper = new FlxUINumericStepper(stepperSpeed.x + 110, stepperSpeed.y, 1, 3,
+		// 与上方 Song Offset 同一列、下一行：x/y 都跟随 stepperOffset，UI 两列严格对齐
+		maniaStepper = new FlxUINumericStepper(stepperOffset.x, stepperOffset.y + 35, 1, 3,
 			ExtraKeysHandler.instance.data.minKeys, ExtraKeysHandler.instance.data.maxKeys, 1);
 		maniaStepper.value = (_song.mania != null) ? _song.mania : 3;
 		maniaStepper.name = 'song_mania';
@@ -723,15 +745,19 @@ class OldChartingState063 extends OldEditorState
 		tab_group_song.add(loadAutosaveBtn);
 		tab_group_song.add(loadEventJson);
 		tab_group_song.add(stepperBPM);
+		tab_group_song.add(stepperOffset);
 		tab_group_song.add(stepperSpeed);
 		tab_group_song.add(maniaStepper);
 		tab_group_song.add(reloadNotesButton);
 		tab_group_song.add(noteSkinInputText);
 		tab_group_song.add(noteSplashesInputText);
 		tab_group_song.add(new FlxText(stepperBPM.x, stepperBPM.y - 15, 0, 'Song BPM:'));
-		tab_group_song.add(new FlxText(stepperBPM.x + 100, stepperBPM.y - 15, 0, 'Song Offset:'));
+		tab_group_song.add(new FlxText(stepperOffset.x, stepperOffset.y - 15, 0, 'Song Offset:'));
 		tab_group_song.add(new FlxText(stepperSpeed.x, stepperSpeed.y - 15, 0, 'Song Speed:'));
-		tab_group_song.add(new FlxText(maniaStepper.x, maniaStepper.y - 15, 0, 'Mania (Keys):'));
+		// 动态标签：stepper 值是 0-based 档位索引，这里换算成实际每侧键数（5 -> 6K）
+		maniaKeysLabel = new FlxText(maniaStepper.x, maniaStepper.y - 15, 0, '');
+		refreshManiaKeysLabel();
+		tab_group_song.add(maniaKeysLabel);
 		tab_group_song.add(new FlxText(player2DropDown.x, player2DropDown.y - 15, 0, 'Opponent:'));
 		tab_group_song.add(new FlxText(gfVersionDropDown.x, gfVersionDropDown.y - 15, 0, 'Girlfriend:'));
 		tab_group_song.add(new FlxText(player1DropDown.x, player1DropDown.y - 15, 0, 'Boyfriend:'));
@@ -1123,6 +1149,7 @@ class OldChartingState063 extends OldEditorState
 			currentType = Std.parseInt(character);
 			if(curSelectedNote != null && curSelectedNote[1] > -1) {
 				curSelectedNote[3] = noteTypeIntMap.get(currentType);
+				mirrorSetNoteType(curSelectedNote, curSelectedNote[3]);
 				updateGrid();
 			}
 		});
@@ -1654,8 +1681,14 @@ class OldChartingState063 extends OldEditorState
 			{
 				_song.speed = nums.value;
 			}
+			else if (wname == 'song_offset')
+			{
+				_song.offset = nums.value;
+				Conductor.offset = nums.value;
+			}
 			else if (wname == 'song_mania')
 			{
+				refreshManiaKeysLabel(); // 无论是否 undo 同步，显示值都跟着 stepper 变
 				if (!suppressManiaEvent)
 				{
 					pushUndo();
@@ -1783,7 +1816,7 @@ class OldChartingState063 extends OldEditorState
 			FlxG.sound.music.time = 0;
 			changeSection();
 		}
-		Conductor.songPosition = FlxG.sound.music.time;
+		Conductor.songPosition = FlxG.sound.music.time + Conductor.offset;
 		_song.song = UI_songTitle.text;
 
 		strumLineUpdateY();
@@ -1874,6 +1907,7 @@ class OldChartingState063 extends OldEditorState
 						{
 							selectNote(note);
 							curSelectedNote[3] = noteTypeIntMap.get(currentType);
+							mirrorSetNoteType(curSelectedNote, curSelectedNote[3]);
 							updateGrid();
 						}
 						else
@@ -2232,7 +2266,7 @@ class OldChartingState063 extends OldEditorState
 			FlxG.sound.music.time = 0;
 			changeSection();
 		}
-		Conductor.songPosition = FlxG.sound.music.time;
+		Conductor.songPosition = FlxG.sound.music.time + Conductor.offset;
 		strumLineUpdateY();
 		camPos.y = strumLine.y;
 		for (arrow in strumLineNotes)
@@ -2809,7 +2843,7 @@ class OldChartingState063 extends OldEditorState
 		{
 			changeSection();
 		}
-		Conductor.songPosition = FlxG.sound.music.time;
+		Conductor.songPosition = FlxG.sound.music.time + Conductor.offset;
 		updateWaveform();
 	}
 
@@ -2899,6 +2933,9 @@ class OldChartingState063 extends OldEditorState
 
 	function updateGrid():Void
 	{
+		// 重建前按引用镜像恢复被外部路径写成 0 / 空串的 noteType。
+		// 放在 setupNoteData() / noteTypeLabel() 之前，保证本帧标签与下拉框读到正确值。
+		healNoteTypeMirror();
 		curRenderedNotes.clear();
 		curRenderedSustains.clear();
 		curRenderedNoteType.clear();
@@ -3310,18 +3347,40 @@ class OldChartingState063 extends OldEditorState
 			if (s == null || s.sec == null || s.lane == null || s.key == null
 				|| s.side == null || s.data == null || !Std.isOfType(s.data, Array))
 				continue;
-			// Keep noteType in both directions so legacy stash records still restore.
-			if (s.type == null && s.data.length > 3) s.type = s.data[3];
-			if (s.type != null && (s.data.length < 4 || s.data[3] == null)) s.data[3] = s.type;
+			normalizeStashedNoteType(s);
 			out.push(s);
 		}
 		return out;
+	}
+
+	/**
+	 * 让暂存项的 type 与 data[3] 完全对齐（兼容旧数据），并保证 data 至少 4 项。
+	 * 重建而不是原地写：073 日志证实往强类型数组里写 String 会被静默吞成 0。
+	 * t0 是浮点 strumTime 的冗余，降档暂存时写入，旧数据没有也能从 data[0] 兜底。
+	 */
+	static function normalizeStashedNoteType(s:Dynamic):Void
+	{
+		if (s == null) return;
+		var data:Array<Dynamic> = Reflect.hasField(s, 'data') ? Reflect.field(s, 'data') : null;
+		if (data == null || !Std.isOfType(data, Array)) return;
+		var t:String = normalizeChartNoteType(Reflect.hasField(s, 'type') ? Reflect.field(s, 'type') : null);
+		if (t.length == 0 || t == '0') t = normalizeChartNoteType(data.length > 3 ? data[3] : null);
+		if (t == '0') t = '';
+		var fresh:Array<Dynamic> = [];
+		for (k in 0...data.length) fresh.push(data[k]);
+		while (fresh.length < 3) fresh.push(null);
+		if (fresh.length < 4) fresh.push(t) else fresh[3] = t;
+		Reflect.setField(s, 'data', fresh);
+		Reflect.setField(s, 'type', t);
+		if (!Reflect.hasField(s, 't0') && fresh.length > 0)
+			Reflect.setField(s, 't0', fresh[0]);
 	}
 
 	/** Mirror the working copy into the chart object + session cache. */
 	function syncStashedNotes(?songKey:String):Void
 	{
 		if (_song == null) return;
+		for (s in stashedNotes) normalizeStashedNoteType(s);
 		var key:String = (songKey != null) ? songKey : Std.string(_song.song);
 		var copy:Array<Dynamic> = haxe.Json.parse(haxe.Json.stringify(stashedNotes));
 		if (copy.length == 0)
@@ -3329,6 +3388,167 @@ class OldChartingState063 extends OldEditorState
 		else
 			Reflect.setField(_song, STASH_FIELD, copy);
 		sessionStashBySong.set(key, copy);
+	}
+
+	// --- noteType truth mirror (ported from the 0.7.3 editor) ----------------
+	/**
+	 * 改档真值镜像：key 是「音符数组对象本身」（引用），value 是改档前的
+	 * strumTime 原值 + 规范化类型名。
+	 *
+	 * 073 的实测结论：升档的「还原循环」里整谱 [3] 会被写成 Int 0，同时 [0]
+	 * 的浮点 strumTime 被截断成 Int；更关键的是往这些数组里原地写 String 会被
+	 * 静默吞掉（运行时被当成整数数组），所以 heal 一律新建显式 Array<Dynamic>
+	 * 替换引用，并把 sectionNotes 容器一起换掉。用引用做 key 零歧义，不会像
+	 * 「小节 + strumTime」快照那样把和弦里不同 lane 的音符串在一起。
+	 */
+	var noteTypeMirror:haxe.ds.ObjectMap<Dynamic, {t0:Dynamic, type:String}> = new haxe.ds.ObjectMap();
+
+	/** 数值索引 -> 引擎默认类型名；字符串（含自定义 notetype）原样保留。 */
+	static function normalizeChartNoteType(v:Dynamic):String
+	{
+		if (v == null) return '';
+		if (Std.isOfType(v, String)) return cast(v, String);
+		var idx:Int = Std.int(v);
+		if (idx >= 0 && idx < objects.Note.defaultNoteTypes.length)
+			return objects.Note.defaultNoteTypes[idx];
+		return Std.string(v);
+	}
+
+	/** 抓全谱真值 —— 累积式，绝不覆盖已有的真值（升档时数据可能已被污染）。 */
+	function captureNoteTypeMirror():Void
+	{
+		if (noteTypeMirror == null) noteTypeMirror = new haxe.ds.ObjectMap();
+		if (_song == null || _song.notes == null) return;
+		for (sec in _song.notes)
+		{
+			if (sec == null || sec.sectionNotes == null) continue;
+			for (note in sec.sectionNotes)
+			{
+				if (note == null || note.length < 4) continue;
+				// 只认数值 lane：event 数组的 [1] 是嵌套数组，避免拿去做数值比较
+				if (note[1] == null) continue;
+				if (!Std.isOfType(note[1], Int) && !Std.isOfType(note[1], Float)) continue;
+				if (note[1] < 0) continue;
+				if (noteTypeMirror.exists(note)) continue; // 已有真值，不动
+				var t:String = normalizeChartNoteType(note[3]);
+				if (t == '0') t = ''; // 污染占位 / 旧式索引，不是类型名
+				// 空类型音符也登记：它们的 strumTime 同样会被截断，需要能重建
+				noteTypeMirror.set(note, {t0: note[0], type: t});
+			}
+		}
+	}
+
+	/** 用镜像真值把被污染的音符整支重建为显式 Array<Dynamic>。绝不原地写 note[3]。 */
+	function healNoteTypeMirror():Int
+	{
+		if (noteTypeMirror == null || _song == null || _song.notes == null) return 0;
+		var fixed:Int = 0;
+		for (sec in _song.notes)
+		{
+			if (sec == null || sec.sectionNotes == null) continue;
+			var list:Array<Dynamic> = sec.sectionNotes;
+			var freshList:Array<Dynamic> = [];
+			var changed:Bool = false;
+			for (note in list)
+			{
+				if (note == null || !noteTypeMirror.exists(note)) { freshList.push(note); continue; }
+				var truth = noteTypeMirror.get(note);
+				if (truth == null) { freshList.push(note); continue; }
+				var want:String = truth.type;
+				var cur:String = (note.length > 3) ? normalizeChartNoteType(note[3]) : '';
+				if (cur == '0') cur = '';
+				// strumTime 从 Float 被截成 Int，是同一条污染路径留下的指纹
+				var t0Damaged:Bool = (note.length > 0 && Std.isOfType(note[0], Int)
+					&& truth.t0 != null && !Std.isOfType(truth.t0, Int));
+				// 整数 0 或字符串 "0" 都是污染占位；后者尤其危险 ——
+				// Song.convert() 对 String 直接放行，会残留到谱面文件里。
+				var raw3:Dynamic = (note.length > 3) ? note[3] : null;
+				var t3Polluted:Bool = (raw3 != null && Std.string(raw3) == '0');
+				if (cur == want && !t0Damaged && !t3Polluted) { freshList.push(note); continue; }
+
+				// 保留当前值（lane 已被改档重编码，不能回退），只换回 [0]/[3] 的真值
+				var fresh:Array<Dynamic> = [];
+				for (k in 0...note.length) fresh.push(note[k]);
+				while (fresh.length < 3) fresh.push(null);
+				if (t0Damaged) fresh[0] = truth.t0;
+				if (fresh.length < 4) fresh.push(want) else fresh[3] = want;
+				freshList.push(fresh);
+				if (curSelectedNote == note) curSelectedNote = fresh;
+				noteTypeMirror.remove(note);
+				noteTypeMirror.set(fresh, {t0: fresh[0], type: want});
+				changed = true;
+				fixed++;
+			}
+			// 连容器一起换成显式 Array<Dynamic>：若 sectionNotes 自身是强类型容器，
+			// 只替换元素仍可能被吞掉，整支换掉才彻底。
+			if (changed) sec.sectionNotes = freshList;
+		}
+		return fixed;
+	}
+
+	/** 用户主动改类型时同步镜像，避免下一次 heal 覆盖回旧值。 */
+	function mirrorSetNoteType(note:Array<Dynamic>, v:Dynamic):Void
+	{
+		if (noteTypeMirror == null || note == null) return;
+		var t:String = normalizeChartNoteType(v);
+		if (t == '0') t = '';
+		var t0:Dynamic = (note.length > 0) ? note[0] : 0;
+		if (noteTypeMirror.exists(note))
+		{
+			var old = noteTypeMirror.get(note);
+			if (old != null) t0 = old.t0; // 保留改档前的浮点 strumTime
+		}
+		noteTypeMirror.set(note, {t0: t0, type: t});
+	}
+
+	/** 诊断日志：只在 Windows 桌面上写文件，与 073 的日志分开，方便对照。 */
+	function dbgTypeLog(tag:String, extra:String = ''):Void
+	{
+		#if windows
+		try
+		{
+			var dir:String = '';
+			try dir = haxe.io.Path.directory(Sys.programPath()) catch (e:Dynamic) {}
+			var path:String = (dir.length > 0) ? (dir + '/notetype_debug_063.log') : 'notetype_debug_063.log';
+			var head:String = '[' + Date.now().toString() + '] [063] ' + tag + ' | ' + extra;
+			var body:String = '';
+			if (_song != null && _song.notes != null)
+			{
+				var total:Int = 0;
+				var dist:Map<String, Int> = new Map();
+				var kinds:Map<String, Int> = new Map();
+				var samples:Array<String> = [];
+				for (sec in _song.notes)
+				{
+					if (sec == null || sec.sectionNotes == null) continue;
+					for (n in sec.sectionNotes)
+					{
+						total++;
+						var v:Dynamic = (n.length > 3) ? n[3] : null;
+						var sv:String = (v == null) ? '<null>' : Std.string(v);
+						dist.set(sv, (dist.exists(sv) ? dist.get(sv) : 0) + 1);
+						var kind:String = (v == null) ? 'null'
+							: Std.isOfType(v, String) ? 'String'
+							: Std.isOfType(v, Int) ? 'Int'
+							: Std.isOfType(v, Float) ? 'Float'
+							: Std.isOfType(v, Bool) ? 'Bool' : 'Other';
+						kinds.set(kind, (kinds.exists(kind) ? kinds.get(kind) : 0) + 1);
+						if (samples.length < 3)
+							samples.push('[t=' + Std.string(n[0]) + ',lane=' + Std.string(n[1]) + ',3=' + sv + '(' + kind + ')]');
+					}
+				}
+				var parts:Array<String> = [];
+				for (k in dist.keys()) parts.push('"' + k + '"x' + dist.get(k));
+				var kparts:Array<String> = [];
+				for (k in kinds.keys()) kparts.push(k + ':' + kinds.get(k));
+				body = '  notes=' + total + ' kinds={' + kparts.join(',') + '} | ' + parts.join(' ')
+					+ '\n  samples: ' + samples.join(' ');
+			}
+			var prev:String = sys.FileSystem.exists(path) ? sys.io.File.getContent(path) : '';
+			sys.io.File.saveContent(path, prev + head + '\n' + body + '\n');
+		}
+		catch (e:Dynamic) {}
+		#end
 	}
 
 	/**
@@ -3340,6 +3560,10 @@ class OldChartingState063 extends OldEditorState
 	{
 		var oldCols:Int = oldMania + 1;
 		var newCols:Int = newMania + 1;
+
+		// 改档前先记一份全谱真值：后续任何一步把 [3] 洗掉都能重建回来
+		captureNoteTypeMirror();
+		dbgTypeLog('remap 进入/抓取镜像', 'old=' + oldMania + ' new=' + newMania);
 
 		for (secIdx in 0..._song.notes.length)
 		{
@@ -3354,8 +3578,12 @@ class OldChartingState063 extends OldEditorState
 				var keyIdx:Int = isPlr ? lane : (lane - oldCols);
 				if (keyIdx > newMania)
 				{
-					stashedNotes.push({sec: secIdx, lane: lane, side: isPlr, key: keyIdx, data: note,
-						type: (note.length > 3) ? note[3] : null});
+					// 自包含快照：data 用副本、type 用规范化名、t0 保留浮点 strumTime。
+					// 三者互为冗余，升档还原时不再依赖 [3] 在暂存期间是否幸存。
+					var snap:Array<Dynamic> = note.copy();
+					stashedNotes.push({sec: secIdx, lane: lane, side: isPlr, key: keyIdx,
+						data: snap, type: (snap.length > 3) ? normalizeChartNoteType(snap[3]) : '',
+						t0: (snap.length > 0) ? snap[0] : 0});
 					continue;
 				}
 				note[1] = isPlr ? keyIdx : (newCols + keyIdx);
@@ -3364,7 +3592,13 @@ class OldChartingState063 extends OldEditorState
 			section.sectionNotes = kept;
 		}
 
-		if (stashedNotes.length == 0) return;
+		dbgTypeLog('remap 重映射循环后', 'kept + stash done');
+		if (stashedNotes.length == 0)
+		{
+			var n1:Int = healNoteTypeMirror();
+			dbgTypeLog('remap 无暂存/heal后', 'healed=' + n1);
+			return;
+		}
 		var stillStashed:Array<Dynamic> = [];
 		var touched:Map<Int, Bool> = new Map();
 		for (s in stashedNotes)
@@ -3377,15 +3611,36 @@ class OldChartingState063 extends OldEditorState
 				stillStashed.push(s);
 				continue;
 			}
-			s.data[1] = s.side ? s.key : (newCols + s.key);
-			if (s.data.length > 3 && s.data[3] == null && s.type != null) s.data[3] = s.type;
-			_song.notes[secIdx].sectionNotes.push(s.data);
+			var src:Array<Dynamic> = s.data;
+			while (src.length < 3) src.push(null);
+			var t:String = normalizeChartNoteType(Reflect.hasField(s, 'type') ? Reflect.field(s, 'type') : null);
+			if (t.length == 0 || t == '0') t = normalizeChartNoteType(src.length > 3 ? src[3] : null);
+			if (t == '0') t = '';
+			var t0:Dynamic = (Reflect.hasField(s, 't0') && s.t0 != null) ? s.t0 : src[0];
+			// 显式重建：第 4 项一定来自规范化后的 type 冗余；新数组立刻登记镜像，
+			// 因为 073 日志证实「还原循环」随后会把新数组的 [3] 也写成 Int 0。
+			var rebuilt:Array<Dynamic> = [t0, s.side ? s.key : (newCols + s.key), src[2], t];
+			for (k in 4...src.length) rebuilt.push(src[k]);
+			_song.notes[secIdx].sectionNotes.push(rebuilt);
+			noteTypeMirror.set(rebuilt, {t0: t0, type: t});
+			if (curSelectedNote == src) curSelectedNote = rebuilt;
 			touched.set(secIdx, true);
 		}
 		stashedNotes = stillStashed;
 		for (idx in touched.keys())
 			_song.notes[idx].sectionNotes.sort(function(a, b) return (a[0] < b[0]) ? -1 : ((a[0] > b[0]) ? 1 : 0));
+		dbgTypeLog('remap 还原循环后', 'stashed=' + stashedNotes.length);
 		syncStashedNotes();
+		// 兜底登记本轮新建、但还没进镜像的音符
+		for (sec in _song.notes)
+		{
+			if (sec == null || sec.sectionNotes == null) continue;
+			for (note in sec.sectionNotes)
+				if (note != null && note.length > 3 && !noteTypeMirror.exists(note))
+					mirrorSetNoteType(note, note[3]);
+		}
+		var n2:Int = healNoteTypeMirror();
+		dbgTypeLog('remap heal后', 'healed=' + n2);
 	}
 
 
@@ -3492,7 +3747,9 @@ class OldChartingState063 extends OldEditorState
 			var raw:Array<Dynamic> = s.data;
 			var copy:Array<Dynamic> = raw.copy();
 			copy[1] = s.lane;
-			if (s.type != null && (copy.length < 4 || copy[3] == null)) copy[3] = s.type;
+			var stashType:String = normalizeChartNoteType(s.type);
+			if (copy.length < 4) copy.push(stashType);
+			else if (copy[3] == null || Std.string(copy[3]) == '0') copy[3] = stashType;
 			var note:Note = setupNoteData(copy, false);
 			applyStashedWarningColor(note);
 			stashedRenderedNotes.add(note);
@@ -3549,7 +3806,9 @@ class OldChartingState063 extends OldEditorState
 	{
 		_song.notes = snap.notes;
 		_song.events = snap.events;
-		stashedNotes = (snap.stashed != null) ? snap.stashed : [];
+		// undo / redo 深拷贝替换 _song.notes，旧镜像 key 全部失效；快照数据干净，立刻重新登记
+		captureNoteTypeMirror();
+		stashedNotes = (snap.stashed != null) ? sanitizeStashedNotes(snap.stashed) : [];
 		syncStashedNotes();
 		if (snap.mania != null)
 		{
@@ -3561,6 +3820,7 @@ class OldChartingState063 extends OldEditorState
 				maniaStepper.value = snap.mania;
 				suppressManiaEvent = false;
 			}
+			refreshManiaKeysLabel(); // undo 同步 UI 后标签也要跟着变
 		}
 		Conductor.mapBPMChanges(_song);
 		if (_song.notes == null || _song.notes.length == 0)
@@ -3708,6 +3968,9 @@ class OldChartingState063 extends OldEditorState
 
 	function autosaveSong():Void
 	{
+		syncStashedNotes();
+		var hs:Int = healNoteTypeMirror();
+		dbgTypeLog('AUTOSAVE 写盘前', 'stash=' + stashedNotes.length + ' healed=' + hs);
 		FlxG.save.data.autosave = Json.stringify({
 			"song": _song
 		});
@@ -3723,8 +3986,13 @@ class OldChartingState063 extends OldEditorState
 		var m:Int = (_song.mania != null) ? _song.mania : 3;
 		Reflect.setField(_song, 'mania', m);
 		Reflect.setField(_song, 'keyCount', m + 1);
-		LegacyChartFormat.toPsychV1(_song);
-		return _song;
+		// 必须深拷贝：LegacyChartFormat.toPsychV1() -> Song.convert() 会**原地**补齐
+		// 音符数组并把无效 noteType 写成空串。旧写法直接传 _song，等于把试玩用的
+		// 转换结果留在编辑器正在编辑的数据上，回到编辑器后整个谱面的类型都会消失。
+		healNoteTypeMirror();
+		var song:SwagSong = cast haxe.Json.parse(haxe.Json.stringify(_song));
+		LegacyChartFormat.toPsychV1(song);
+		return song;
 	}
 
 	/**
@@ -3739,6 +4007,7 @@ class OldChartingState063 extends OldEditorState
 			return;
 		}
 
+		healNoteTypeMirror();
 		var song:SwagSong = cast haxe.Json.parse(haxe.Json.stringify(_song));
 		Song.convert(song);
 		song.format = 'psych_v1_convert';
@@ -3758,7 +4027,7 @@ class OldChartingState063 extends OldEditorState
 				var data:Int = raw[1];
 				if (data < 0) continue; // inline event
 				var sustain:Float = raw[2];
-				var noteType:String = (raw[3] != null) ? raw[3] : '';
+				var noteType:String = resolveNoteTypeName(raw);
 				var col:Int = data % laneCount();
 				var mustPress:Bool = (data < laneCount());
 				var n:Note = new Note(strumTime, col, null, false, true);
@@ -3785,6 +4054,8 @@ class OldChartingState063 extends OldEditorState
 	{
 		if(_song.events != null && _song.events.length > 1) _song.events.sort(sortByTime);
 		syncStashedNotes();
+		var hs:Int = healNoteTypeMirror();
+		dbgTypeLog('SAVE 保存前', 'mania=' + _song.mania + ' stash=' + stashedNotes.length + ' healed=' + hs);
 
 		// Export from a clone: the in-memory chart keeps mania/keyCount for editing,
 		// but a 4K chart must contain NO engine-specific fields so that a real
