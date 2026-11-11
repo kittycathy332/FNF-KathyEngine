@@ -43,6 +43,7 @@ class PsychUICheckBox extends FlxSpriteGroup
 	{
 		if (!active || !exists || camera == null || box == null || text == null) return;
 		super.update(elapsed);
+		if (backend.ui.DropdownInputPriority.shouldBlockInput(this)) return;
 
 		if(FlxG.mouse.justPressed)
 		{

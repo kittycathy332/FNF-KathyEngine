@@ -571,25 +571,6 @@ class OldChartingState063 extends OldEditorState
 			saveEvents();
 		});
 
-		var clear_events:FlxButton = new FlxButton(320, 310, 'Clear events', function()
-			{
-				openSubState(new Prompt('This action will clear current progress.\n\nProceed?', 0, clearEvents, null,ignoreWarnings));
-			});
-		clear_events.color = FlxColor.RED;
-		clear_events.label.color = FlxColor.WHITE;
-
-		var clear_notes:FlxButton = new FlxButton(320, clear_events.y + 30, 'Clear notes', function()
-			{
-				openSubState(new Prompt('This action will clear current progress.\n\nProceed?', 0, function(){for (sec in 0..._song.notes.length) {
-					_song.notes[sec].sectionNotes = [];
-				}
-				updateGrid();
-			}, null,ignoreWarnings));
-
-			});
-		clear_notes.color = FlxColor.RED;
-		clear_notes.label.color = FlxColor.WHITE;
-
 		var stepperBPM:FlxUINumericStepper = new FlxUINumericStepper(10, 70, 1, 1, 1, 400, 3);
 		stepperBPM.value = Conductor.bpm;
 		stepperBPM.name = 'song_bpm';
@@ -722,6 +703,29 @@ class OldChartingState063 extends OldEditorState
 			_song.arrowSkin = noteSkinInputText.text;
 			updateGrid();
 		});
+
+		// 两个红按钮原先在 x=320，超出 300 宽的 UI_box 右缘、被屏幕裁掉。
+		// 移到页签右列，与 Note Texture / Note Splashes Texture 两行对齐：
+		// 左列输入框宽 150（x=10..160），右列从 x=170 起，按钮宽约 100，仍在面板内。
+		var clear_events:FlxButton = new FlxButton(noteSkinInputText.x + 160, noteSkinInputText.y, 'Clear events', function()
+			{
+				openSubState(new Prompt('This action will clear current progress.\n\nProceed?', 0, clearEvents, null,ignoreWarnings));
+			});
+		clear_events.color = FlxColor.RED;
+		clear_events.label.color = FlxColor.WHITE;
+
+		var clear_notes:FlxButton = new FlxButton(clear_events.x, noteSplashesInputText.y, 'Clear notes', function()
+			{
+				openSubState(new Prompt('This action will clear current progress.\n\nProceed?', 0, function(){for (sec in 0..._song.notes.length) {
+					_song.notes[sec].sectionNotes = [];
+				}
+				updateGrid();
+			}, null,ignoreWarnings));
+
+			});
+		clear_notes.color = FlxColor.RED;
+		clear_notes.label.color = FlxColor.WHITE;
+
 
 		ExtraKeysHandler.ensure();
 		// 与上方 Song Offset 同一列、下一行：x/y 都跟随 stepperOffset，UI 两列严格对齐
@@ -1860,10 +1864,11 @@ class OldChartingState063 extends OldEditorState
 		// the fixed UI_box / button rects. Mirrors 0.7.3's anti-click-through logic.
 		var smx:Float = FlxG.mouse.x - FlxG.camera.scroll.x;
 		var smy:Float = FlxG.mouse.y - FlxG.camera.scroll.y;
-		var suppressMouse:Bool = false;
+		// 下拉框展开时整帧让位：列表可能盖到 UI_box 外，单靠矩形判定不够
+		var suppressMouse:Bool = backend.ui.DropdownInputPriority.pointerInsideOpenList();
 		if (UI_box != null)
-			suppressMouse = smx >= UI_box.x - 5 && smx <= UI_box.x + UI_box.width + 5
-				&& smy >= UI_box.y - 5 && smy <= UI_box.y + UI_box.height + 5;
+			suppressMouse = suppressMouse || (smx >= UI_box.x - 5 && smx <= UI_box.x + UI_box.width + 5
+				&& smy >= UI_box.y - 5 && smy <= UI_box.y + UI_box.height + 5);
 		if (!suppressMouse && btnTrackLeft != null && btnTrackLeft.visible
 			&& smx >= btnTrackLeft.x - 4 && smx <= btnTrackLeft.x + btnTrackLeft.width + 4
 			&& smy >= btnTrackLeft.y - 4 && smy <= btnTrackLeft.y + btnTrackLeft.height + 4)

@@ -2157,7 +2157,7 @@ class OldChartingState073 extends OldEditorState
 				&& smy >= UI_box.y - 5
 				&& smy <= UI_box.y + UI_box.height + 5;
 		}
-		var suppressMouse = blockInput || mouseInUIBox;
+		var suppressMouse = blockInput || mouseInUIBox || backend.ui.DropdownInputPriority.pointerInsideOpenList();
 
 		// 轨道左右滑动按钮也在屏幕上（scrollFactor=0），点按钮时不能穿透到 grid
 		if (!suppressMouse && btnTrackLeft != null && btnTrackLeft.visible) {

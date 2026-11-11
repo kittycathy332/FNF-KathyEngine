@@ -711,6 +711,8 @@ class ChartingState extends MusicBeatState implements VUIEventHandler.VUIEvent
 			lastFocus = VUIInputText.focusOn;
 			return;
 		}
+		// 下拉框展开时本帧的网格/音符/拖拽输入一律让位给下拉框
+		if(backend.ui.DropdownInputPriority.pointerInsideOpenList()) ignoreClickForThisFrame = true;
 
 		for (num => key in keysArray)
 			_keysPressedBuffer[num] = FlxG.keys.checkStatus(key, JUST_PRESSED);

@@ -563,6 +563,7 @@ class FlxUIDropDownMenuCustom extends FlxUIGroup
 	override public function destroy():Void
 	{
 		super.destroy();
+		backend.ui.DropdownInputPriority.setOpen(this, false);
 
 		dropPanel = FlxDestroyUtil.destroy(dropPanel);
 
@@ -573,6 +574,9 @@ class FlxUIDropDownMenuCustom extends FlxUIGroup
 
 	private function showList(b:Bool):Void
 	{
+		// 展开入口闸门：见 DropdownInputPriority.shouldBlockDropdownOpen()。
+		// 只拦「展开」，收起永远放行，保证列表能正常关闭。
+		if (b && backend.ui.DropdownInputPriority.shouldBlockDropdownOpen(this)) return;
 		for (button in list)
 		{
 			button.visible = b;
@@ -586,6 +590,7 @@ class FlxUIDropDownMenuCustom extends FlxUIGroup
 		}
 
 		FlxUI.forceFocus(b, this); // avoid overlaps
+		backend.ui.DropdownInputPriority.setOpen(this, b);
 	}
 
 	private function onDropdown():Void

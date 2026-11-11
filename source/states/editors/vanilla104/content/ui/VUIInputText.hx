@@ -41,6 +41,16 @@ class VUIInputText extends FlxSpriteGroup
 
 	public static var focusOn(default, set):VUIInputText = null;
 
+	/**
+	 * 正在销毁的标记。destroy() 里 focusOn = null 会走静态 setter，
+	 * 旧实现会回调旧焦点的 unfocus()；下拉框的 unfocus 又反过来
+	 * showDropDown(false) -> text = selectedLabel -> set_text() 访问刚被
+	 * destroy() 置空的 _boundaries，于是 F5 刷新（switchState -> destroy）
+	 * 时抛 Null Object Reference。用这个标记跳过析构期的重入回调，
+	 * 同时保留输入法关闭等正常清理。
+	 */
+	var _destroying:Bool = false;
+
 	public var name:String;
 	public var bg:FlxSprite;
 	public var behindText:FlxSprite;
@@ -386,10 +396,13 @@ class VUIInputText extends FlxSpriteGroup
 	public var unfocus:Void->Void;
 	public static function set_focusOn(v:VUIInputText)
 	{
-		if(focusOn != null && focusOn != v && focusOn.exists)
+		// 旧焦点正在销毁时不再回调 unfocus / resetCaret：它会回头写 text，
+		// 而此刻渲染对象与 _boundaries 已被释放（F5 刷新崩溃的根因）。
+		if(focusOn != null && focusOn != v && focusOn.exists && !focusOn._destroying)
 		{
 			if(focusOn.unfocus != null) focusOn.unfocus();
 			focusOn.resetCaret();
+			focusOn.clearFocusVisual();
 		}
 		// 失焦到空白时必须关闭输入法，否则 textInputEnabled 会一直为 true，
 		// 导致 Windows 上 IME 持续激活，非英文输入法态下键盘 UI 输入被吞掉。
@@ -401,6 +414,7 @@ class VUIInputText extends FlxSpriteGroup
 	override function update(elapsed:Float)
 	{
 		super.update(elapsed);
+		if (backend.ui.DropdownInputPriority.shouldBlockInput(this)) return;
 
 		if(FlxG.mouse.justPressed)
 		{
@@ -475,6 +489,18 @@ class VUIInputText extends FlxSpriteGroup
 		selectIndex = -1;
 		caretIndex = 0;
 		updateCaret();
+	}
+
+	/**
+	 * 失焦时强制清掉聚焦视觉，等价于 update() 里 `focusOn != this` 的 else 分支。
+	 * 收起当帧的 shouldBlockInput() 闸门会提前 return 跳过该 else，所以在这里补。
+	 */
+	public function clearFocusVisual():Void
+	{
+		_caretTime = 0;
+		inInsertMode = false;
+		if (selection != null && selection.exists) selection.visible = false;
+		if (caret != null && caret.exists) caret.visible = false;
 	}
 
 	public function updateCaret()
@@ -555,6 +581,8 @@ class VUIInputText extends FlxSpriteGroup
 
 	override public function destroy()
 	{
+		// 必须先标记：下面的 focusOn = null 会走 set_focusOn，析构期禁止再回调 unfocus
+		_destroying = true;
 		_boundaries = null;
 		if(focusOn == this) focusOn = null;
 		FlxG.stage.removeEventListener(KeyboardEvent.KEY_DOWN, onKeyDown);
@@ -622,6 +650,13 @@ class VUIInputText extends FlxSpriteGroup
 	var _boundaries:Array<Float> = [];
 	function set_text(v:String)
 	{
+		// 析构期 / 异常重入：只保留字段值，绝不触碰已释放的 _boundaries / textObj
+		if (_destroying)
+		{
+			text = v;
+			return v;
+		}
+		if (_boundaries == null) _boundaries = [];
 		for (i in 0..._boundaries.length) _boundaries.pop();
 		v = filter(v);
 

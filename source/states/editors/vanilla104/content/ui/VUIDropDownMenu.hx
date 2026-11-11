@@ -87,6 +87,8 @@ class VUIDropDownMenu extends VUIInputText
 	public var curScroll:Int = 0;
 	override function update(elapsed:Float)
 	{
+		// 同 PsychUIDropDownMenu：父类闸门拦不到本类覆写后的 header 点击逻辑
+		if (backend.ui.DropdownInputPriority.shouldBlockInput(this)) return;
 		var lastFocus = VUIInputText.focusOn;
 		super.update(elapsed);
 		if(FlxG.mouse.justPressed)
@@ -214,6 +216,7 @@ class VUIDropDownMenu extends VUIInputText
 			bg.scale.y = 20;
 			bg.updateHitbox();
 		}
+		backend.ui.DropdownInputPriority.setOpen(this, vis);
 	}
 
 	public var broadcastDropDownEvent:Bool = true;
@@ -221,6 +224,8 @@ class VUIDropDownMenu extends VUIInputText
 	{
 		selectedIndex = num;
 		showDropDown(false);
+		// 同 PsychUIDropDownMenu：选中后清静态焦点，避免文本框仍处聚焦态
+		if (VUIInputText.focusOn == this) VUIInputText.focusOn = null;
 		if(onSelect != null) onSelect(num, label);
 		if(broadcastDropDownEvent) VUIEventHandler.event(CLICK_EVENT, this);
 	}

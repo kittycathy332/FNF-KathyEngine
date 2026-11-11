@@ -48,6 +48,7 @@ class PsychUINumericStepper extends PsychUIInputText
 	override function update(elapsed:Float)
 	{
 		super.update(elapsed);
+		if (backend.ui.DropdownInputPriority.shouldBlockInput(this)) return;
 
 		if(FlxG.mouse.justPressed)
 		{

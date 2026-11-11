@@ -97,6 +97,7 @@ class PsychUIButton extends FlxSpriteGroup
 	{
 		if (!active || !exists || camera == null) return;
 		super.update(elapsed);
+		if (backend.ui.DropdownInputPriority.shouldBlockInput(this)) return;
 
 		if(_firstFrame)
 		{

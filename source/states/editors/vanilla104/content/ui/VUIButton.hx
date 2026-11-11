@@ -55,6 +55,7 @@ class VUIButton extends FlxSpriteGroup
 	override function update(elapsed:Float)
 	{
 		super.update(elapsed);
+		if (backend.ui.DropdownInputPriority.shouldBlockInput(this)) return;
 
 		if(_firstFrame)
 		{

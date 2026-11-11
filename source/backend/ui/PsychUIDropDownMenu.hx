@@ -91,6 +91,11 @@ class PsychUIDropDownMenu extends PsychUIInputText
 	public var curScroll:Int = 0;
 	override function update(elapsed:Float)
 	{
+		// 父类 PsychUIInputText.update() 里的闸门只能拦住父类函数体；本类覆写了
+		// update()，其后的 header 点击 / showDropDown 仍会执行。这里再拦一次，
+		// 避免「选项位置压着另一个下拉框」时下方那个也被拉下。展开中的下拉框
+		// 在 currentProtected 里，shouldBlockInput() 会放行，不受影响。
+		if (DropdownInputPriority.shouldBlockInput(this)) return;
 		var lastFocus = PsychUIInputText.focusOn;
 		super.update(elapsed);
 		if(FlxG.mouse.justPressed)
@@ -218,6 +223,7 @@ class PsychUIDropDownMenu extends PsychUIInputText
 			bg.scale.y = 20;
 			bg.updateHitbox();
 		}
+		DropdownInputPriority.setOpen(this, vis);
 	}
 
 	public var broadcastDropDownEvent:Bool = true;
@@ -225,6 +231,11 @@ class PsychUIDropDownMenu extends PsychUIInputText
 	{
 		selectedIndex = num;
 		showDropDown(false);
+		// 选中选项后必须主动失焦：下拉框本体是 PsychUIInputText，静态 focusOn
+		// 若仍是 this，caret 会继续闪、IME 继续激活、还能继续打字过滤。
+		// 这里不能只靠 PsychUIInputText.update() 的「点外部 -> focusOn = null」：
+		// 收起当帧的 shouldBlockInput 闸门会提前 return，把那段逻辑跳过。
+		if (PsychUIInputText.focusOn == this) PsychUIInputText.focusOn = null;
 		if(onSelect != null) onSelect(num, label);
 		if(broadcastDropDownEvent) PsychUIEventHandler.event(CLICK_EVENT, this);
 	}

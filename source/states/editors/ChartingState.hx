@@ -1530,6 +1530,8 @@ if(_shouldReset) Conductor.songPosition = 0;
 		if(FlxG.mouse.justPressed && (haxeMenuOpen || haxeMenuIgnoreFrames > 0 || MouseHelper.currentWorldY <= haxeMenuBarHeight))
 			ignoreClickForThisFrame = true;
 		if(haxeMenuIgnoreFrames > 0) haxeMenuIgnoreFrames--;
+		// 下拉框展开时本帧的网格/音符/拖拽输入一律让位给下拉框
+		if(backend.ui.DropdownInputPriority.pointerInsideOpenList()) ignoreClickForThisFrame = true;
 
 		// 同步 HaxeUI 菜单项文本与底层动态按钮文本（如视图菜单前三项、便捷制谱器开关）
 		syncHaxeMenuTexts();
@@ -7114,7 +7116,18 @@ for (i in 0...GRID_PLAYERS)
 		tab_group.add(scrollSpeedStepper);
 		tab_group.add(audioOffsetStepper);
 
-		//dropdowns
+		// Special inputs labels and controls (right column)
+		// 必须放在所有下拉框之前 add：本页的 menu 是按 add 顺序绘制的，
+		// 若晚于下拉框，这些灰底输入框会盖住「场景」展开后的选项列表。
+		tab_group.add(new FlxText(specialInstInputText.x, specialInstInputText.y - 15, 120, Language.get('charting_special_inst')).setFormat(Paths.font(Language.get('uitab_font')), 12));
+		tab_group.add(specialInstInputText);
+		tab_group.add(new FlxText(specialVocalInputText.x, specialVocalInputText.y - 15, 120, Language.get('charting_special_vocal')).setFormat(Paths.font(Language.get('uitab_font')), 12));
+		tab_group.add(specialVocalInputText);
+		tab_group.add(new FlxText(specialEventsInputText.x, specialEventsInputText.y - 15, 120, Language.get('charting_special_events')).setFormat(Paths.font(Language.get('uitab_font')), 12));
+		tab_group.add(specialEventsInputText);
+
+		//dropdowns —— 保持最后 add（与 Data / Events / Notes 页一致），
+		// 这样展开的列表绘制在本页其它控件之上，不会被「特殊 xx」输入框挡住。
 		tab_group.add(new FlxText(stageDropDown.x, stageDropDown.y - 15, 80, Language.get('charting_stage')).setFormat(Paths.font(Language.get('uitab_font')), 12));
 		tab_group.add(new FlxText(playerDropDown.x, playerDropDown.y - 15, 80, Language.get('charting_player')).setFormat(Paths.font(Language.get('uitab_font')), 12));
 		tab_group.add(new FlxText(opponentDropDown.x, opponentDropDown.y - 15, 80, Language.get('charting_opponent')).setFormat(Paths.font(Language.get('uitab_font')), 12));
@@ -7123,14 +7136,6 @@ for (i in 0...GRID_PLAYERS)
 		tab_group.add(girlfriendDropDown);
 		tab_group.add(opponentDropDown);
 		tab_group.add(playerDropDown);
-
-		// Special inputs labels and controls (right column)
-		tab_group.add(new FlxText(specialInstInputText.x, specialInstInputText.y - 15, 120, Language.get('charting_special_inst')).setFormat(Paths.font(Language.get('uitab_font')), 12));
-		tab_group.add(specialInstInputText);
-		tab_group.add(new FlxText(specialVocalInputText.x, specialVocalInputText.y - 15, 120, Language.get('charting_special_vocal')).setFormat(Paths.font(Language.get('uitab_font')), 12));
-		tab_group.add(specialVocalInputText);
-		tab_group.add(new FlxText(specialEventsInputText.x, specialEventsInputText.y - 15, 120, Language.get('charting_special_events')).setFormat(Paths.font(Language.get('uitab_font')), 12));
-		tab_group.add(specialEventsInputText);
 	}
 
 	function createHaxeUIMenuBar()
