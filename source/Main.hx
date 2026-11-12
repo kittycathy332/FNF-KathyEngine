@@ -338,11 +338,6 @@ class Main extends Sprite
 		Lib.current.stage.scaleMode = StageScaleMode.SHOW_ALL;
 		Lib.current.stage.quality = ClientPrefs.getStageQuality();
 
-		// 创建游戏日志显示
-		gameLogVar = new GameLogDisplay();
-		gameLogVar.setEnabled(ClientPrefs.data.enableGameLog);
-		Lib.current.stage.addChild(gameLogVar);
-
 		#if desktop
 		// 无边框模式下替代系统标题栏的游戏内伪标题栏
 		titleBar = new PseudoTitleBar();
@@ -363,6 +358,118 @@ class Main extends Sprite
 		}
 		PseudoTitleBar.applySettings();
 		#end
+
+		// 创建游戏日志显示（放在伪标题栏之后，使其层级更高、始终可见）
+		gameLogVar = new GameLogDisplay();
+		gameLogVar.setEnabled(ClientPrefs.data.enableGameLog);
+		Lib.current.stage.addChild(gameLogVar);
+
+		// 崩溃弹层「返回主菜单 / 重启应用」时终止所有在播放的音频。
+		// 光靠 FlxG.switchState() 是不够的：
+		//   1) FlxG.sound.playMusic() 会把 music 设为 persist=true，而 FlxGame.switchState()
+		//      里的 FlxG.sound.destroy() 会跳过 persist 声音 -> 伴奏继续播；
+		//   2) FlxSound.destroy() 内部会 group.remove(this) 改动 FlxG.sound.list.members，
+		//      destroy() 的 for-in 遍历因此会漏掉一部分（vocals / opponentVocals / inst / 打击音池）-> 人声继续播；
+		//   3) FlxG.vcr.paused 只停 Haxe 层 update，底层音频线程照常播放。
+		// 所以这里主动逐层停，并且遍历 list 的副本（stop()/destroy() 会改动原数组）。
+		backend.CrashHandler.stopAllAudioImpl = function()
+		{
+			// ① 主音乐（伴奏）：persist=true，flixel 的 state 切换不会动它
+			try
+			{
+				var music = FlxG.sound.music;
+				if (music != null)
+				{
+					music.onComplete = null; // 断开 PlayState 绑定的 finishSong，避免 stop 触发后续逻辑
+					music.stop();
+				}
+			}
+			catch (e:Dynamic) { trace('[CrashHandler] stop music failed: ' + Std.string(e)); }
+
+			// ② 所有 FlxSound：人声 / opponentVocals / inst / SFX / 打击音对象池
+			try
+			{
+				var sounds = FlxG.sound.list.members.copy();
+				for (snd in sounds)
+				{
+					if (snd == null) continue;
+					try
+					{
+						snd.onComplete = null;
+						snd.stop();
+					}
+					catch (e:Dynamic) {}
+				}
+			}
+			catch (e:Dynamic) { trace('[CrashHandler] stop sounds failed: ' + Std.string(e)); }
+
+			// ③ 底层兜底：停掉所有 OpenFL SoundChannel（含不归 flixel 管理的音源）。
+			//    SoundMixer.stopAll() 内部从后往前遍历，不会因注销 channel 而漏项。
+			try { openfl.media.SoundMixer.stopAll(); }
+			catch (e:Dynamic) { trace('[CrashHandler] SoundMixer.stopAll failed: ' + Std.string(e)); }
+		};
+
+		// 报错弹层期间让鼠标可见：游戏平时隐藏系统光标、用 flixel 自绘的 cursor.png，
+		// 而弹层是置顶的 OpenFL 覆盖层，会把自绘光标整个盖住 -> 屏幕上完全看不到鼠标。
+		// 系统光标由 OS 绘制、永远在最上层；关闭弹层后恢复游戏原本的光标设置。
+		var savedUseSystemCursor:Bool = false;
+		var savedMouseVisible:Bool = false;
+		var cursorStateSaved:Bool = false;
+		backend.CrashHandler.showCursorImpl = function()
+		{
+			if (!cursorStateSaved)
+			{
+				savedUseSystemCursor = FlxG.mouse.useSystemCursor;
+				savedMouseVisible = FlxG.mouse.visible;
+				cursorStateSaved = true;
+			}
+			try { FlxG.mouse.useSystemCursor = true; } catch (e:Dynamic) {} // -> Mouse.show() + 隐藏自绘光标
+			try { openfl.ui.Mouse.show(); } catch (e:Dynamic) {}            // 双保险
+		};
+		backend.CrashHandler.restoreCursorImpl = function()
+		{
+			if (!cursorStateSaved) return;
+			cursorStateSaved = false;
+			try
+			{
+				FlxG.mouse.useSystemCursor = savedUseSystemCursor;
+				FlxG.mouse.visible = savedMouseVisible;
+			}
+			catch (e:Dynamic) { trace('[CrashHandler] restore cursor failed: ' + Std.string(e)); }
+		};
+
+		// 注入崩溃弹层「回主菜单」的实现（CrashHandler 不直接依赖 flixel / states）
+		backend.CrashHandler.gotoTitleImpl = function()
+		{
+			try
+			{
+				FlxG.switchState(new TitleState());
+			}
+			catch (e:Dynamic)
+			{
+				trace('[CrashHandler] gotoTitleImpl failed: ' + Std.string(e));
+			}
+			// TitleState 的 initialized 此时已为 true，不会再自己播菜单音乐；
+			// 上面刚把音频全停了，这里主动把主菜单 BGM 接回来（persist=true，
+			// switchState() 的 FlxG.sound.destroy() 不会销毁它）。
+			// 直接给目标音量而非 fadeIn，避免与 TitleState 的淡入 tween 打架。
+			try { FlxG.sound.playMusic(Paths.menuMusicAudio(), 0.7); }
+			catch (e:Dynamic) { trace('[CrashHandler] restore menu music failed: ' + Std.string(e)); }
+		};
+
+		// 崩溃弹层显示期间暂停游戏更新：用 flixel 官方的 VCR 暂停。
+		// 注意：不能用 FlxG.state.active=false —— FlxGame.update() 首行会直接 return，
+		// 连带把其后的 switchState() 永久挂起（切状态请求排不上队）。
+		// FlxG.vcr.paused 在 onEnterFrame 里提前跳过整个 step()/update()，同样能停掉
+		// state/tween/输入/插件/相机/声音更新，但 _nextState != null 时仍允许执行切换。
+		backend.CrashHandler.pauseGameImpl = function()
+		{
+			try { FlxG.vcr.paused = true; } catch (e:Dynamic) {}
+		};
+		backend.CrashHandler.resumeGameImpl = function()
+		{
+			try { FlxG.vcr.paused = false; } catch (e:Dynamic) {}
+		};
 
 		Language.load();
 

@@ -209,6 +209,31 @@ public class MobileBridge {
 	}
 
 	/**
+	 * 重启应用：用 Launch Intent 清栈重新拉起主 Activity，再结束当前进程。
+	 * 供游戏内崩溃弹层的「重启应用」按钮调用（Haxe 侧 mobile.backend.MobileUtil / CrashHandler）。
+	 * 注意：这里必须在主线程 startActivity，且 NEW_TASK 不能省（ctx 可能是 Application Context）。
+	 */
+	public static void restartApp() {
+		final Context c = ctx();
+		if (c == null) return;
+		try {
+			Intent intent = c.getPackageManager().getLaunchIntentForPackage(c.getPackageName());
+			if (intent == null) return;
+			intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+			new Handler(Looper.getMainLooper()).post(new Runnable() {
+				@Override
+				public void run() {
+					try {
+						c.startActivity(intent);
+					} catch (Throwable ignored) {}
+					android.os.Process.killProcess(android.os.Process.myPid());
+					System.exit(0);
+				}
+			});
+		} catch (Throwable ignored) {}
+	}
+
+	/**
 	 * 安装 Java 层崩溃上报：写 crash_native_*.txt 后继续抛给原处理器（不改变崩溃行为）。
 	 */
 	public static void installCrashHandler(final String logDir) {

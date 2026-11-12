@@ -207,4 +207,27 @@ class MobileUtil
 		JNICache.createStaticMethod('com/kathyengine/mobile/MobileBridge', 'installCrashHandler', '(Ljava/lang/String;)V')(logDir);
 		#end
 	}
+
+	/**
+	 * 重启应用（Android 走 MobileBridge.restartApp() 的 Launch Intent + 结束进程）。
+	 * 桌面 / iOS 等平台不做任何事，由调用方 CrashHandler 负责降级处理。
+	 * 返回是否成功发起重启，便于调用方决定是否需要降级。
+	 */
+	public static function restartApp():Bool
+	{
+		#if android
+		try
+		{
+			JNICache.createStaticMethod('com/kathyengine/mobile/MobileBridge', 'restartApp', '()V')();
+			return true;
+		}
+		catch (e:Dynamic)
+		{
+			trace('[MobileUtil] restartApp failed: ' + Std.string(e));
+			return false;
+		}
+		#else
+		return false;
+		#end
+	}
 }
