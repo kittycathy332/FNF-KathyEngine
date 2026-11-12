@@ -32,7 +32,9 @@ class PsychUICheckBox extends FlxSpriteGroup
 
 	public function boxGraphic()
 	{
-		box.loadGraphic(Paths.image('psych-ui/checkbox', 'embed'), true, 16, 16);
+		if (PsychUIRounded.radius > 0) box.loadGraphic(PsychUIRounded.checkSheet(), true, 16, 16);
+		else box.loadGraphic(Paths.image('psych-ui/checkbox', 'embed'), true, 16, 16);
+		box.antialiasing = false;
 		box.animation.add('false', [0]);
 		box.animation.add('true', [1]);
 		box.animation.play('false');

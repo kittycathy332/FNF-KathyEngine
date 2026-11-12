@@ -25,13 +25,19 @@ class PsychUINumericStepper extends PsychUIInputText
 		this.step = step;
 		_updateFilter();
 
-		buttonPlus = new FlxSprite(fieldWidth).loadGraphic(Paths.image('psych-ui/stepper_plus', 'embed'), true, 16, 16);
+		buttonPlus = new FlxSprite(fieldWidth);
+		// Kathy 编谱器内换成自绘圆角帧；其它编辑器仍用原 png
+		if (PsychUIRounded.radius > 0) buttonPlus.loadGraphic(PsychUIRounded.stepperSheet(true), true, 16, 16);
+		else buttonPlus.loadGraphic(Paths.image('psych-ui/stepper_plus', 'embed'), true, 16, 16);
 		buttonPlus.animation.add('normal', [0], false);
 		buttonPlus.animation.add('pressed', [1], false);
 		buttonPlus.animation.play('normal');
 		add(buttonPlus);
 		
-		buttonMinus = new FlxSprite(fieldWidth + buttonPlus.width).loadGraphic(Paths.image('psych-ui/stepper_minus', 'embed'), true, 16, 16);
+		buttonMinus = new FlxSprite(fieldWidth + buttonPlus.width);
+		if (PsychUIRounded.radius > 0) buttonMinus.loadGraphic(PsychUIRounded.stepperSheet(false), true, 16, 16);
+		else buttonMinus.loadGraphic(Paths.image('psych-ui/stepper_minus', 'embed'), true, 16, 16);
+		buttonPlus.antialiasing = buttonMinus.antialiasing = false;
 		buttonMinus.animation.add('normal', [0], false);
 		buttonMinus.animation.add('pressed', [1], false);
 		buttonMinus.animation.play('normal');
@@ -203,5 +209,6 @@ class PsychUINumericStepper extends PsychUIInputText
 	{
 		super.setGraphicSize(width, height);
 		behindText.setGraphicSize(width - 32, height - 2);
+		PsychUIRounded.apply(behindText, width - 32, height - 2);
 	}
 }

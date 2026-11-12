@@ -741,6 +741,8 @@ class PsychUIInputText extends FlxSpriteGroup
 		super.setGraphicSize(width, height);
 		bg.setGraphicSize(width, height);
 		behindText.setGraphicSize(width - 2, height - 2);
+		PsychUIRounded.apply(bg, width, height);
+		PsychUIRounded.apply(behindText, width - 2, height - 2);
 		if(textObj != null && textObj.exists)
 		{
 			textObj.scale.x = 1;

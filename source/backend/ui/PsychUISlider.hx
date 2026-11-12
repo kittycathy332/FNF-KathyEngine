@@ -27,6 +27,7 @@ class PsychUISlider extends FlxSpriteGroup
 		bar.scale.set(wid, 5);
 		bar.updateHitbox();
 		bar.color = mainColor;
+		PsychUIRounded.apply(bar, wid, 5);
 		add(bar);
 
 		minText = new FlxText(0, 0, 80, '', Std.parseInt(Language.get('checkbox_font_size')));
@@ -53,6 +54,7 @@ class PsychUISlider extends FlxSpriteGroup
 		handle.scale.set(5, 15);
 		handle.updateHitbox();
 		handle.color = handleColor;
+		PsychUIRounded.apply(handle, 5, 15);
 		add(handle);
 
 		this.min = min;

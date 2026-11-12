@@ -30,7 +30,10 @@ class PsychUIDropDownMenu extends PsychUIInputText
 		fieldWidth = Std.int(width - 5);
 		textObj.y += 2;
 
-		button = new FlxSprite(Math.max(0, width - 5), 0).loadGraphic(Paths.image('psych-ui/dropdown_button', 'embed'), true, 20, 20);
+		button = new FlxSprite(Math.max(0, width - 5), 0);
+		if (PsychUIRounded.radius > 0) button.loadGraphic(PsychUIRounded.dropDownButtonSheet(), true, 20, 20);
+		else button.loadGraphic(Paths.image('psych-ui/dropdown_button', 'embed'), true, 20, 20);
+		button.antialiasing = false;
 		button.animation.add('normal', [0], false);
 		button.animation.add('pressed', [1], false);
 		button.animation.play('normal', true);
@@ -212,16 +215,15 @@ class PsychUIDropDownMenu extends PsychUIInputText
 				txtY += item.height;
 				item.forceNextUpdate = true;
 			}
-			bg.scale.y = txtY - behindText.y + 2;
-			bg.updateHitbox();
+			// 下拉展开时背景变高：圆角皮肤必须按新高度重烘焙，不能只写 scale.y
+			PsychUIRounded.resizeHeight(bg, txtY - behindText.y + 2);
 		}
 		else
 		{
 			for (item in _items)
 				item.active = item.visible = false;
 
-			bg.scale.y = 20;
-			bg.updateHitbox();
+			PsychUIRounded.resizeHeight(bg, 20);
 		}
 		DropdownInputPriority.setOpen(this, vis);
 	}
@@ -319,6 +321,7 @@ class PsychUIDropDownItem extends FlxSpriteGroup
 		bg = new FlxSprite().makeGraphic(1, 1, FlxColor.WHITE);
 		bg.setGraphicSize(width, 20);
 		bg.updateHitbox();
+		PsychUIRounded.apply(bg, width, 20);
 		add(bg);
 
 		text = new FlxText(0, 0, width, '', 10);
@@ -361,8 +364,7 @@ class PsychUIDropDownItem extends FlxSpriteGroup
 	{
 		label = v;
 		text.text = v;
-		bg.scale.y = text.height + 6;
-		bg.updateHitbox();
+		PsychUIRounded.resizeHeight(bg, text.height + 6);
 		return v;
 	}
 }

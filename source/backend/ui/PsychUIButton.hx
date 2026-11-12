@@ -168,6 +168,7 @@ class PsychUIButton extends FlxSpriteGroup
 	{
 		bg.setGraphicSize(width, height);
 		bg.updateHitbox();
+		PsychUIRounded.apply(bg, width, height);
 		text.fieldWidth = width;
 		text.x = bg.x;
 		text.y = bg.y + height/2 - text.height/2;

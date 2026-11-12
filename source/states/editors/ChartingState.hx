@@ -48,6 +48,10 @@ import haxe.ui.containers.menus.Menu;
 import haxe.ui.containers.menus.MenuItem;
 import haxe.ui.backend.flixel.MouseHelper;
 
+// 轨道整体左右移动按钮（与 063/073 编谱器同一套自绘按钮）
+import backend.ui.StyledButton;
+import backend.ui.StyledButtonStyle;
+
 import states.MainMenuState;
 
 import backend.Song;
@@ -338,6 +342,10 @@ class ChartingState extends MusicBeatState implements PsychUIEventHandler.PsychU
 	var searchBox:PsychUIBox;
 	var camUI:FlxCamera;
 	var camChart:FlxCamera;
+	// 顶部 HaxeUI 菜单条 + FPS/内存/版本文本专用相机：挂在所有编辑器相机之上，
+	// 否则菜单条（haxeui-flixel 把它当 FlxBasic 加进 state）会被 camUI 的 box、
+	// camChart 的角色盖住。
+	var camTopBar:FlxCamera;
 
 	// 角色对象
 	public var dad:Character;
@@ -381,6 +389,19 @@ class ChartingState extends MusicBeatState implements PsychUIEventHandler.PsychU
 	var nextEventGridBg:ChartingGridSprite;
 	var nextPlayerGridBg:ChartingGridSprite;
 	var scrollY:Float = 0;
+
+	// === 轨道整体水平平移（多键适配，对应 063/073 的 trackScrollX）===
+	// 多键时 对手+事件+玩家 三段网格总宽会顶到右侧 mainBox，右侧轨道看不见。
+	// chartPanX 直接加进 getGridLayout().startX：网格、音符、命中判定共用同一套
+	// 屏幕坐标，不需要动相机 scroll 或 scrollFactor（那些对象全是 scrollFactor.x=0）。
+	// 正值 = 轨道整体右移；负值 = 左移（露出右侧轨道）。
+	var chartPanX:Float = 0;
+	var chartPanTargetX:Float = 0;
+	var chartPanLastX:Float = 0;
+	var chartPanConsumedWheel:Bool = false;
+	var trackButtonScrollSpeed:Float = 240; // 按住按钮时的速度（像素/秒，与 073 一致）
+	var btnTrackLeft:StyledButton;  // 左移轨道 → 看到右侧
+	var btnTrackRight:StyledButton; // 右移轨道 → 看到左侧
 	
 	// Grid轨道颜色覆盖层
 	var playerTrackOverlay:FlxSprite; // 玩家轨道（蓝色）
@@ -531,6 +552,10 @@ class ChartingState extends MusicBeatState implements PsychUIEventHandler.PsychU
 
 	override function create()
 	{
+		// Kathy 编谱器内启用 4px 圆角皮肤（含自绘图标帧）；必须在创建任何 PsychUI* 控件之前。
+		// 其它编辑器 radius=0，保持原 png 帧与方角。destroy() 会还原。
+		PsychUIRounded.radius = 4;
+
 		// 进入制谱器时临时隐藏 FPS 计数器（不受 showFPS 设置与窗口缩放影响），退出时还原
 		Main.forceHideFPS = true;
 		if (Main.fpsVar != null) Main.fpsVar.visible = false;
@@ -584,6 +609,12 @@ if(_shouldReset) Conductor.songPosition = 0;
 	camChart = new FlxCamera();
 	camChart.bgColor.alpha = 0;
 	FlxG.cameras.add(camChart, false);
+
+	// 最上层相机（透明背景）：只画顶部菜单条与叠加其上的信息文本。
+	// FlxG.cameras 由 initPsychCamera() 每次进 state 时 reset，切 state 自动清理，不会累积。
+	camTopBar = new FlxCamera();
+	camTopBar.bgColor.alpha = 0;
+	FlxG.cameras.add(camTopBar, false);
 
 		chartEditorSave = new FlxSave();
 		chartEditorSave.bind('chart_editor_data', CoolUtil.getSavePath());
@@ -802,6 +833,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 		timeLine.screenCenter(Y);
 		timeLine.scrollFactor.set();
 		add(timeLine);
+		refreshTimeLine();
 
 
 		var startX:Float = gridLayout.startX;
@@ -895,12 +927,33 @@ if(_shouldReset) Conductor.songPosition = 0;
 		infoText.scrollFactor.set();
 		infoBox.getTab(Language.get('charting_infotab_text')).menu.add(infoText);
 		add(infoBox);
+		applyChartBoxRoundedStyle(infoBox);
 
 		mainBox = new PsychUIBox(mainBoxPosition.x, mainBoxPosition.y, 350, 360, [Language.get('charting_charting_text'), Language.get('charting_data_text'), Language.get('charting_events_text'), Language.get('charting_notes_text'), Language.get('charting_section_text'), Language.get('charting_song_text')]);
 		mainBox.selectedName = Language.get('charting_song_text');
 		mainBox.scrollFactor.set();
 		mainBox.cameras = [camUI];
 		add(mainBox);
+		applyChartBoxRoundedStyle(mainBox);
+
+		// 轨道整体左右移动按钮：与 063/073 一样放在信息框左侧、按住持续滚动。
+		// 用 StyledButton（纯矢量自绘箭头）而不是文字按钮，避免中文字体/宽度问题。
+		// 挂 camUI + scrollFactor 0：不受轨道平移影响，也不会被网格盖住。
+		// 与 box 面板统一：纯黑底 + 白描边 + 白箭头 + 8px 圆角（常驻，不需要平移时半透明）
+		var trackBtnStyle:StyledButtonStyle = StyledButtonStyle.monoBlack();
+		trackBtnStyle.size = 44;
+		btnTrackLeft = new StyledButton(mainBox.x - 46, mainBox.y + mainBox.height - 88, StyledButton.LEFT, trackBtnStyle);
+		btnTrackLeft.hitPadding = 4;
+		btnTrackLeft.scrollFactor.set();
+		btnTrackLeft.cameras = [camUI];
+		btnTrackLeft.antialiasing = false;
+		add(btnTrackLeft);
+		btnTrackRight = new StyledButton(mainBox.x - 46, mainBox.y + mainBox.height - 44, StyledButton.RIGHT, trackBtnStyle);
+		btnTrackRight.hitPadding = 4;
+		btnTrackRight.scrollFactor.set();
+		btnTrackRight.cameras = [camUI];
+		btnTrackRight.antialiasing = false;
+		add(btnTrackRight);
 
 		autoSaveIcon = new FlxSprite(50).loadGraphic(Paths.image('editors/autosave'));
 		autoSaveIcon.screenCenter(Y);
@@ -925,6 +978,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 		upperBox.bg.visible = false;
 		upperBox.bgFollowsSelectedTab = true; // 让背景板实时跟随下拉菜单选中的 tab
 		add(upperBox);
+		applyChartBoxRoundedStyle(upperBox);
 
 		outputTxt = new FlxText(25, FlxG.height - 50, FlxG.width - 50, '', 20);
 		outputTxt.setFormat(Paths.font(Language.get('uitab_font')), 20);
@@ -1016,7 +1070,8 @@ if(_shouldReset) Conductor.songPosition = 0;
 		add(tipBg);
 		
 		fullTipText = new FlxText(0, 0, FlxG.width - 200);
-		fullTipText.setFormat(Paths.font("unifont-18.0.01.otf"), 24, FlxColor.WHITE, CENTER);
+		// 键位表变长后 24px 会超出 720 高度，缩到 18px 保证整页可读
+		fullTipText.setFormat(Paths.font("unifont-18.0.01.otf"), 18, FlxColor.WHITE, CENTER);
 		fullTipText.cameras = [camUI];
 		fullTipText.scrollFactor.set();
 		fullTipText.visible = fullTipText.active = false;
@@ -1492,6 +1547,11 @@ if(_shouldReset) Conductor.songPosition = 0;
 	var haxeMenuBarMenus:Array<Menu> = [];
 	var haxeMenuBarButtons:Array<Button> = [];
 	var haxeMenuOpenMenu:Menu = null; // 当前打开的下拉菜单（用于按钮高亮判断，比 selected 更可靠）
+	// HaxeUI 的圆角由后端用 OpenFL 矢量画进 _surface.pixels，同样带半透明 AA 边。
+	// 状态变化会重绘，用「待处理」标记在绘制前统一二值化一次，避免每帧遍历像素。
+	var _haxeUIHardEdgePending:Bool = false;
+	// 存成字段，保证 add/remove 用的是同一个方法引用（hxcpp 上信号按引用比较）
+	var _haxeUIHardEdgeCallback:Void->Void = null;
 
 	// 顶部条信息：FPS+内存峰值（水平居中一行）与版本（右上角）
 	// 用 FlxText 叠加在 HaxeUI 菜单条之上渲染：不用 HaxeUI Label 是因为全宽 Label 会拦截菜单按钮的点击事件
@@ -1516,6 +1576,48 @@ if(_shouldReset) Conductor.songPosition = 0;
 
 	var lastBeatHit:Int = 0;
 	var songBeatNoOffset:Int = 0; // 不受noteOffset影响的纯粹歌曲节拍
+
+	/**
+	 * infoBox 文本：`Note: 对手 / 玩家` 现在显示「整首谱面当前实际箭头」的实时总数。
+	 *
+	 * 旧实现读 PlayState.SONG.notes[*].sectionNotes（JSON 数据），而编辑时增删箭头
+	 * 只改 notes 数组，只有保存/试玩/重进才写回 JSON；整段文本又被
+	 * `songPosition != lastTime` 门控，暂停时完全不刷新 —— 于是计数停在旧值。
+	 * 这里改读编辑中的 notes 数组，每帧比较后写入（文本相同不重绘）。
+	 * 判侧沿用 2866 行约定：必须传原始 songData[1]，不能用已折叠的 note.noteData。
+	 */
+	function updateInfoBoxText():Void
+	{
+		if (infoText == null) return;
+
+		var curTime:String = FlxStringUtil.formatTime(Conductor.songPosition / 1000, true);
+		var songLength:String = (FlxG.sound.music != null) ? FlxStringUtil.formatTime(FlxG.sound.music.length / 1000, true) : '???';
+		var oppCount:Int = 0;
+		var playCount:Int = 0;
+		for (note in notes)
+		{
+			if (note == null || note.isEvent) continue; // 只算箭头，Event 轨道不计入
+			if (note.songData == null || note.songData.length < 2) continue;
+			var noteSec:Int = (note.editorSection >= 0) ? note.editorSection : curSecPure;
+			var secData:SwagSection = (noteSec >= 0 && noteSec < PlayState.SONG.notes.length) ? PlayState.SONG.notes[noteSec] : null;
+			var secMustHit:Bool = (secData != null) ? (secData.mustHitSection == true) : false;
+			if (isPlayerNoteByData(Std.int(note.songData[1]), secMustHit)) playCount++; else oppCount++;
+		}
+
+		var str:String = '$curTime / $songLength' +
+						  '\n\nSection: $curSecPure' +
+						  '\nNote: $oppCount / $playCount' +
+						  '\nBeat: $curBeatPure' +
+						  '\nStep: $curStepPure' +
+						  '\n\nBeat Snap: ${curQuant} / 16' +
+						  '\nSelected: ${selectedNotes.length}';
+		if (str != infoText.text)
+		{
+			infoText.text = str;
+			if (infoText.autoSize) infoText.autoSize = false;
+		}
+	}
+
 	override function update(elapsed:Float)
 	{
 		if(!fileDialog.completed)
@@ -1532,6 +1634,11 @@ if(_shouldReset) Conductor.songPosition = 0;
 		if(haxeMenuIgnoreFrames > 0) haxeMenuIgnoreFrames--;
 		// 下拉框展开时本帧的网格/音符/拖拽输入一律让位给下拉框
 		if(backend.ui.DropdownInputPriority.pointerInsideOpenList()) ignoreClickForThisFrame = true;
+
+		// 轨道整体水平平移：必须在网格命中判定之前算好，因为 getGridLayout() 带平移量
+		updateChartPanInput(elapsed);
+		// Alt+滚轮已被平移消费时，本帧不再让它滚动时间轴
+		var usableWheel:Float = chartPanConsumedWheel ? 0 : FlxG.mouse.wheel;
 
 		// 同步 HaxeUI 菜单项文本与底层动态按钮文本（如视图菜单前三项、便捷制谱器开关）
 		syncHaxeMenuTexts();
@@ -1836,8 +1943,8 @@ if(_shouldReset) Conductor.songPosition = 0;
 						}
 					}
 				}
-				else if(FlxG.keys.justPressed.HOME)
-				{
+			else if(FlxG.keys.justPressed.HOME && !holdingAlt) // Alt+Home 留给「轨道回中」
+			{
 					setSongPlaying(false);
 					Conductor.songPosition = FlxG.sound.music.time = 0;
 					loadSection(0);
@@ -1855,25 +1962,25 @@ if(_shouldReset) Conductor.songPosition = 0;
 					else loadSection(0);
 					Conductor.songPosition = FlxG.sound.music.time = vocals.time = opponentVocals.time = timeToGoBack;
 				}
-				else if(touchPad.buttonUp.pressed || FlxG.keys.pressed.W != touchPad.buttonDown.pressed || FlxG.keys.pressed.S || FlxG.mouse.wheel != 0)
+				else if(touchPad.buttonUp.pressed || FlxG.keys.pressed.W != touchPad.buttonDown.pressed || FlxG.keys.pressed.S || usableWheel != 0)
 				{
 					if(FlxG.sound.music.playing)
 						setSongPlaying(false);
 
-					if(mouseSnapCheckBox.checked && FlxG.mouse.wheel != 0)
+					if(mouseSnapCheckBox.checked && usableWheel != 0)
 					{
 						var snap:Float = Conductor.stepCrochet / (curQuant/16) / curZoom;
-						var timeAdd:Float = (touchPad.buttonY.pressed || FlxG.keys.pressed.SHIFT ? 4 : 1) / (holdingAlt ? 4 : 1) * -FlxG.mouse.wheel * snap;
+						var timeAdd:Float = (touchPad.buttonY.pressed || FlxG.keys.pressed.SHIFT ? 4 : 1) / (holdingAlt ? 4 : 1) * -usableWheel * snap;
 						var time:Float = Math.round((FlxG.sound.music.time + timeAdd) / snap) * snap;
 						if(time > 0) time += 0.000001; //goes at the start of a section more properly
 						FlxG.sound.music.time = time;
 					}
 					else
 					{
-						var speedMult:Float = (touchPad.buttonY.pressed || FlxG.keys.pressed.SHIFT ? 4 : 1) * (FlxG.mouse.wheel != 0 ? 4 : 1) / (holdingAlt ? 4 : 1);
-						if(touchPad.buttonUp.pressed || FlxG.keys.pressed.W || FlxG.mouse.wheel > 0)
+						var speedMult:Float = (touchPad.buttonY.pressed || FlxG.keys.pressed.SHIFT ? 4 : 1) * (usableWheel != 0 ? 4 : 1) / (holdingAlt ? 4 : 1);
+						if(touchPad.buttonUp.pressed || FlxG.keys.pressed.W || usableWheel > 0)
 							FlxG.sound.music.time -= Conductor.crochet * speedMult * 1.5 * elapsed / curZoom;
-						else if(touchPad.buttonDown.pressed || FlxG.keys.pressed.S || FlxG.mouse.wheel < 0)
+						else if(touchPad.buttonDown.pressed || FlxG.keys.pressed.S || usableWheel < 0)
 							FlxG.sound.music.time += Conductor.crochet * speedMult * 1.5 * elapsed / curZoom;
 					}
 
@@ -2987,49 +3094,11 @@ if(_shouldReset) Conductor.songPosition = 0;
 			}
 		}
 
+		// infoBox 文本改为每帧实时刷新（见 updateInfoBoxText），不再被播放进度门控
+		updateInfoBoxText();
 		if(Conductor.songPosition != lastTime || forceDataUpdate)
 		{
-			var curTime:String = FlxStringUtil.formatTime(Conductor.songPosition / 1000, true);
-			var songLength:String = (FlxG.sound.music != null) ? FlxStringUtil.formatTime(FlxG.sound.music.length / 1000, true) : '???';
-			var curSecData:SwagSection = PlayState.SONG.notes[curSecPure];
-			var oppCount:Int = 0;
-			var playCount:Int = 0;
-			for(secIdx in 0...curSecPure)
-			{
-				var secData = PlayState.SONG.notes[secIdx];
-				if(secData == null) continue;
-				for(note in secData.sectionNotes)
-				{
-					if(note == null) continue;
-					var secMustHit:Bool = secData.mustHitSection;
-					if(isPlayerNoteByData(Std.int(note[1]), secMustHit)) playCount++; else oppCount++;
-				}
-			}
-			if(curSecData != null)
-			{
-				for(note in curSecData.sectionNotes)
-				{
-					if(note == null) continue;
-					if(note[0] > Conductor.songPosition) continue;
-					var secMustHitCur:Bool = curSecData.mustHitSection;
-					if(isPlayerNoteByData(Std.int(note[1]), secMustHitCur)) playCount++; else oppCount++;
-				}
-			}
-			var str:String =  '$curTime / $songLength' +
-							  '\n\nSection: $curSecPure' +
-							  '\nNote: $oppCount / $playCount' +
-							  '\nBeat: $curBeatPure' +
-							  '\nStep: $curStepPure' +
-							  '\n\nBeat Snap: ${curQuant} / 16' +
-							  '\nSelected: ${selectedNotes.length}';
-
-			if(str != infoText.text)
-			{
-				infoText.text = str;
-				if(infoText.autoSize) infoText.autoSize = false;
-			}
-
-var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.sound.music.playing);
+		var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.sound.music.playing);
 		var canPlayHitSound:Bool = (FlxG.sound.music != null && FlxG.sound.music.playing && lastTime < Conductor.songPosition);
 		
 		for (note in curRenderedNotes)
@@ -3545,7 +3614,9 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 		}
 
 		// 创建三个独立的轨道网格（LE LTS 双侧：对手/玩家各按各自键数渲染）
-		var startX:Float = FlxG.width / 2;
+		// 统一走 getGridLayout()（带轨道整体平移量），否则改键数 / 切 section 重建
+		// 网格后会回到居中位置，而已平移的音符与命中判定仍按带偏移的布局计算，直接错位
+		var startX:Float = getGridLayout().startX;
 		var pCols:Int = playerGridCols();
 		var oCols:Int = opponentGridCols();
 		
@@ -3553,11 +3624,7 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 		var opponentWidth:Float = GRID_SIZE * oCols;
 		var eventWidth:Float = SHOW_EVENT_COLUMN ? GRID_SIZE * EVENT_TRACK_COUNT : 0;
 		var playerWidth:Float = GRID_SIZE * pCols;
-		var spacingWidth:Float = TRACK_SPACING * (SHOW_EVENT_COLUMN ? 2 : 1);
-		var totalWidth:Float = opponentWidth + eventWidth + playerWidth + spacingWidth;
 		
-		startX = (FlxG.width - totalWidth) / 2;
-
 		// 对手轨道网格
 		opponentGridBg = new ChartingGridSprite(oCols, gridColors[0], gridColors[1]);
 		opponentGridBg.x = startX;
@@ -3644,6 +3711,8 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 	}
 	// 新创建/重建后统一着色条纹（原 create() 内的内联着色逻辑已迁移至此）
 	applyGridStripeColors();
+	// 键数 / 事件列变化导致 totalWidth 变了，中间白线同步重设宽度与起点
+	refreshTimeLine();
 }
 
 	// 根据UI列获取对应的网格（LE LTS 双侧：对手区按对手键数列数）
@@ -3665,7 +3734,8 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 	}
 
 	// 获取所有轨道的总宽度和起始位置
-	function getGridLayout():{startX:Float, opponentX:Float, eventX:Float, playerX:Float, totalWidth:Float}
+	/** withPan=false 用于算「未平移时的基准布局」（按钮显隐 / 边界），其余调用一律带平移 */
+	function getGridLayout(withPan:Bool = true):{startX:Float, opponentX:Float, eventX:Float, playerX:Float, totalWidth:Float}
 	{
 		// LE LTS 双侧：对手/玩家网格按各自键数渲染（不对称布局）；非双侧 = 两侧同值
 		var opponentWidth:Float = GRID_SIZE * opponentGridCols();
@@ -3673,7 +3743,7 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 		var playerWidth:Float = GRID_SIZE * playerGridCols();
 		var spacingWidth:Float = TRACK_SPACING * (SHOW_EVENT_COLUMN ? 2 : 1);
 		var totalWidth:Float = opponentWidth + eventWidth + playerWidth + spacingWidth;
-		var startX:Float = (FlxG.width - totalWidth) / 2;
+		var startX:Float = (FlxG.width - totalWidth) / 2 + (withPan ? chartPanX : 0);
 		
 		return {
 			startX: startX,
@@ -3682,6 +3752,146 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 			playerX: startX + opponentWidth + eventWidth + TRACK_SPACING * (SHOW_EVENT_COLUMN ? 2 : 1),
 			totalWidth: totalWidth
 		};
+	}
+
+	/**
+	 * 屏幕中间那条白线（timeLine）必须跟着「当前轨道总宽度 + 平移量」走。
+	 * 原先只在 create() 里按初次布局设一次尺寸，改键数 / 事件列 / 重建网格后
+	 * 宽度就停在旧值，导致轨道变多变少时白线不跟着变长变短。
+	 */
+	function refreshTimeLine():Void
+	{
+		if (timeLine == null || !timeLine.exists) return;
+		var layout = getGridLayout();
+		timeLine.x = layout.startX;
+		timeLine.setGraphicSize(Std.int(layout.totalWidth), 4);
+		timeLine.updateHitbox();
+	}
+
+	/**
+	 * 把已创建的轨道对象整体水平移动 delta 像素。
+	 * getGridLayout() 之后新建的对象会自带当前 chartPanX，这里只负责补上增量；
+	 * 同一个音符可能同时挂在 notes 数组和渲染组里，用 ObjectMap 去重避免加两次。
+	 * 鼠标位置驱动的对象（dragPreview / selectionBox）不在此列。
+	 */
+	function applyChartPanDelta(delta:Float):Void
+	{
+		if (delta == 0) return;
+		var seen:haxe.ds.ObjectMap<Dynamic, Bool> = new haxe.ds.ObjectMap<Dynamic, Bool>();
+		var moveObj = function(o:Dynamic):Void
+		{
+			if (o == null || !o.exists || seen.exists(o)) return;
+			seen.set(o, true);
+			o.x += delta;
+		};
+
+		moveObj(opponentGridBg); moveObj(prevOpponentGridBg); moveObj(nextOpponentGridBg);
+		moveObj(eventGridBg); moveObj(prevEventGridBg); moveObj(nextEventGridBg);
+		moveObj(playerGridBg); moveObj(prevPlayerGridBg); moveObj(nextPlayerGridBg);
+
+		for (n in notes) moveObj(n);
+		for (e in events) moveObj(e);
+		if (behindRenderedNotes != null) for (n in behindRenderedNotes) moveObj(n);
+		if (curRenderedNotes != null) for (n in curRenderedNotes) moveObj(n);
+		if (movingNotes != null) for (n in movingNotes) moveObj(n);
+		if (strumLineNotes != null) for (s in strumLineNotes) moveObj(s);
+		if (overlapMarkers != null) for (t in overlapMarkers) moveObj(t);
+
+		moveObj(opponentTrackOverlay); moveObj(eventTrackOverlay); moveObj(playerTrackOverlay);
+		moveObj(eventLockOverlay); moveObj(timeLine); moveObj(vortexIndicator);
+		moveObj(mustHitIndicator); moveObj(eventIcon); moveObj(dummyArrow);
+		if (icons != null) for (i in icons) moveObj(i);
+		if (waveformSprites != null) for (w in waveformSprites) moveObj(w);
+		if (waveformLibSprites != null) for (w in waveformLibSprites) moveObj(w);
+		if (waveformLibBackSprites != null) for (w in waveformLibBackSprites) moveObj(w);
+	}
+
+	/**
+	 * 轨道整体左右移动（照 063/073：桌面 Alt+滚轮 / < > 键，移动端按住左右按钮）。
+	 * 用 lerp 平滑；平移量不设上下限，Alt+Home 或同时按住两个按钮可一键回中。
+	 */
+	function updateChartPanInput(elapsed:Float):Void
+	{
+		chartPanConsumedWheel = false;
+
+		var base = getGridLayout(false);
+		var usableRight:Float = (mainBox != null ? mainBox.x : FlxG.width) - 10;
+		var usableLeft:Float = 10;
+
+		// 按钮常驻：不需要平移时半透明（仍可点），需要平移时恢复实心。
+		// 位置跟随可拖动的 mainBox，但钳制在屏幕内，避免被拖出可视区后「消失」。
+		if (btnTrackLeft != null && btnTrackRight != null && mainBox != null)
+		{
+			// 按钮是 add 到 state 的，不是 mainBox 的子对象：mainBox 隐藏（F12 预览）
+			// 或最小化（双击 tab 收起）时必须一并隐藏，否则会孤零零留在屏幕上。
+			var shown:Bool = mainBox.visible && !mainBox.isMinimized;
+			btnTrackLeft.visible = btnTrackRight.visible = shown;
+			if (shown)
+			{
+				var needPan:Bool = (base.startX + base.totalWidth > usableRight + GRID_SIZE)
+					|| (base.startX < usableLeft - GRID_SIZE);
+				var idleAlpha:Float = needPan ? 1.0 : 0.35;
+				btnTrackLeft.alpha = (btnTrackLeft.hovered || btnTrackLeft.pressed) ? 1.0 : idleAlpha;
+				btnTrackRight.alpha = (btnTrackRight.hovered || btnTrackRight.pressed) ? 1.0 : idleAlpha;
+
+				var bx:Float = FlxMath.bound(mainBox.x - 46, 6, FlxG.width - btnTrackLeft.width - 6);
+				var by1:Float = FlxMath.bound(mainBox.y + mainBox.height - 88, haxeMenuBarHeight + 6,
+					FlxG.height - btnTrackLeft.height - 6);
+				var by2:Float = FlxMath.bound(mainBox.y + mainBox.height - 44, haxeMenuBarHeight + 6,
+					FlxG.height - btnTrackRight.height - 6);
+				btnTrackLeft.setPosition(bx, by1);
+				btnTrackRight.setPosition(bx, by2);
+
+				// 点按钮时不穿透到网格（按钮在 camUI 上，x/y 就是屏幕坐标）
+				if (FlxG.mouse.justPressed)
+				{
+					var mx:Float = FlxG.mouse.x;
+					var my:Float = FlxG.mouse.y;
+					for (b in [btnTrackLeft, btnTrackRight])
+					{
+						if (mx >= b.x - 4 && mx <= b.x + b.width + 4 && my >= b.y - 4 && my <= b.y + b.height + 4)
+						{
+							ignoreClickForThisFrame = true;
+							break;
+						}
+					}
+				}
+			}
+		}
+
+		// 菜单 / 下拉框交互期间不抢输入；lerp 与位移仍在下方照常执行
+		var blocked:Bool = haxeMenuOpen || haxeMenuIgnoreFrames > 0
+			|| backend.ui.DropdownInputPriority.pointerInsideOpenList();
+		if (!blocked)
+		{
+			var wheel:Float = FlxG.mouse.wheel;
+			if (wheel != 0 && FlxG.keys.pressed.ALT)
+			{
+				chartPanTargetX += wheel * GRID_SIZE;
+				chartPanConsumedWheel = true;
+			}
+			if (FlxG.keys.justPressed.COMMA) chartPanTargetX -= GRID_SIZE;  // <
+			if (FlxG.keys.justPressed.PERIOD) chartPanTargetX += GRID_SIZE; // >
+
+			var step:Float = trackButtonScrollSpeed * Math.min(elapsed, 1 / 30);
+			if (btnTrackLeft != null && btnTrackLeft.visible && btnTrackLeft.pressed) chartPanTargetX -= step;
+			if (btnTrackRight != null && btnTrackRight.visible && btnTrackRight.pressed) chartPanTargetX += step;
+
+			// 回中：桌面 Alt+Home，或同时按住两个按钮（移动端双指也可用）
+			if ((FlxG.keys.justPressed.HOME && FlxG.keys.pressed.ALT)
+				|| (btnTrackLeft != null && btnTrackRight != null
+					&& btnTrackLeft.visible && btnTrackRight.visible
+					&& btnTrackLeft.pressed && btnTrackRight.pressed))
+				chartPanTargetX = 0;
+		}
+
+		// 不设限：平移量无上下界，可以把整块轨道完全推出屏幕再推回来。
+		chartPanX = FlxMath.lerp(chartPanX, chartPanTargetX, 0.25);
+		// 收敛后直接吸附，避免 lerp 的尾部微小差值让 applyChartPanDelta 每帧空转
+		if (Math.abs(chartPanTargetX - chartPanX) < 0.05) chartPanX = chartPanTargetX;
+		var delta:Float = chartPanX - chartPanLastX;
+		chartPanLastX = chartPanX;
+		if (delta != 0) applyChartPanDelta(delta);
 	}
 
 	// 小节键数（Extra Keys：从谱面 SONG.mania 读取，3 = 标准 4 键）
@@ -3817,6 +4027,8 @@ var vortexPlaying:Bool = (vortexEnabled && FlxG.sound.music != null && FlxG.soun
 			applyGridStripeColors();
 			_rebuildingGrids = false;
 		}
+		// 键数没变但小节/事件列状态变化时也统一同步一次，避免白线停留在旧宽度
+		refreshTimeLine();
 	}
 
 	// 重建漩涡编辑器的静态箭头（LE LTS 双侧：玩家/对手按各自键数，不对称布局）
@@ -6121,6 +6333,7 @@ for (i in 0...GRID_PLAYERS)
 		searchBox.scrollFactor.set();
 		searchBox.visible = false;
 		add(searchBox);
+		applyChartBoxRoundedStyle(searchBox);
 
 		var tab = searchBox.getTab(searchBoxTabs[0]);
 		var tab_group = tab.menu;
@@ -7138,6 +7351,64 @@ for (i in 0...GRID_PLAYERS)
 		tab_group.add(playerDropDown);
 	}
 
+	/** Kathy 编谱器专用：面板背景与每个 tab 头统一 8px 圆角（其它编辑器不启用） */
+	function applyChartBoxRoundedStyle(box:PsychUIBox):Void
+	{
+		if (box == null) return;
+		var wasMinimized:Bool = box.isMinimized;
+		box.setCornerRadius(8);
+		for (tab in box.tabs) tab.setCornerRadius(8);
+		// 换肤会重置 bg 的 scale，已最小化的面板要按当前状态再压回去。
+		// 此时 minimizeDuration 仍为 0，所以这里只会落到终态，不会在进编辑器时播一段收起动画。
+		if (wasMinimized) box.isMinimized = true;
+		// 最小/最大化过渡：可拖动的面板才有折叠动画；
+		// upperBox 是文件/编辑/视图菜单的底板（bgFollowsSelectedTab），需要即时收起，不做动画。
+		box.minimizeDuration = box.bgFollowsSelectedTab ? 0 : 0.22;
+	}
+
+	/** 标记「HaxeUI 组件刚重绘过圆角」，在 preDraw 时统一做硬边处理 */
+	function requestHaxeUIHardEdges():Void { _haxeUIHardEdgePending = true; }
+
+	/** HaxeUI 后端把圆角用 OpenFL 矢量画进 _surface.pixels，边缘带半透明 AA 像素。
+	 *  _surface 是私有字段，用 Reflect 取；取不到就静默跳过（不影响功能）。 */
+	function hardenHaxeUIComponent(comp:Dynamic):Void
+	{
+		if (comp == null) return;
+		try
+		{
+			comp.antialiasing = false;
+			var surf:FlxSprite = cast Reflect.field(comp, '_surface');
+			if (surf != null && surf.pixels != null)
+			{
+				PsychUIRounded.hardenEdges(surf.pixels, 3);
+				surf.antialiasing = false;
+				surf.dirty = true;
+			}
+		}
+		catch (e:Dynamic) {}
+	}
+
+	function hardenHaxeUIRecursive(comp:Dynamic):Void
+	{
+		if (comp == null) return;
+		hardenHaxeUIComponent(comp);
+		try
+		{
+			var kids:Array<Dynamic> = comp.childComponents;
+			if (kids != null) for (kid in kids) hardenHaxeUIRecursive(kid);
+		}
+		catch (e:Dynamic) {}
+	}
+
+	function onPreDrawHardEdges():Void
+	{
+		if (!_haxeUIHardEdgePending) return;
+		_haxeUIHardEdgePending = false;
+		hardenHaxeUIComponent(haxeMenuBar);
+		for (btn in haxeMenuBarButtons) hardenHaxeUIComponent(btn);
+		if (haxeMenuOpenMenu != null) hardenHaxeUIRecursive(haxeMenuOpenMenu);
+	}
+
 	function createHaxeUIMenuBar()
 	{
 		// 首次使用时初始化 HaxeUI Toolkit（幂等）；禁用 DPI 自动缩放，保证坐标与 Flixel 屏幕坐标一致
@@ -7210,7 +7481,12 @@ for (i in 0...GRID_PLAYERS)
 		{
 			if (child is Button)
 			{
-				child.styleString = 'font-name: $menuFont; font-size: 12px; min-width: 100px;';
+				child.styleString = 'font-name: $menuFont; font-size: 12px; min-width: 100px; border-radius: 8px;';
+				// :down 态的 CSS 会给按钮加「1px 复合边框」，FlxStyleHelper 用 drawRect 画边框，
+				// 正好把圆角四角填成方的。inline 把四边框强制为 0，按下时圆角才保得住。
+				child.borderRadius = 8;
+				child.borderSize = 0;
+				child.antialiasing = false;
 				registerTopBarButtonHover(cast child);
 				haxeMenuBarButtons.push(cast child);
 			}
@@ -7218,11 +7494,17 @@ for (i in 0...GRID_PLAYERS)
 
 		haxeMenuBar.registerEvent(MenuEvent.MENU_OPENED, function(e:MenuEvent)
 		{
+			// 下拉菜单是打开时才 add 到 Screen 的新根组件，haxeui-flixel 会让它继承
+			// rootComponents[0] 的 cameras；而 ScreenImpl.findCameras() 可能被前面
+			// 的 FlxTypedGroup 干扰（StateHelper.hasMember 恒为 true）取到默认相机，
+			// 导致菜单又被角色 / box 盖住。这里显式兜底。
+			if (camTopBar != null && e.menu != null) e.menu.cameras = [camTopBar];
 			haxeMenuOpen = true;
 			haxeMenuOpenMenu = e.menu;
 			haxeMenuIgnoreFrames = 2;
 			styleMenuComponent(e.menu); // 深浅色模式下套用下拉菜单配色
 			setMenuButtonHighlight(e.menu, true); // 打开菜单的按钮高亮
+			requestHaxeUIHardEdges();
 		});
 		haxeMenuBar.registerEvent(MenuEvent.MENU_CLOSED, function(_)
 		{
@@ -7233,9 +7515,20 @@ for (i in 0...GRID_PLAYERS)
 				haxeMenuOpenMenu = null;
 			}
 			haxeMenuIgnoreFrames = 2;
+			requestHaxeUIHardEdges();
 		});
 
 		Screen.instance.addComponent(haxeMenuBar);
+		// 换到最上层相机：haxeui-flixel 的组件就是 FlxBasic，默认画在 FlxG.camera 上，
+		// 而 camUI（box / 信息栏）与 camChart（角色）都在它之上，会把菜单条盖住。
+		// FlxSpriteContainer.draw() 会把容器的 cameras 作为子对象的默认相机，
+		// 所以这里设一次即可，菜单条内部按钮与后续打开的下拉菜单会一起跟随。
+		if (camTopBar != null) haxeMenuBar.cameras = [camTopBar];
+		haxeMenuBar.antialiasing = false;
+		// 绘制前统一把 HaxeUI 圆角的半透明 AA 边二值化（只在状态变化时真正干活）
+		if (_haxeUIHardEdgeCallback == null) _haxeUIHardEdgeCallback = onPreDrawHardEdges;
+		FlxG.signals.preDraw.add(_haxeUIHardEdgeCallback);
+		requestHaxeUIHardEdges();
 	}
 
 	/** 创建顶部条信息：FPS+内存峰值（水平居中一行）与版本（右上角），以 FlxText 叠加在菜单条之上渲染 */
@@ -7244,22 +7537,26 @@ for (i in 0...GRID_PLAYERS)
 		var font:String = Paths.font(Language.get('uitab_font'));
 		var fgColor:Int = isChartEditorLightTheme() ? 0xFF444444 : 0xFFFFFFFF;
 
-		// FPS+内存峰值：全宽字段 + 水平居中，文本垂直居中对齐
+		// FPS+内存峰值（移动端再追加电量）：全宽字段 + 水平居中，文本垂直居中对齐
 		topBarFpsMemText = new FlxText(0, 0, FlxG.width, '', 12);
 		topBarFpsMemText.setFormat(font, 12, fgColor, CENTER);
 		topBarFpsMemText.scrollFactor.set();
 		topBarFpsMemText.antialiasing = ClientPrefs.data.antialiasing;
 		topBarFpsMemText.text = 'FPS: --    内存峰值: --MB';
 		topBarFpsMemText.y = (haxeMenuBarHeight - topBarFpsMemText.height) / 2;
+		if (camTopBar != null) topBarFpsMemText.cameras = [camTopBar];
 		add(topBarFpsMemText);
 
-		// 版本号：右上角，右对齐
-		topBarVersionText = new FlxText(0, 0, 200, 'v' + MainMenuState.psychEngineVersion, 12);
+		// 版本号：右上角，右对齐；显示 KathyEngine 自身版本（含 rc/beta 后缀），
+		// 不再用 psychEngineVersion —— 那是给旧脚本伪装用的 Psych 版本。
+		// 加宽字段以容纳 debug 构建的 " dev" 后缀（右对齐，不会挤到中间的 FPS 文本）。
+		topBarVersionText = new FlxText(0, 0, 320, 'Kathy v' + MainMenuState.kathyEngineVersion, 12);
 		topBarVersionText.setFormat(font, 12, fgColor, RIGHT);
 		topBarVersionText.scrollFactor.set();
 		topBarVersionText.antialiasing = ClientPrefs.data.antialiasing;
 		topBarVersionText.x = FlxG.width - topBarVersionText.width - 8;
 		topBarVersionText.y = (haxeMenuBarHeight - topBarVersionText.height) / 2;
+		if (camTopBar != null) topBarVersionText.cameras = [camTopBar];
 		add(topBarVersionText);
 	}
 
@@ -7290,7 +7587,11 @@ for (i in 0...GRID_PLAYERS)
 			for (child in haxeMenuBar.childComponents)
 			{
 				if (child is Button)
-					child.styleString = 'font-name: $font; font-size: 12px; min-width: 100px; background-color: $bgColor; color: $fgColor;';
+				{
+					child.styleString = 'font-name: $font; font-size: 12px; min-width: 100px; background-color: $bgColor; color: $fgColor; border-radius: 8px;';
+					child.borderRadius = 8;
+					child.borderSize = 0;
+				}
 			}
 			haxeMenuBar.syncComponentValidation(false);
 			// 主题切换重设了按钮 styleString，若此时有菜单打开，重新套用其按钮高亮
@@ -7301,6 +7602,7 @@ for (i in 0...GRID_PLAYERS)
 			topBarFpsMemText.color = fgColorInt;
 		if (topBarVersionText != null)
 			topBarVersionText.color = fgColorInt;
+		requestHaxeUIHardEdges();
 	}
 
 	/** 下拉菜单打开时，按当前深浅色配色递归套用到菜单及菜单项 */
@@ -7314,18 +7616,33 @@ for (i in 0...GRID_PLAYERS)
 		var border:String = light ? '#d2d2d2' : '#555555';
 		var font:String = Paths.font(Language.get('uitab_font'));
 
-		menu.styleString = 'background-color: $menuBg; border-color: $border;';
+		// 下拉面板外框 8px；Menu 自身也要设 borderRadius，避免 :hover/:selected 重套样式时丢圆角
+		menu.styleString = 'background-color: $menuBg; border-color: $border; border-radius: 8px;';
 		styleMenuComponentRecursive(menu, menuBg, menuFg, selBg, font);
 		menu.invalidateComponentStyle(true);
 		menu.invalidateComponent();
+		menu.borderRadius = 8;
+		menu.antialiasing = false;
+		applyMenuRadiusRecursive(menu);
+		requestHaxeUIHardEdges();
 	}
 
-	/** 递归为菜单组件及其内部 label 套用深浅色配色 */
+	/** 直接写 @:style 属性兜底：样式失效重建后圆角仍在（容器 8px / 选项 4px） */
+	function applyMenuRadiusRecursive(comp:Component):Void
+	{
+		if (comp == null) return;
+		comp.antialiasing = false;
+		if (comp is MenuItem) comp.borderRadius = 4;
+		else if (comp is Menu) comp.borderRadius = 8;
+		for (child in comp.childComponents) applyMenuRadiusRecursive(child);
+	}
+
+	/** 递归为菜单组件及其内部 label 套用深浅色配色与圆角 */
 	function styleMenuComponentRecursive(comp:Component, menuBg:String, menuFg:String, selBg:String, font:String)
 	{
 		if (comp is MenuItem)
 		{
-			comp.styleString = 'font-name: $font; font-size: 12px; background-color: $menuBg; color: $menuFg;';
+			comp.styleString = 'font-name: $font; font-size: 12px; background-color: $menuBg; color: $menuFg; border-radius: 4px;';
 		}
 		else if (comp is Label)
 		{
@@ -7333,7 +7650,7 @@ for (i in 0...GRID_PLAYERS)
 		}
 		else if (comp is Menu)
 		{
-			comp.styleString = 'background-color: $menuBg; border-color: ${(menuBg == '#ffffff') ? '#d2d2d2' : '#555555'};';
+			comp.styleString = 'background-color: $menuBg; border-color: ${(menuBg == '#ffffff') ? '#d2d2d2' : '#555555'}; border-radius: 8px;';
 		}
 		for (child in comp.childComponents)
 			styleMenuComponentRecursive(child, menuBg, menuFg, selBg, font);
@@ -7392,6 +7709,25 @@ for (i in 0...GRID_PLAYERS)
 		var curMB:Int = Std.int(_topBarLastMemBytes / (1024 * 1024));
 		var peakMB:Int = Std.int(_topBarPeakMem / (1024 * 1024));
 		var newText:String = 'FPS: ' + Std.int(_topBarFPS) + '    内存: ' + curMB + '/' + peakMB + 'MB';
+		// 移动端且设备支持电量读取时，在内存右侧追加「电量」。
+		// MobileUtil.getBatteryText() 已做 FlxG.onMobile 判定、5 秒 JNI 缓存，
+		// 以及「读不到（level < 0 / JNI 失败）就返回空串」；桌面恒为空，不显示。
+		var batteryText:String = '';
+		try
+		{
+			batteryText = mobile.backend.MobileUtil.getBatteryText();
+		}
+		catch (e:Dynamic)
+		{
+			batteryText = '';
+		}
+		if (batteryText.length > 0)
+		{
+			// 顶部条用中文字体，把 MobileUtil 的固定英文标签换成中文保持一致
+			batteryText = StringTools.replace(batteryText, 'Battery', '电量:');
+			batteryText = StringTools.replace(batteryText, 'Charging', '充电中');
+			newText += '    ' + batteryText;
+		}
 		if (topBarFpsMemText.text != newText) topBarFpsMemText.text = newText;
 	}
 
@@ -7422,6 +7758,9 @@ for (i in 0...GRID_PLAYERS)
 		btn.backgroundColor = active
 			? (haxeMenuStyleLight ? 0xFFB4CBE4 : 0xFF4A6A8A)
 			: (haxeMenuStyleLight ? 0xFFF6F6F6 : 0xFF3D3F41);
+		btn.borderRadius = 8;
+		btn.borderSize = 0;
+		requestHaxeUIHardEdges();
 	}
 
 	/** 顶部菜单条按钮：注册鼠标悬停浅蓝高亮。styleString 无法携带 :hover 伪类，
@@ -7432,6 +7771,9 @@ for (i in 0...GRID_PLAYERS)
 		btn.registerEvent(MouseEvent.MOUSE_OVER, function(_)
 		{
 			btn.backgroundColor = (haxeMenuStyleLight ? 0xFFB4CBE4 : 0xFF4A6A8A);
+			btn.borderRadius = 8;
+			btn.borderSize = 0;
+			requestHaxeUIHardEdges();
 		});
 		btn.registerEvent(MouseEvent.MOUSE_OUT, function(_)
 		{
@@ -7441,7 +7783,13 @@ for (i in 0...GRID_PLAYERS)
 			btn.backgroundColor = (haxeMenuOpenMenu != null && getMenuBarButton(haxeMenuOpenMenu) == btn)
 				? (haxeMenuStyleLight ? 0xFFB4CBE4 : 0xFF4A6A8A)
 				: (haxeMenuStyleLight ? 0xFFF6F6F6 : 0xFF3D3F41);
+			btn.borderRadius = 8;
+			btn.borderSize = 0;
+			requestHaxeUIHardEdges();
 		});
+		// :down 会重新套 CSS 的复合边框，按下/抬起时强制把四边框清零，圆角才不会被填方
+		btn.registerEvent(MouseEvent.MOUSE_DOWN, function(_) { btn.borderRadius = 8; btn.borderSize = 0; requestHaxeUIHardEdges(); });
+		btn.registerEvent(MouseEvent.MOUSE_UP, function(_) { btn.borderRadius = 8; btn.borderSize = 0; requestHaxeUIHardEdges(); });
 	}
 
 	/** 下拉菜单项：注册鼠标悬停浅蓝高亮（颜色同下拉选中色 selBg），悬停离开恢复底色 */
@@ -7451,10 +7799,14 @@ for (i in 0...GRID_PLAYERS)
 		item.registerEvent(MouseEvent.MOUSE_OVER, function(_)
 		{
 			item.backgroundColor = (haxeMenuStyleLight ? 0xFFB4CBE4 : 0xFF4A6A8A);
+			item.borderRadius = 4;
+			requestHaxeUIHardEdges();
 		});
 		item.registerEvent(MouseEvent.MOUSE_OUT, function(_)
 		{
 			item.backgroundColor = (haxeMenuStyleLight ? 0xFFFFFFFF : 0xFF2D2F31);
+			item.borderRadius = 4;
+			requestHaxeUIHardEdges();
 		});
 	}
 
@@ -9663,6 +10015,9 @@ function adaptNotesToNewTimes(oldTimes:Array<Float>)
 		openSubState(new EditorPlayState(cast notes, [vocals, opponentVocals]));
 		upperBox.isMinimized = true;
 		mainBox.visible = infoBox.visible = false;
+		// 预览期间父状态不 update，updateChartPanInput 没机会重算显隐，必须在这里直接隐藏
+		if (btnTrackLeft != null && btnTrackRight != null)
+			btnTrackLeft.visible = btnTrackRight.visible = false;
 	}
 
 	function goToPlayState()
@@ -9703,6 +10058,9 @@ function adaptNotesToNewTimes(oldTimes:Array<Float>)
 		upperBox.isMinimized = true;
 		mainBox.visible = infoBox.visible = true;
 		upperBox.bg.visible = false;
+		// 预览结束先按当前 mainBox 状态恢复按钮，下一帧 updateChartPanInput 会再校准一次
+		if (btnTrackLeft != null && btnTrackRight != null)
+			btnTrackLeft.visible = btnTrackRight.visible = !mainBox.isMinimized;
 		updateAudioVolume();
 		// 顶部 HaxeUI 菜单栏始终可见，不随子状态隐藏
 		// if(haxeMenuBar != null) haxeMenuBar.visible = true;
@@ -9710,6 +10068,15 @@ function adaptNotesToNewTimes(oldTimes:Array<Float>)
 
 	override function destroy()
 	{
+		// 退出制谱器还原全局圆角皮肤，避免后续状态/其它编辑器拿到 4px 设置
+		PsychUIRounded.radius = 0;
+		// 移除绘制前硬边处理，避免信号里残留已销毁的 state 引用
+		if (_haxeUIHardEdgeCallback != null)
+		{
+			FlxG.signals.preDraw.remove(_haxeUIHardEdgeCallback);
+			_haxeUIHardEdgeCallback = null;
+		}
+
 		// 退出制谱器时清除编辑器双侧静态档位，避免残留影响 PlayState 等后续状态
 		Note.editorDualMode = false;
 

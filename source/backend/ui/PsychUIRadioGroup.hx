@@ -31,12 +31,17 @@ class PsychUIRadioGroup extends FlxSpriteGroup
 		
 		_hitbox = new FlxObject();
 
-		arrowUp = new FlxSprite().loadGraphic(Paths.image('psych-ui/arrow_up', 'embed'), true, 24, 18);
+		arrowUp = new FlxSprite();
+		if (PsychUIRounded.radius > 0) arrowUp.loadGraphic(PsychUIRounded.arrowSheet(true), true, 24, 18);
+		else arrowUp.loadGraphic(Paths.image('psych-ui/arrow_up', 'embed'), true, 24, 18);
 		arrowUp.animation.add('normal', [0]);
 		arrowUp.animation.add('press', [1]);
 		arrowUp.animation.play('normal');
 		arrowUp.visible = false;
-		arrowDown = new FlxSprite().loadGraphic(Paths.image('psych-ui/arrow_down', 'embed'), true, 24, 18);
+		arrowDown = new FlxSprite();
+		if (PsychUIRounded.radius > 0) arrowDown.loadGraphic(PsychUIRounded.arrowSheet(false), true, 24, 18);
+		else arrowDown.loadGraphic(Paths.image('psych-ui/arrow_down', 'embed'), true, 24, 18);
+		arrowUp.antialiasing = arrowDown.antialiasing = false;
 		arrowDown.animation.add('normal', [0]);
 		arrowDown.animation.add('press', [1]);
 		arrowDown.animation.play('normal');
@@ -329,7 +334,9 @@ class PsychUIRadioItem extends PsychUICheckBox
 	}
 	override function boxGraphic()
 	{
-		box.loadGraphic(Paths.image('psych-ui/radio', 'embed'), true, 16, 16);
+		if (PsychUIRounded.radius > 0) box.loadGraphic(PsychUIRounded.radioSheet(), true, 16, 16);
+		else box.loadGraphic(Paths.image('psych-ui/radio', 'embed'), true, 16, 16);
+		box.antialiasing = false;
 		box.animation.add('false', [0]);
 		box.animation.add('true', [1]);
 		box.animation.play('false');

@@ -176,6 +176,44 @@ class StyledButtonStyle
 		return s;
 	}
 
+	/**
+	 * 预设：纯黑白（Kathy 编谱器的轨道左右平移按钮）。
+	 * 黑底 + 白描边 + 白箭头，8px 圆角，和 box 面板的黑底白字风格一致。
+	 * cornerRadius 传的是 drawRoundRect 的椭圆直径，所以 16 = 实际半径 8px。
+	 */
+	public static function monoBlack():StyledButtonStyle
+	{
+		var s = new StyledButtonStyle();
+		s.cornerRadius = 16;
+		s.borderThickness = 2;
+		s.borderColor = 0xFFFFFFFF;
+		s.tintBorder = false; // 三态都保持白色描边
+
+		s.rimColor = 0xFFFFFFFF;
+		s.rimAlpha = 0.35;
+		s.rimThickness = 1;
+		s.pressedRimTint = -0.5;
+
+		s.topColor = 0xFF000000;
+		s.bottomColor = 0xFF000000;
+		s.glossStrength = 0;
+		s.shadeStrength = 0;
+		s.gradientRatios = [0, 64, 192, 255];
+
+		s.arrowColor = 0xFFFFFFFF;
+		s.arrowShadowColor = 0xFF000000;
+		s.arrowShadowAlpha = 0;
+		s.arrowSize = 8.5;
+		s.arrowThickness = 3.0;
+
+		s.hoverBright = 0.18;
+		s.pressDark = 0.10;
+		s.pressInsetAlpha = 0; // 圆角皮肤不叠直角内凹阴影
+		s.shadowAlpha = 0;
+		s.shadowOffsetY = 0;
+		return s;
+	}
+
 	/** 预设：荧光绿 */
 	public static function neonGreen():StyledButtonStyle
 	{
