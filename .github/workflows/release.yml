@@ -92,6 +92,10 @@ jobs:
       artifactName: linuxBuild-x86_64
       artifactPath: export/release/linux/bin/*
 
+  # 注意：`macos-15` 是 arm64 (M1, 3C/7G) runner，不是 Intel。
+  # x64 版必须用 `macos-15-intel`，否则既拿不到 x86_64 主机，
+  # 又会和 ARM64 / iOS 一起挤本就紧张的 arm64 容量池（曾出现 3 个 job 排队
+  # 15 分钟后被平台 cancelled，零 step、零 artifact）。
   build-macos-x64:
     name: macOS x86_64
     needs: commit-info
@@ -99,12 +103,13 @@ jobs:
     if: ${{ inputs.macos_x64 }}
     with:
       name: macOS x86_64
-      os: macos-15
+      os: macos-15-intel
       setupCommand: sh ./setup/unix.sh
       buildArgs: "mac -64 -D HXCPP_M64 -final -D officialBuild"
       artifactName: macOSBuild-x86_64
       artifactPath: export/release/macos/bin/*
 
+  # 唯一必须留在 arm64 池里的 job，其余 macOS 工作都挪到 Intel 池。
   build-macos-arm64:
     name: macOS ARM64
     needs: commit-info
@@ -132,6 +137,8 @@ jobs:
       artifactName: androidBuild
       artifactPath: export/release/android/bin/app/build/outputs/apk/release/*.apk
 
+  # iOS 编译不依赖主机架构，用 Intel runner 同样能产出 arm64 IPA，
+  # 还能避开 arm64 容量池，减少和 macOS ARM64 抢 runner。
   build-ios:
     name: iOS
     needs: commit-info
@@ -139,7 +146,7 @@ jobs:
     if: ${{ inputs.iOS }}
     with:
       name: iOS
-      os: macos-15
+      os: macos-15-intel
       setupCommand: sh ./setup/unix.sh
       buildArgs: "ios -final -nosign -D officialBuild"
       artifactName: iOSBuild
@@ -155,43 +162,52 @@ jobs:
       contents: write
       actions: read
     steps:
+      # 下载条件同时看「是否勾选」和「该平台构建是否真的成功」：
+      # job 被 cancelled / failed 时不去下载不存在的 artifact；
+      # continue-on-error 保证单个平台产物缺失不会带崩其余平台的发布。
       - name: Download Windows
-        if: ${{ inputs.windows }}
+        if: ${{ inputs.windows && needs.build-windows.result == 'success' }}
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: windowsBuild-x86_64
           path: builds/windows
 
       - name: Download Linux
-        if: ${{ inputs.linux }}
+        if: ${{ inputs.linux && needs.build-linux.result == 'success' }}
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: linuxBuild-x86_64
           path: builds/linux
 
       - name: Download macOS x64
-        if: ${{ inputs.macos_x64 }}
+        if: ${{ inputs.macos_x64 && needs.build-macos-x64.result == 'success' }}
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: macOSBuild-x86_64
           path: builds/macos-x64
 
       - name: Download macOS arm64
-        if: ${{ inputs.macos_arm64 }}
+        if: ${{ inputs.macos_arm64 && needs.build-macos-arm64.result == 'success' }}
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: macOSBuild-arm64
           path: builds/macos-arm64
 
       - name: Download Android
-        if: ${{ inputs.android }}
+        if: ${{ inputs.android && needs.build-android.result == 'success' }}
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: androidBuild
           path: builds/android
 
       - name: Download iOS
-        if: ${{ inputs.iOS }}
+        if: ${{ inputs.iOS && needs.build-ios.result == 'success' }}
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: iOSBuild
@@ -199,25 +215,43 @@ jobs:
 
       - name: Compress & Prepare
         run: |
-          # runner 自带 7z，无需 apt install
-          if [ -d builds/windows ]; then cd builds/windows && 7z a -tzip ../../${{ env.PROJECT_NAME }}-windows.zip ./* && cd ../..; fi
-          if [ -d builds/linux ]; then cd builds/linux && 7z a -tzip ../../${{ env.PROJECT_NAME }}-linux.zip ./* && cd ../..; fi
-          if [ -d builds/macos-x64 ]; then cd builds/macos-x64 && 7z a -tzip ../../${{ env.PROJECT_NAME }}-macos-x64.zip ./* && cd ../..; fi
-          if [ -d builds/macos-arm64 ]; then cd builds/macos-arm64 && 7z a -tzip ../../${{ env.PROJECT_NAME }}-macos-arm64.zip ./* && cd ../..; fi
-          if [ -d builds/android ]; then cp builds/android/*.apk ./${{ env.PROJECT_NAME }}-android.apk; fi
-          if [ -d builds/ios ]; then cp builds/ios/*.ipa ./${{ env.PROJECT_NAME }}-ios.ipa; fi
+          # runner 自带 7z，无需 apt install。
+          # 只在目录里确实有文件时才打包：download-artifact 失败可能只留下空目录，
+          # 旧的 `-d` 判断会对空目录执行 7z ./*，产出空包甚至让步骤失败。
+          pack() {
+            src="$1"; out="$2"
+            if [ -d "$src" ] && [ -n "$(ls -A "$src" 2>/dev/null)" ]; then
+              (cd "$src" && 7z a -tzip "../../$out" ./*)
+            fi
+          }
+          pack builds/windows     "${{ env.PROJECT_NAME }}-windows.zip"
+          pack builds/linux       "${{ env.PROJECT_NAME }}-linux.zip"
+          pack builds/macos-x64   "${{ env.PROJECT_NAME }}-macos-x64.zip"
+          pack builds/macos-arm64 "${{ env.PROJECT_NAME }}-macos-arm64.zip"
+          if ls builds/android/*.apk >/dev/null 2>&1; then cp builds/android/*.apk "./${{ env.PROJECT_NAME }}-android.apk"; fi
+          if ls builds/ios/*.ipa >/dev/null 2>&1; then cp builds/ios/*.ipa "./${{ env.PROJECT_NAME }}-ios.ipa"; fi
 
       - name: Build file list & Release Info
         id: release_info
         run: |
-          # 动态构建文件列表——比在 YAML 里写一堆空行条件表达式更可靠
+          # 只收集真实存在的文件；用 if 而非 `[ -f ] && ...`，
+          # 避免 bash -e 下最后一条 `&&` 返回 1 时整步误退出。
           files=""
-          [ -f "${{ env.PROJECT_NAME }}-windows.zip" ] && files+="${{ env.PROJECT_NAME }}-windows.zip"$'\n'
-          [ -f "${{ env.PROJECT_NAME }}-linux.zip" ] && files+="${{ env.PROJECT_NAME }}-linux.zip"$'\n'
-          [ -f "${{ env.PROJECT_NAME }}-macos-x64.zip" ] && files+="${{ env.PROJECT_NAME }}-macos-x64.zip"$'\n'
-          [ -f "${{ env.PROJECT_NAME }}-macos-arm64.zip" ] && files+="${{ env.PROJECT_NAME }}-macos-arm64.zip"$'\n'
-          [ -f "${{ env.PROJECT_NAME }}-android.apk" ] && files+="${{ env.PROJECT_NAME }}-android.apk"$'\n'
-          [ -f "${{ env.PROJECT_NAME }}-ios.ipa" ] && files+="${{ env.PROJECT_NAME }}-ios.ipa"$'\n'
+          for f in \
+            "${{ env.PROJECT_NAME }}-windows.zip" \
+            "${{ env.PROJECT_NAME }}-linux.zip" \
+            "${{ env.PROJECT_NAME }}-macos-x64.zip" \
+            "${{ env.PROJECT_NAME }}-macos-arm64.zip" \
+            "${{ env.PROJECT_NAME }}-android.apk" \
+            "${{ env.PROJECT_NAME }}-ios.ipa"; do
+            if [ -f "$f" ]; then files+="$f"$'\n'; fi
+          done
+
+          # 一个产物都没下到就别创建空 Release（说明所有平台都失败/被取消了）。
+          if [ -z "$files" ]; then
+            echo "::error::没有下载到任何构建产物，终止发布。"
+            exit 1
+          fi
 
           if [ -n "${{ inputs.tag_name }}" ]; then
             tag="${{ inputs.tag_name }}"

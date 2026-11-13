@@ -1,0 +1,150 @@
+name: Build Only
+
+# 纯构建：只编译 + 上传 artifact，不创建 Release、不打 tag、不动仓库内容。
+# 产物在本次 Actions 运行页底部的 "Artifacts" 区下载（默认保留 90 天）。
+# 与 main.yml 的区别：可勾选平台、可切换 final 参数、默认避开紧张的 macOS arm64 容量池。
+
+concurrency:
+  group: build-only-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+    inputs:
+      windows:
+        description: 'Windows (x86_64)'
+        required: true
+        default: true
+        type: boolean
+      linux:
+        description: 'Linux (x86_64)'
+        required: true
+        default: true
+        type: boolean
+      macos_x64:
+        description: 'macOS (x86_64 / Intel)'
+        required: true
+        default: false
+        type: boolean
+      macos_arm64:
+        description: 'macOS (ARM64 / Apple Silicon)'
+        required: true
+        default: false
+        type: boolean
+      android:
+        description: 'Android'
+        required: true
+        default: true
+        type: boolean
+      iOS:
+        description: 'iOS'
+        required: true
+        default: false
+        type: boolean
+      finalBuild:
+        description: '附加 -final -D officialBuild（与 Release 相同的构建参数）'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  # 不需要 commit-info：那是 release.yml 用来生成 tag 的。
+  build-windows:
+    name: Windows
+    if: ${{ inputs.windows }}
+    uses: ./.github/workflows/build.yml
+    with:
+      name: Windows
+      os: windows-2022
+      setupCommand: .\setup\windows.bat
+      buildArgs: "windows ${{ inputs.finalBuild && '-final -D officialBuild' || '' }}"
+      artifactName: windowsBuild-x86_64
+      artifactPath: export\release\windows\bin\*
+
+  build-linux:
+    name: Linux
+    if: ${{ inputs.linux }}
+    uses: ./.github/workflows/build.yml
+    with:
+      name: Linux
+      os: ubuntu-24.04
+      setupCommand: sh ./setup/unix.sh
+      buildArgs: "linux ${{ inputs.finalBuild && '-final -D officialBuild' || '' }}"
+      artifactName: linuxBuild-x86_64
+      artifactPath: export/release/linux/bin/*
+
+  # `macos-15` 是 arm64；x64 版必须用 Intel 标签，架构也对。
+  build-macos-x64:
+    name: macOS x86_64
+    if: ${{ inputs.macos_x64 }}
+    uses: ./.github/workflows/build.yml
+    with:
+      name: macOS x86_64
+      os: macos-15-intel
+      setupCommand: sh ./setup/unix.sh
+      buildArgs: "mac -64 -D HXCPP_M64 ${{ inputs.finalBuild && '-final -D officialBuild' || '' }}"
+      artifactName: macOSBuild-x86_64
+      artifactPath: export/release/macos/bin/*
+
+  # 唯一留在 arm64 池里的 job，别和别的 macOS job 抢 runner。
+  build-macos-arm64:
+    name: macOS ARM64
+    if: ${{ inputs.macos_arm64 }}
+    uses: ./.github/workflows/build.yml
+    with:
+      name: macOS ARM64
+      os: macos-15
+      setupCommand: sh ./setup/unix.sh
+      buildArgs: "mac -arm64 -D HXCPP_ARM64 ${{ inputs.finalBuild && '-final -D officialBuild' || '' }}"
+      artifactName: macOSBuild-arm64
+      artifactPath: export/release/macos/bin/*
+
+  build-android:
+    name: Android
+    if: ${{ inputs.android }}
+    uses: ./.github/workflows/build.yml
+    with:
+      name: Android
+      os: ubuntu-24.04
+      setupCommand: sh ./setup/unix.sh
+      buildArgs: "android ${{ inputs.finalBuild && '-final -D officialBuild' || '' }}"
+      artifactName: androidBuild
+      artifactPath: export/release/android/bin/app/build/outputs/apk/release/*.apk
+
+  # iOS 编译不依赖主机架构，用 Intel runner 产出 arm64 IPA，顺便避开 arm64 容量池。
+  build-ios:
+    name: iOS
+    if: ${{ inputs.iOS }}
+    uses: ./.github/workflows/build.yml
+    with:
+      name: iOS
+      os: macos-15-intel
+      setupCommand: sh ./setup/unix.sh
+      buildArgs: "ios -nosign ${{ inputs.finalBuild && '-final -D officialBuild' || '' }}"
+      artifactName: iOSBuild
+      artifactPath: export/release/ios/build/Release-iphoneos/*.ipa
+
+  # 纯构建没有 Release 页面，用 job summary 直接列出每个平台的结果和产物名。
+  summary:
+    name: Build Summary
+    if: ${{ always() }}
+    needs: [build-windows, build-linux, build-macos-x64, build-macos-arm64, build-android, build-ios]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write summary
+        run: |
+          {
+            echo "## Build Only 结果"
+            echo ""
+            echo "| 平台 | Result | Artifact |"
+            echo "| --- | --- | --- |"
+            echo "| Windows | ${{ needs.build-windows.result }} | windowsBuild-x86_64 |"
+            echo "| Linux | ${{ needs.build-linux.result }} | linuxBuild-x86_64 |"
+            echo "| macOS x86_64 | ${{ needs.build-macos-x64.result }} | macOSBuild-x86_64 |"
+            echo "| macOS ARM64 | ${{ needs.build-macos-arm64.result }} | macOSBuild-arm64 |"
+            echo "| Android | ${{ needs.build-android.result }} | androidBuild |"
+            echo "| iOS | ${{ needs.build-ios.result }} | iOSBuild |"
+            echo ""
+            echo "skipped = 本次未勾选；cancelled = 没抢到 macOS runner（可重跑或分批构建）。"
+            echo "产物在本次运行页的 Artifacts 区下载，本 workflow 不会创建 Release。"
+          } >> "$GITHUB_STEP_SUMMARY"
