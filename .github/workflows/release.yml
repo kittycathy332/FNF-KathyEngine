@@ -155,19 +155,28 @@ jobs:
   release:
     name: Release
     needs: [commit-info, build-windows, build-linux, build-macos-x64, build-macos-arm64, build-android, build-ios]
-    # 至少勾选了一个平台，且至少有一个构建成功才继续
-    if: ${{ !cancelled() && (inputs.windows || inputs.linux || inputs.macos_x64 || inputs.macos_arm64 || inputs.android || inputs.iOS) && (needs.build-windows.result == 'success' || needs.build-linux.result == 'success' || needs.build-macos-x64.result == 'success' || needs.build-macos-arm64.result == 'success' || needs.build-android.result == 'success' || needs.build-ios.result == 'success') }}
+    # 发布门禁：本次勾选的平台必须「全部」构建成功才发布。
+    # 任一选中平台 failure / cancelled / 异常 skipped，整个 Release job 直接 skipped，
+    # 不会拿部分产物发一个残缺的包（`!inputs.x ||` 保证未勾选的平台不参与判定）。
+    if: >-
+      ${{ !cancelled() &&
+          (inputs.windows || inputs.linux || inputs.macos_x64 || inputs.macos_arm64 || inputs.android || inputs.iOS) &&
+          (!inputs.windows     || needs.build-windows.result == 'success') &&
+          (!inputs.linux       || needs.build-linux.result == 'success') &&
+          (!inputs.macos_x64   || needs.build-macos-x64.result == 'success') &&
+          (!inputs.macos_arm64 || needs.build-macos-arm64.result == 'success') &&
+          (!inputs.android     || needs.build-android.result == 'success') &&
+          (!inputs.iOS         || needs.build-ios.result == 'success') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
       actions: read
     steps:
-      # 下载条件同时看「是否勾选」和「该平台构建是否真的成功」：
-      # job 被 cancelled / failed 时不去下载不存在的 artifact；
-      # continue-on-error 保证单个平台产物缺失不会带崩其余平台的发布。
+      # 上面的门禁已保证「勾选的平台全部构建成功」，所以这里每个下载都应该成功。
+      # 故意不设 continue-on-error：任何一个产物下载失败就让 Release job 失败，
+      # 后续 Create Release 会被自动跳过，绝不发布缺平台的包。
       - name: Download Windows
         if: ${{ inputs.windows && needs.build-windows.result == 'success' }}
-        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: windowsBuild-x86_64
@@ -175,7 +184,6 @@ jobs:
 
       - name: Download Linux
         if: ${{ inputs.linux && needs.build-linux.result == 'success' }}
-        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: linuxBuild-x86_64
@@ -183,7 +191,6 @@ jobs:
 
       - name: Download macOS x64
         if: ${{ inputs.macos_x64 && needs.build-macos-x64.result == 'success' }}
-        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: macOSBuild-x86_64
@@ -191,7 +198,6 @@ jobs:
 
       - name: Download macOS arm64
         if: ${{ inputs.macos_arm64 && needs.build-macos-arm64.result == 'success' }}
-        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: macOSBuild-arm64
@@ -199,7 +205,6 @@ jobs:
 
       - name: Download Android
         if: ${{ inputs.android && needs.build-android.result == 'success' }}
-        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: androidBuild
@@ -207,7 +212,6 @@ jobs:
 
       - name: Download iOS
         if: ${{ inputs.iOS && needs.build-ios.result == 'success' }}
-        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: iOSBuild
