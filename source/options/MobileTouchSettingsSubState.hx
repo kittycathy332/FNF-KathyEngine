@@ -1,27 +1,13 @@
-/*
- * Copyright (C) 2025 Mobile Porting Team
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+package options;
+
+/**
+ * 移动端与触控 —— 分类重组阶段 2 自动生成。
+ * 选项来自：GameplaySettingsSubState.hx, MobileOptionsSubState.hx
+ * 共 22 项；辅助函数按需从源文件带入。
  */
-
-package mobile.options;
-
+import states.PlayState;
+import objects.KeyViewer;
+import backend.MusicBeatState;
 import mobile.backend.MobileScaleMode;
 import mobile.backend.HitboxImageImporter;
 import mobile.objects.Hitbox;
@@ -29,23 +15,89 @@ import flixel.input.keyboard.FlxKey;
 import options.BaseOptionsMenu;
 import options.Option;
 
-class MobileOptionsSubState extends BaseOptionsMenu
+class MobileTouchSettingsSubState extends BaseOptionsMenu
 {
 	final exControlTypes:Array<String> = ["0", "1", "2", "3", "4"];
 	final hintOptions:Array<String> = ["No Gradient", "No Gradient (Old)", "Gradient", "Hidden"];
-	var option:Option;
 
-	// 冲突项淡化：按 hitboxStyle 动态禁用/淡化
+	function onChangeVibration()
+	{
+		if(ClientPrefs.data.gameOverVibration)
+			lime.ui.Haptic.vibrate(0, 500);
+	}
+
 	var hitboxTypeOption:Option;
 	var hitboxImageFitOption:Option;
 	var hitboxImageTintOption:Option;
 	var hitboxImageImportOption:Option;
 	var hitboxImageRemoveOption:Option;
 
+
+		function refreshHitboxOptionStates():Void
+		{
+			var style:String = ClientPrefs.data.hitboxStyle;
+			var classic:Bool = style == 'Classic';
+			var image:Bool = style == 'Image';
+			var classicRequirement:String = Language.getWithFallback('hitbox_requirement_classic', 'Classic render style');
+			var imageRequirement:String = Language.getWithFallback('hitbox_requirement_image', 'Image render style');
+	
+			if (hitboxTypeOption != null)
+			{
+				hitboxTypeOption.disabled = !classic;
+				hitboxTypeOption.requirement = classicRequirement;
+			}
+			for (opt in [hitboxImageFitOption, hitboxImageTintOption, hitboxImageImportOption, hitboxImageRemoveOption])
+			{
+				if (opt != null)
+				{
+					opt.disabled = !image;
+					opt.requirement = imageRequirement;
+				}
+			}
+		}
+
+	override public function onOptionsBuilt():Void
+	{
+		super.onOptionsBuilt();
+		refreshHitboxOptionStates();
+	}
+
+	override function update(elapsed:Float)
+	{
+		super.update(elapsed);
+		refreshHitboxOptionStates();
+	}
+
+
 	public function new()
 	{
-		title = Language.get('mobile_options');
-		rpcTitle = 'Mobile Options Menu'; // for Discord Rich Presence, fuck it
+		title = Language.get('mobile_options_menu');
+		rpcTitle = 'Mobile & Touch Menu';
+
+		var rebuildHitbox = () ->
+		{
+			removeMobileControls();
+			addMobileControls();
+			if (mobileControls != null && mobileControls.instance != null)
+				mobileControls.instance.visible = true;
+		};
+
+		var hitboxImageFitOption:Option;
+		var hitboxImageImportOption:Option;
+		var hitboxImageRemoveOption:Option;
+		var hitboxImageTintOption:Option;
+		var hitboxTypeOption:Option;
+		var mobileCompOption: Option;
+		var mobileOffsetOption: Option;
+		var option: Option;
+
+
+
+
+
+
+
+
 
 		option = new Option(Language.get('extra_controls'), Language.get("extra_controls_desc"),
 			'extraButtons', STRING, exControlTypes);
@@ -56,7 +108,6 @@ class MobileOptionsSubState extends BaseOptionsMenu
 			addMobileControls();
 		};
 		addOption(option);
-
 		option = new Option(Language.get('extra_key_bindings'),
 			Language.get("extra_key_bindings_desc"), '_extraKeyBindings', BUTTON);
 		option.onChange = () ->
@@ -65,33 +116,13 @@ class MobileOptionsSubState extends BaseOptionsMenu
 			openSubState(new mobile.substates.MobileExtraControl(this));
 		};
 		addOption(option);
-
-		option = new Option(Language.get('mobile_controls_opacity'),
-			Language.get("mobile_controls_opacity_desc"), 'controlsAlpha', PERCENT);
-		option.scrollSpeed = 1;
-		option.minValue = 0.001;
-		option.maxValue = 1;
-		option.changeValue = 0.1;
-		option.decimals = 1;
-		option.onChange = () ->
-		{
-			touchPad.alpha = curOption.getValue();
-			ClientPrefs.toggleVolumeKeys();
-		};
-		addOption(option);
-
-		#if mobile
-		option = new Option(Language.getWithFallback('keep_screen_on', 'Keep Screen On'),
-			Language.getWithFallback('keep_screen_on_desc', 'Prevents the screen from turning off while the game is running.'), 'keepScreenOn', BOOL);
-		option.onChange = () -> MobileUtil.setKeepScreenOn(curOption.getValue());
-		addOption(option);
-
 		option = new Option(Language.get('wide_screen_mode'),
 			Language.get("wide_screen_mode_desc"),
 			'wideScreen', BOOL);
 		option.onChange = () -> FlxG.scaleMode = new MobileScaleMode();
 		addOption(option);
-		#end
+
+
 
 		if (MobileData.mode == 3)
 		{
@@ -116,33 +147,31 @@ class MobileOptionsSubState extends BaseOptionsMenu
 			option.onChange = rebuildHitbox;
 			addOption(option);
 
+
+
 			// ===== psychmobile 样式 / 配色 / 自定义图片 =====
 			option = new Option(Language.getWithFallback('hitbox_style', 'Hitbox Style'),
 				Language.getWithFallback('hitbox_style_desc', 'Choose the hitbox rendering style. Classic keeps the legacy design option below.'),
 				'hitboxStyle', STRING, Hitbox.STYLES);
 			option.onChange = rebuildHitbox;
 			addOption(option);
-
 			option = new Option(Language.getWithFallback('hitbox_colors', 'Hitbox Colors'),
 				Language.getWithFallback('hitbox_colors_desc', 'Color palette used by the hitbox. Notes preserves the classic arrow colors.'),
 				'hitboxColors', STRING, Hitbox.COLOR_MODES);
 			option.onChange = rebuildHitbox;
 			addOption(option);
-
 			option = new Option(Language.getWithFallback('hitbox_image_fit', 'Image Fit'),
 				Language.getWithFallback('hitbox_image_fit_desc', 'How the custom image is scaled inside each lane (Image style only).'),
 				'hitboxImageFit', STRING, Hitbox.IMAGE_FITS);
 			option.onChange = rebuildHitbox;
 			hitboxImageFitOption = option;
 			addOption(option);
-
 			option = new Option(Language.getWithFallback('hitbox_image_tint', 'Image Tint'),
 				Language.getWithFallback('hitbox_image_tint_desc', 'Tint the custom image with the lane color (Image style only).'),
 				'hitboxImageTint', BOOL);
 			option.onChange = rebuildHitbox;
 			hitboxImageTintOption = option;
 			addOption(option);
-
 			option = new Option(Language.getWithFallback('hitbox_image_import', 'Import Hitbox Image'),
 				Language.getWithFallback('hitbox_image_import_desc', 'Pick an image through the system file picker. Saved as mobile/hitbox_image.png.'), '_hitboxImageImport',
 				BUTTON);
@@ -165,7 +194,6 @@ class MobileOptionsSubState extends BaseOptionsMenu
 			};
 			hitboxImageImportOption = option;
 			addOption(option);
-
 			option = new Option(Language.getWithFallback('hitbox_image_remove', 'Remove Hitbox Image'),
 				Language.getWithFallback('hitbox_image_remove_desc', 'Delete the imported image and fall back to the Gradient style.'), '_hitboxImageRemove',
 				BUTTON);
@@ -179,6 +207,8 @@ class MobileOptionsSubState extends BaseOptionsMenu
 			hitboxImageRemoveOption = option;
 			addOption(option);
 
+
+
 			// ===== 旧版 Hitbox 设计（hitboxStyle='Classic' 时生效）=====
 			option = new Option(Language.get('hitbox_design'), Language.get("hitbox_design_desc"), 'hitboxType', STRING, hintOptions);
 			option.valueLocalizations = [
@@ -189,19 +219,18 @@ class MobileOptionsSubState extends BaseOptionsMenu
 			];
 			hitboxTypeOption = option;
 			addOption(option);
-
 			option = new Option(Language.get('hitbox_position'), Language.get("hitbox_position_desc"),
 				'hitboxPos', BOOL);
 			addOption(option);
-
 			option = new Option(Language.get('hitbox_animation'), Language.get("hitbox_animation_desc"),
 				'hitboxAnimation', BOOL);
 			addOption(option);
-
 			option = new Option(Language.get('hitbox_hide_idle'), Language.get("hitbox_hide_idle_desc"),
 				'hitboxHideIdle', BOOL);
 			option.onChange = rebuildHitbox;
 			addOption(option);
+
+
 
 			// Extra Keys：触屏多键轨道模式（auto = 跟随谱面键数 / 4k = 固定 4 键）
 			option = new Option(Language.get('touch_lane_mode'),
@@ -210,6 +239,8 @@ class MobileOptionsSubState extends BaseOptionsMenu
 				STRING,
 				['auto', '4k']);
 			addOption(option);
+
+
 
 			// 进入页面即显示当前样式的预览
 			if (mobileControls != null && mobileControls.instance != null)
@@ -233,54 +264,64 @@ class MobileOptionsSubState extends BaseOptionsMenu
 		};
 		addOption(option);
 
-		// 打开数据目录（Android 走 DocumentsProvider；桌面打开工作目录）
-		option = new Option(Language.getWithFallback('open_data_folder', 'Open Data Folder'),
-			Language.getWithFallback('open_data_folder_desc', 'Open the game data folder in a file manager.'), '_openDataFolder', BUTTON);
-		option.onChange = () ->
-		{
-			if (!MobileUtil.openDataFolder())
-				CoolUtil.showPopUp(Language.getWithFallback('open_data_folder_failed', 'Could not open the data folder.'), 'Data Folder');
-		};
-		addOption(option);
 
+
+		// 打开数据目录（Android 走 DocumentsProvider；桌面打开工作目录）
 		option = new Option(Language.get('dynamic_controls_color'),
 			Language.get("dynamic_controls_color_desc"), 'dynamicColors',
 			BOOL);
 		addOption(option);
+		option = new Option(Language.get('mobile_controls_opacity'),
+			Language.get("mobile_controls_opacity_desc"), 'controlsAlpha', PERCENT);
+		option.scrollSpeed = 1;
+		option.minValue = 0.001;
+		option.maxValue = 1;
+		option.changeValue = 0.1;
+		option.decimals = 1;
+		option.onChange = () ->
+		{
+			touchPad.alpha = curOption.getValue();
+			ClientPrefs.toggleVolumeKeys();
+		};
+		addOption(option);
+		#if mobile
+		option = new Option(Language.get('game_over_vibration'),
+			Language.get("gameovervibration_desc"),
+			'gameOverVibration',
+			BOOL);
+		addOption(option);
+
+
+		option.onChange = onChangeVibration;
+		#end
+		#if mobile
+		mobileCompOption = new Option(Language.get('mobile_judgment_compensation'),
+			Language.get("mobilejudgmentcomp_desc", ["自动为触屏输入叠加判定偏移以补偿触屏延迟"]),
+			'mobileJudgmentCompensation',
+			BOOL);
+		addOption(mobileCompOption);
+		#end
+		#if mobile
+		mobileOffsetOption = new Option(Language.get('mobile_judgment_offset'),
+			Language.get("mobilejudgmentoffset_desc", ["移动端判定补偿量（毫秒）"]),
+			'mobileJudgmentOffset',
+			FLOAT);
+		mobileOffsetOption.displayFormat = '%vms';
+		mobileOffsetOption.scrollSpeed = 5;
+		mobileOffsetOption.minValue = 0.0;
+		mobileOffsetOption.maxValue = 30.0;
+		mobileOffsetOption.changeValue = 1.0;
+		addOption(mobileOffsetOption);
+		#end
+		#if mobile
+		option = new Option(Language.getWithFallback('keep_screen_on', 'Keep Screen On'),
+			Language.getWithFallback('keep_screen_on_desc', 'Prevents the screen from turning off while the game is running.'), 'keepScreenOn', BOOL);
+		option.onChange = () -> MobileUtil.setKeepScreenOn(curOption.getValue());
+		addOption(option);
+		#end
+
+
 
 		super();
-	}
-
-	override function update(elapsed:Float)
-	{
-		super.update(elapsed);
-		refreshHitboxOptionStates();
-	}
-
-	/**
-	 * 冲突项淡化：hitboxType 只在 Classic 样式下可用；图片相关项只在 Image 样式下可用。
-	 * disabled 会影响标签淡化与交互拦截（BaseOptionsMenu 内统一处理）。
-	 */
-	function refreshHitboxOptionStates():Void
-	{
-		var style:String = ClientPrefs.data.hitboxStyle;
-		var classic:Bool = style == 'Classic';
-		var image:Bool = style == 'Image';
-		var classicRequirement:String = Language.getWithFallback('hitbox_requirement_classic', 'Classic render style');
-		var imageRequirement:String = Language.getWithFallback('hitbox_requirement_image', 'Image render style');
-
-		if (hitboxTypeOption != null)
-		{
-			hitboxTypeOption.disabled = !classic;
-			hitboxTypeOption.requirement = classicRequirement;
-		}
-		for (opt in [hitboxImageFitOption, hitboxImageTintOption, hitboxImageImportOption, hitboxImageRemoveOption])
-		{
-			if (opt != null)
-			{
-				opt.disabled = !image;
-				opt.requirement = imageRequirement;
-			}
-		}
 	}
 }

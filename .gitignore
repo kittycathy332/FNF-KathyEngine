@@ -29,3 +29,9 @@ art/build_html-debug.bat
 ### misc for programming
 .psychref/*
 #.codebuddy/*
+
+# vibeCode things
+.workbuddy/*
+.codebuddy/*
+.trae/*
+

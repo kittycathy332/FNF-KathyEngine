@@ -20,35 +20,35 @@ import haxe.ui.events.MouseEvent;
 
 class OptionsState extends MusicBeatState
 {
+	// ===== 分类重组后的一级入口（10 个语义分类 + 1 个工具与校准）=====
+	// 原先的 5 个专用页（箭头颜色 / 键位 / 两个偏移校准 / 窗口管理）已收进 ToolsSettingsSubState。
+	// 注意：options 与 optionDescriptions 必须严格一一对应。
 	public var options:Array<String> = [
-		Language.get("note_colors"),
-		Language.get("controls"),
-		Language.get("adjust_delay_combo"),
-		Language.get("adjust_rating_offset"),
+		Language.get("system"),
 		Language.get("graphics"),
-		Language.get("visuals"),
-		Language.get("gameplay")
-		#if (cpp && windows && !mobile), Language.get("window_manager") #end,
-		Language.get("extra_options"),
-		Language.get("spam_chart"),
-		Language.get("compatibility")
-		//#if TRANSLATIONS_ALLOWED , Language.get("language") #end
-		#if mobile , Language.get("mobile_options") #end
+		Language.get("compatibility"),
+		Language.get("hud"),
+		Language.get("health_icons"),
+		Language.get("judgment"),
+		Language.get("notes_visual"),
+		Language.get("audio"),
+		Language.get("debug_display"),
+		Language.get("mobile_options"),
+		Language.get("tools")
 	];
 
 	public var optionDescriptions:Array<String> = [
-		Language.get("note_colors_desc"),
-		Language.get("controls_desc"),
-		Language.get("adjust_delay_combo_desc"),
-		Language.get("adjust_rating_offset_desc"),
+		Language.get("system_desc"),
 		Language.get("graphics_desc"),
-		Language.get("visuals_desc"),
-		Language.get("gameplay_desc")
-		#if (cpp && windows && !mobile), Language.get("window_manager_desc") #end,
-		Language.get("extra_options_desc"),
-		Language.get("spam_chart_desc"),
-		Language.get("compatibility_desc")
-		#if mobile , Language.get("mobile_options_desc") #end
+		Language.get("compatibility_desc"),
+		Language.get("hud_desc"),
+		Language.get("health_icons_desc"),
+		Language.get("judgment_desc"),
+		Language.get("notes_visual_desc"),
+		Language.get("audio_desc"),
+		Language.get("debug_display_desc"),
+		Language.get("mobile_options_desc"),
+		Language.get("tools_desc")
 	];
 	
 	private var grpOptions:FlxTypedGroup<FlxText>;
@@ -212,25 +212,22 @@ class OptionsState extends MusicBeatState
 		// 打开 Graphics 子界面时 sideGif 向上飞出 + 标题滑正中（进子界面后才触发，高亮不触发）
 		triggerSideGifOut(label == Language.get("graphics"));
 
+		// ===== 分类重组完成 =====
+		// 10 个语义分类 + 1 个工具与校准，全部指向新建的 SubState。
+		// 旧 7 个子界面文件已删除；独立设置页仍由 HUD 分类里的 _fpsSettings 按钮进入。
 		var substateMap:Map<String, () -> Void> = [
-			Language.get("note_colors") => () -> openSubState(ClientPrefs.data.arrowColorMode == 'HSV' ? new options.NotesColorSubStateLegacy() : new options.NotesColorSubState()),
-			Language.get("controls") => () -> openSubState(new options.ControlsSubState()),
-			Language.get("graphics") => () -> openSubState(new options.GraphicsSettingsSubState()),
-			Language.get("visuals") => () -> openSubState(new options.VisualsSettingsSubState()),
-			Language.get("gameplay") => () -> openSubState(new options.GameplaySettingsSubState()),
-			Language.get("extra_options") => () -> openSubState(new options.ExtraGameplaySettingSubState()),
-			Language.get("spam_chart") => () -> openSubState(new options.SpamChartSettingsSubState()),
-			Language.get("compatibility") => () -> openSubState(new options.CompatibilitySettingsSubState()),
-			Language.get("adjust_delay_combo") => () -> MusicBeatState.switchState(new options.NoteOffsetState()),
-			Language.get("adjust_rating_offset") => () -> MusicBeatState.switchState(new options.RatingOffsetState()),
-			Language.get("mobile_options") => () -> openSubState(new mobile.options.MobileOptionsSubState())
+			Language.get("judgment") => () -> openSubState(new options.JudgmentSettingsSubState()),
+			Language.get("tools") => () -> openSubState(new options.ToolsSettingsSubState()),
+			Language.get("notes_visual") => () -> openSubState(new options.NotesVisualSettingsSubState()),
+			Language.get("hud") => () -> openSubState(new options.HudSettingsSubState()),
+			Language.get("audio") => () -> openSubState(new options.AudioSettingsSubState()),
+			Language.get("health_icons") => () -> openSubState(new options.HealthIconsSettingsSubState()),
+			Language.get("graphics") => () -> openSubState(new options.GraphicsPerformanceSettingsSubState()),
+			Language.get("mobile_options") => () -> openSubState(new options.MobileTouchSettingsSubState()),
+			Language.get("system") => () -> openSubState(new options.SystemWindowSettingsSubState()),
+			Language.get("compatibility") => () -> openSubState(new options.CompatibilityScriptsSubState()),
+			Language.get("debug_display") => () -> openSubState(new options.DebugPanelsSettingsSubState())
 		];
-		
-		#if (cpp && windows && !mobile)
-			substateMap[Language.get("window_manager")] = () -> {
-				MusicBeatState.switchState(new states.WindowManagerState());
-			};
-	#end
 
 		if (substateMap.exists(label)) {
 			substateMap.get(label)();

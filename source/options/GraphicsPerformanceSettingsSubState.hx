@@ -6,7 +6,7 @@ import flixel.util.FlxColor;
 import flixel.math.FlxPoint;
 import flixel.text.FlxText;
 
-class GraphicsSettingsSubState extends BaseOptionsMenu
+class GraphicsPerformanceSettingsSubState extends BaseOptionsMenu
 {
 	var antialiasingOption:Int;
 	var arisDance:Int;
@@ -31,89 +31,140 @@ class GraphicsSettingsSubState extends BaseOptionsMenu
 
 	public function new()
 		{
-			title = Language.get('graphics_menu');
-			rpcTitle = 'Graphics Settings Menu';
 
-			#if desktop
-			// 伪窗口边框：去掉系统标题栏和边框，改用游戏内标题栏/边框
-			var option:Option = new Option(Language.get('borderless_name'),
-				Language.get('borderless_desc'),
-				'borderless',
-				BOOL);
-			option.onChange = function()
-			{
-				backend.PseudoTitleBar.applySettings();
-			};
-			addOption(option);
-			#end
+		var option: Option;
 
-			// 图形设置选项
-			var option:Option = new Option(Language.get('low_quality'),
+
+
+
+
+
+		option = new Option(Language.get('gc_on_resume'),
+			Language.get("gc_on_resume_desc"),
+			'gcOnResume',
+			BOOL);
+		addOption(option);
+		option = new Option(Language.get('fixed_timestep'),
+			Language.get("fixed_timestep_desc"),
+			'fixedTimestep',
+			BOOL);
+		addOption(option);
+
+
+		option.onChange = function() {
+			FlxG.fixedTimestep = ClientPrefs.data.fixedTimestep;
+			trace("Fixed timestep changed to: " + FlxG.fixedTimestep);
+		};
+
+		// ===== 渲染质量（StageQuality） =====
+		option = new Option(Language.get('stage_quality'),
+			Language.get("stage_quality_desc"),
+			'stageQuality',
+			STRING,
+			['LOW', 'MEDIUM', 'HIGH', 'BEST']);
+		option.onChange = function() {
+			FlxG.stage.quality = ClientPrefs.getStageQuality();
+		};
+		addOption(option);
+
+
+
+		// ===== 低延迟 / 性能模式 =====
+		option = new Option(Language.get('garbage_collector_name'),
+			Language.get("garbage_collector_desc"),
+			'garbageCollectorEnabled',
+			BOOL);
+		option.onChange = function() {
+			// 变更后立即生效
+			Main.applyGarbageCollectorSetting();
+		};
+		addOption(option);
+
+
+
+	// PERCENT 类型设置
+		option = new Option(Language.get('instant_resolve_expired_notes'),
+			Language.get("instant_resolve_expired_desc"),
+			'instantResolveExpired',
+			BOOL);
+		addOption(option);
+		option = new Option(Language.get('disable_per_note_scripts'),
+			Language.get("disable_note_lua_desc"),
+			'disableNoteLua',
+			BOOL);
+		addOption(option);
+		option = new Option(Language.get('note_performance_optimization'),
+			Language.get("note_optimization_desc"),
+			'noteOptimization',
+			BOOL);
+		addOption(option);
+		option = new Option(Language.get('note_object_pooling'),
+			Language.get("note_pooling_desc"),
+			'notePooling',
+			BOOL);
+		addOption(option);
+		option = new Option(Language.get('flashing_lights'),
+			Language.get("flashinglights_desc"),
+			'flashing',
+			BOOL);
+		addOption(option);
+
+
+
+		// 画面每拍缩放特效（标题界面 3%，主界面 1.5%）
+		option = new Option(Language.get('camera_zooms'),
+			Language.get("camerazooms_desc"),
+			'camZooms',
+			BOOL);
+		addOption(option);
+			option = new Option(Language.get('low_quality'),
 				Language.get("low_quality_desc"),
 				'lowQuality',
 				BOOL);
 			addOption(option);
-
-			var option:Option = new Option(Language.get('anti_aliasing'),
+			option = new Option(Language.get('anti_aliasing'),
 				Language.get("antialiasing_desc"),
 				'antialiasing',
 				BOOL);
 			option.onChange = onChangeAntiAliasing;
 			addOption(option);
-			antialiasingOption = optionsArray.length - 1;
 
-			var option:Option = new Option(Language.get('shaders'),
+
+			antialiasingOption = optionsArray.length - 1;
+			option = new Option(Language.get('shaders'),
 				Language.get("shaders_desc"),
 				'shaders',
 				BOOL);
 			addOption(option);
-
-			var option:Option = new Option(Language.get('gpu_caching'),
+			option = new Option(Language.get('gpu_caching'),
 				Language.get("gpu_caching_desc"),
 				'cacheOnGPU',
 				BOOL);
 			addOption(option);
-
-			var option:Option = new Option(Language.get('playstate_pixel_perfect'),
+			option = new Option(Language.get('playstate_pixel_perfect'),
 				Language.get("playstate_pixel_perfect_desc"),
 				'playStatePixelPerfect',
 				BOOL);
 			addOption(option);
-
-			var option:Option = new Option(Language.get('resource_caching_on_reload'),
-				Language.get("resource_caching_desc"),
-				'cacheResourcesOnReload',
-				BOOL);
-			addOption(option);
-
-			// 图片资源加载失败时，就地显示「L 形角标 + 缺失路径」占位标记
-			var option:Option = new Option(Language.get('asset_error_overlay'),
-				Language.get("asset_error_overlay_desc"),
-				'assetErrorOverlay',
-				BOOL);
-			option.onChange = function()
-			{
-				// 即时生效：清掉占位图缓存，后续对缺失资源的请求按新开关立即重建。
-				AssetErrorOverlay.clearCache();
-			}
-			addOption(option);
-
-			var option:Option = new Option(Language.get('optimized_note_loading'),
+			option = new Option(Language.get('optimized_note_loading'),
 				Language.get("optimized_note_loading_desc"),
 				'useOptimizedNoteLoading',
 				STRING,
 				['OFF', 'ON', 'AUTO']);
 			addOption(option);
 
+
+
 			#if !html5
 			// 帧率设置（非HTML5平台）
-			var option:Option = new Option(Language.get('framerate'),
+			option = new Option(Language.get('framerate'),
 				Language.get("framerate_desc"),
 				'framerate',
 				INT);
 			addOption(option);
-			arisDance = optionsArray.length - 1;
 
+
+			arisDance = optionsArray.length - 1;
 			final refreshRate:Int = FlxG.stage.application.window.displayMode.refreshRate;
 			option.minValue = 20;
 			option.maxValue = 1000;
@@ -121,54 +172,30 @@ class GraphicsSettingsSubState extends BaseOptionsMenu
 			option.displayFormat = '%v FPS';
 			option.onChange = onChangeFramerate;
 			#end
-
-			var option:Option = new Option(Language.get('fps_rework'),
-				Language.get("fps_rework_desc"),
-				'fpsRework',
-				BOOL);
-			addOption(option);
-
-			// PlayState宽屏自适应
-			var option:Option = new Option(Language.get('playstate_adaptive_width'),
+			option = new Option(Language.get('playstate_adaptive_width'),
 				Language.get("playstate_adaptive_width_desc"),
 				'playStateAdaptiveWidth',
 				BOOL);
 			addOption(option);
 
+
+
 			// 制谱器分辨率跟随窗口
-			var option:Option = new Option(Language.get('chart_editor_follow_window'),
+			option = new Option(Language.get('chart_editor_follow_window'),
 				Language.get("chart_editor_follow_window_desc"),
 				'chartEditorFollowWindow',
 				BOOL);
 			addOption(option);
 
-			// 制谱器深浅色主题
-			var option:Option = new Option(Language.get('chart_editor_theme'),
-				Language.get("chart_editor_theme_desc"),
-				'chartEditorTheme',
-				STRING,
-				['Default', 'Light', 'Dark']);
-			addOption(option);
 
-			// 飞溅数量限制设置
-			var option:Option = new Option(Language.get('splash_limit'),
+
+			// 制谱器深浅色主题
+			option = new Option(Language.get('splash_limit'),
 				Language.get("splash_limit_desc"),
 				'splashLimitEnabled',
 				BOOL);
 			addOption(option);
-
-			var option:Option = new Option(Language.get('max_splashes'),
-				Language.get("max_splashes_desc"),
-				'splashLimit',
-				INT);
-			option.minValue = 1;
-			option.maxValue = 128;
-			option.defaultValue = 16;
-			option.displayFormat = '%v';
-			addOption(option);
-
-			// 飞溅超限处理模式：现状（达到上限则忽略）或 覆盖（销毁最早生成的那个再生成）
-			var option:Option = new Option(Language.get('splash_limit_mode'),
+			option = new Option(Language.get('splash_limit_mode'),
 				Language.get("splash_limit_mode_desc"),
 				'splashLimitMode',
 				STRING,
@@ -180,14 +207,43 @@ class GraphicsSettingsSubState extends BaseOptionsMenu
 			option.defaultValue = 'skip';
 			addOption(option);
 
+
+
 			// Hold Cover 数量限制设置（与飞溅数量限制类似）
-			var option:Option = new Option(Language.get('hold_cover_limit'),
+			option = new Option(Language.get('hold_cover_limit'),
 				Language.get("hold_cover_limit_desc"),
 				'holdCoverLimitEnabled',
 				BOOL);
 			addOption(option);
+			option = new Option(Language.get('show_loading_screen'),
+				Language.get("show_loading_screen_desc"),
+				'loadingScreen',
+				BOOL);
+			addOption(option);
+		option = new Option(Language.get('max_notes_spawned_frame'),
+			Language.get("max_notes_per_frame_desc"),
+			'maxNotesPerFrame',
+			INT);
+		option.scrollSpeed = 60;
+		option.minValue = 0;
+		option.maxValue = 300;
+		option.changeValue = 5;
+		option.decimals = 0;
+		addOption(option);
+			option = new Option(Language.get('max_splashes'),
+				Language.get("max_splashes_desc"),
+				'splashLimit',
+				INT);
+			option.minValue = 1;
+			option.maxValue = 128;
+			option.defaultValue = 16;
+			option.displayFormat = '%v';
+			addOption(option);
 
-			var option:Option = new Option(Language.get('max_hold_covers'),
+
+
+			// 飞溅超限处理模式：现状（达到上限则忽略）或 覆盖（销毁最早生成的那个再生成）
+			option = new Option(Language.get('max_hold_covers'),
 				Language.get("max_hold_covers_desc"),
 				'holdCoverLimit',
 				INT);
@@ -197,8 +253,10 @@ class GraphicsSettingsSubState extends BaseOptionsMenu
 			option.displayFormat = '%v';
 			addOption(option);
 
+
+
 			// 资源加载线程数（默认 1 = 单线程；数值越大加载越并行，但更耗内存、低端机可能 OOM）
-			var option:Option = new Option(Language.get('loading_threads'),
+			option = new Option(Language.get('loading_threads'),
 				Language.get("loading_threads_desc"),
 				'loadingThreadCount',
 				INT);
@@ -209,11 +267,33 @@ class GraphicsSettingsSubState extends BaseOptionsMenu
 			addOption(option);
 
 			// 是否显示进入歌曲时的加载界面
-			var option:Option = new Option(Language.get('show_loading_screen'),
-				Language.get("show_loading_screen_desc"),
-				'loadingScreen',
+		option = new Option(Language.get('batch_compact_notes'),
+			Language.get("batch_compact_notes_desc"),
+			'batchCompactNotes',
+			BOOL);
+		addOption(option);
+		option = new Option(Language.get('hide_missed_notes_cull'),
+			Language.get("hide_missed_notes_desc"),
+			'hideMissedNotes',
+			BOOL);
+		addOption(option);
+		option = new Option(Language.get('fps_rework'),
+			Language.get("fps_rework_desc"),
+			'fpsRework',
+			BOOL);
+		addOption(option);
+			option = new Option(Language.get('resource_caching_on_reload'),
+				Language.get("resource_caching_desc"),
+				'cacheResourcesOnReload',
 				BOOL);
 			addOption(option);
+
+			// 图片资源加载失败时，就地显示「L 形角标 + 缺失路径」占位标记
+
+
+
+
+
 
 			super();
 

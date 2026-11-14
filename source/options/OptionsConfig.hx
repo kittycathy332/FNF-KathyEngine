@@ -7,7 +7,8 @@ package options;
 class OptionsConfig
 {
 	// Layout spacing
-	public static final ITEM_SPACING:Int = 72;
+	// 分类重组后入口数为 11，双栏 6 行；从 72 收紧到 60，避免末行与底部描述区重叠。
+	public static final ITEM_SPACING:Int = 60;
 	public static final LEFT_MARGIN:Int = 120;
 
 	// Animation speeds
