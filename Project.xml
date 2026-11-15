@@ -120,7 +120,7 @@
 	<haxelib name="openfl"/>
 	<haxelib name="lime"/>
 	<haxelib name="hxcpp"/>
-	<haxelib name="libhxcpp"/>
+	<!-- <haxelib name="libhxcpp"/> -->
 	<haxelib name="extension-androidtools" if="android"/>
 	<!-- 原生桥接（Toast / 电量 / 常亮 / SAF 图片导入），不新增 Gradle 模块 -->
 	<java path="project/android/jni" if="android"/>
