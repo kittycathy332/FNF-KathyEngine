@@ -8725,6 +8725,9 @@ tempScore += '${lblScore}: ${songScore}';
 	}
 
 	override function destroy() {
+		// 兜底：即使某个退出路径没经过 preStateSwitch，也要安全收尾渲染
+		// （关 ffmpeg 管道、恢复全局帧率、移除全局信号监听）
+		if (backend.RenderClock.active) backend.RenderClock.abort('PlayState destroyed');
 		if (keyViewer != null)
 		{
 			keyViewer.destroy();

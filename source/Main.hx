@@ -629,6 +629,9 @@ class Main extends Sprite
 			return;
 		isExiting = true;
 
+		// 直接点窗口关闭按钮时不经过 requestExit，这里也要收尾渲染
+		if (backend.RenderClock.active) backend.RenderClock.abort('app exit (close button)', true);
+
 		// 停止关闭检查定时器（性能优化）
 		stopCloseCheckTimer();
 
@@ -670,6 +673,10 @@ class Main extends Sprite
 	{
 		if (isExitRequested) return;
 		isExitRequested = true;
+
+		// 先收尾渲染再保存设置：abort 会恢复被渲染临时改掉的 framerate，
+		// 否则会把 60 之类的临时值写进玩家存档，并留下未 finalize 的 MP4。
+		if (backend.RenderClock.active) backend.RenderClock.abort('app exit', true);
 
 		try
 		{

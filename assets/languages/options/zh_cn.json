@@ -843,5 +843,6 @@
     "render_encoder": "视频编码器",
     "render_encoder_desc": "选择 H.264 编码器。若所选硬件编码器在当前设备不可用，将自动回退到 CPU 编码。",
     "render_encoder_x264": "CPU · libx264（兼容）",
-    "render_encoder_nvenc": "GPU · h264_nvenc"
+    "render_encoder_nvenc": "GPU · h264_nvenc",
+    "render_abort_popup": "渲染已中断。已渲染的部分已保存为可播放的片段："
 }

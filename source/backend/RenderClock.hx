@@ -60,6 +60,8 @@ class RenderClock
 	static var _height:Int = 720;
 	static var _songName:String = '';
 	static var _frameReady:Bool = false;
+	static var _interrupted:String = '';
+	static var _skippedSubFrames:Int = 0;
 	static var _usePipe:Bool = false;
 	static var _usePNG:Bool = true;
 	static var _cutscenes:Array<String> = [];
@@ -116,6 +118,8 @@ class RenderClock
 		_firstError = '';
 		_errorCount = 0;
 		_frameReady = false;
+		_interrupted = '';
+		_skippedSubFrames = 0;
 		logLine('[begin] ' + _songName + ' / ' + _fps + 'fps / ' + _width + 'x' + _height);
 		logLine('[output] ' + outputDir);
 
@@ -174,6 +178,12 @@ class RenderClock
 		if (FlxG.signals.postDraw.has(onPostDraw)) FlxG.signals.postDraw.remove(onPostDraw);
 		FlxG.signals.preUpdate.add(onPreUpdate);
 		FlxG.signals.postDraw.add(onPostDraw);
+		// 渲染期间任何 state 切换 / 游戏 reset 都视为中断，必须安全收尾：
+		// 否则全局监听会继续录菜单、全局帧率设置不恢复、ffmpeg 管道不关闭导致 MP4 损坏。
+		if (FlxG.signals.preStateSwitch.has(onStateLeaving)) FlxG.signals.preStateSwitch.remove(onStateLeaving);
+		if (FlxG.signals.preGameReset.has(onStateLeaving)) FlxG.signals.preGameReset.remove(onStateLeaving);
+		FlxG.signals.preStateSwitch.add(onStateLeaving);
+		FlxG.signals.preGameReset.add(onStateLeaving);
 
 		active = true;
 		requested = false;
@@ -185,9 +195,23 @@ class RenderClock
 	static function onPreUpdate():Void
 	{
 		if (!active) return;
+		// 暂停菜单 / 淡入转场等 subState 打开时冻结渲染时钟：不推进帧号、不截帧。
+		// 否则暂停界面会被录进成片，且虚拟时间轴会继续往前跑。
+		if (FlxG.state != null && FlxG.state.subState != null)
+		{
+			_frameReady = false;
+			_skippedSubFrames++;
+			return;
+		}
 		_frameReady = true;
 		var rate:Float = (PlayState.instance != null) ? PlayState.instance.playbackRate : 1;
 		Conductor.songPosition = _startSongPos + frame * (1000 / _fps) * rate;
+	}
+
+	/** state 切换 / resetGame：中断渲染 */
+	static function onStateLeaving():Void
+	{
+		if (active) abort('state switch / game reset');
 	}
 
 	/** 每帧一次：截屏落盘，然后推进帧号 */
@@ -294,13 +318,17 @@ class RenderClock
 		catch (e:Dynamic) logLine('[freezeAudio error] ' + Std.string(e));
 	}
 
-	public static function finish():Void
+	/** 公共清理：移除全部全局钩子、恢复全局状态。不写日志、不弹窗、不碰编码器 */
+	static function cleanup():Void
 	{
 		if (!active) return;
 		active = false;
 		_frameReady = false;
+		requested = false; // 中断后不要在下一次进 PlayState 时又自动开渲
 		FlxG.signals.preUpdate.remove(onPreUpdate);
 		FlxG.signals.postDraw.remove(onPostDraw);
+		FlxG.signals.preStateSwitch.remove(onStateLeaving);
+		FlxG.signals.preGameReset.remove(onStateLeaving);
 		var d = ClientPrefs.data;
 		if (d != null) d.framerate = _savedFrameratePref;
 		FlxG.drawFramerate = _savedDrawFramerate;
@@ -323,16 +351,24 @@ class RenderClock
 		catch (e:Dynamic) {}
 		if (Main.fpsLayer != null) Main.fpsLayer.visible = _savedFPSVisible;
 		if (Main.gameLogVar != null) Main.gameLogVar.visible = _savedLogVisible;
+	}
 
+	/** 正常收尾：完整合成（混音 + 过场拼接） */
+	public static function finish():Void
+	{
+		if (!active) return;
+		cleanup();
+		var d = ClientPrefs.data;
 		var videoPath:String = '';
 		if (_usePipe)
 			videoPath = RenderEncoder.finish(_songName,
 				(PlayState.instance != null ? PlayState.instance.playbackRate : 1),
 				Conductor.offset, (d != null && d.renderAudio), _cutscenes, logLine);
 		logLine('[finish] frames=' + frame + ' / captureErrors=' + _errorCount
+			+ ' / skippedSubFrames=' + _skippedSubFrames
 			+ (_firstError != '' ? ' / firstError=' + _firstError : '')
 			+ ' / video=' + videoPath);
-		writeManifest(videoPath);
+		writeManifest(videoPath, '');
 
 		var summary:String = Language.get('render_finish_popup') + '\n' + outputDir
 			+ '\nframes: ' + frame
@@ -340,8 +376,35 @@ class RenderClock
 			+ (_errorCount > 0 ? '\nERRORS: ' + _errorCount + '\n' + _firstError : '');
 		logLine('[summary] ' + StringTools.replace(summary, '\n', ' | '));
 		trace('[RenderClock] done: ' + frame + ' frames -> ' + outputDir);
+		showSummary(summary);
+	}
 
-		// 只弹提示，不自动切状态：避免在转场创建过程中再引入一次状态切换
+	/**
+	 * 中断收尾：退出 PlayState / 切到别的 state / 关闭游戏时调用。
+	 * 只关管道拿到可播放的 partial.mp4，跳过耗时的混音与过场拼接。
+	 */
+	public static function abort(reason:String, silent:Bool = false):Void
+	{
+		if (!active) return;
+		_interrupted = reason;
+		cleanup();
+		var partial:String = _usePipe ? RenderEncoder.abort(logLine) : '';
+		logLine('[abort] reason=' + reason + ' frames=' + frame
+			+ ' / skippedSubFrames=' + _skippedSubFrames + ' / partial=' + partial);
+		writeManifest(partial, reason);
+		if (!silent)
+		{
+			var summary:String = Language.get('render_abort_popup') + '\n' + reason
+				+ '\n' + outputDir + '\nframes: ' + frame
+				+ (partial != '' ? '\npartial: ' + partial : '');
+			logLine('[summary] ' + StringTools.replace(summary, '\n', ' | '));
+			showSummary(summary);
+		}
+	}
+
+	/** 只弹提示，不自动切状态：避免在转场创建过程中再引入一次状态切换 */
+	static function showSummary(summary:String):Void
+	{
 		haxe.Timer.delay(function()
 		{
 			try { backend.CoolUtil.showPopUp(summary, Language.get('render_menu')); }
@@ -359,7 +422,7 @@ class RenderClock
 		}
 	}
 
-	static function writeManifest(videoPath:String):Void
+	static function writeManifest(videoPath:String, interrupted:String):Void
 	{
 		try
 		{
@@ -371,6 +434,8 @@ class RenderClock
 				height: _height,
 				frames: frame,
 				videoPath: videoPath,
+				interrupted: interrupted,
+				skippedSubFrames: _skippedSubFrames,
 				captureErrors: _errorCount,
 				firstError: _firstError,
 				encoder: d.renderEncoder,

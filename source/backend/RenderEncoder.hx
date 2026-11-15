@@ -132,6 +132,35 @@ class RenderEncoder
 	public static function isRunning():Bool return _running && _proc != null;
 
 	/**
+	 * 中断收尾：只关 stdin 让 ffmpeg 正常 finalize，跳过混音 / 拼接等耗时后期。
+	 * 这一步绝不能省——不关 stdin 的话 MP4 没有 moov atom，文件直接报废。
+	 * 返回可播放的 partial.mp4 路径（失败返回 ''）。
+	 */
+	public static function abort(log:String->Void):String
+	{
+		if (!_running || _proc == null) return '';
+		_running = false;
+		try { _proc.stdin.close(); } catch (e:Dynamic) {}
+		var code:Int = -1;
+		try { code = _proc.exitCode(); } catch (e:Dynamic) {}
+		try { _proc.close(); } catch (e:Dynamic) {}
+		_proc = null;
+		log('[encoder] ABORT pipe closed exit=' + code + ' frames=' + _frames);
+		if (code == 0 && FileSystem.exists(_videoOnly))
+		{
+			var partial:String = _outputDir + 'partial.mp4';
+			try
+			{
+				File.copy(_videoOnly, partial);
+				log('[encoder] partial video saved: ' + partial);
+				return partial;
+			}
+			catch (e:Dynamic) log('[encoder] partial copy failed: ' + Std.string(e));
+		}
+		return '';
+	}
+
+	/**
 	 * 收尾：关闭 stdin → 等待编码结束 → 混入音轨 → 拼接过场。
 	 * 返回最终 MP4 路径（失败返回 ''）。
 	 */

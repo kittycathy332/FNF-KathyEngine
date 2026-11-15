@@ -848,5 +848,6 @@
     "render_encoder": "Video encoder",
     "render_encoder_desc": "Choose the H.264 encoder. If the selected hardware encoder is unavailable, it falls back to CPU encoding automatically.",
     "render_encoder_x264": "CPU - libx264 (compatible)",
-    "render_encoder_nvenc": "GPU - h264_nvenc"
+    "render_encoder_nvenc": "GPU - h264_nvenc",
+    "render_abort_popup": "Render was interrupted. The completed portion was saved as a playable clip:"
 }
