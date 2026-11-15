@@ -77,6 +77,22 @@ class RenderClock
 	static var _errorCount:Int = 0;
 	static var _logLines:Array<String> = [];
 
+	// ===== 超采样：把窗口 framebuffer 放大到目标分辨率，逻辑坐标保持不变 =====
+	/** 目标分辨率与当前窗口不同，需要在首帧 resize 窗口 */
+	static var _supersamplePending:Bool = false;
+	/** applySupersampling 只执行一次（含失败情形） */
+	static var _supersampleApplied:Bool = false;
+	/** 渲染前的窗口物理尺寸，收尾时还原 */
+	static var _savedWindowWidth:Int = 0;
+	static var _savedWindowHeight:Int = 0;
+	/** 渲染前的 scaleMode，收尾时还原 */
+	static var _savedScaleMode:flixel.system.scaleModes.BaseScaleMode = null;
+	/** 渲染前的逻辑尺寸（锁给 RenderScaleMode，保证 HUD 坐标不变） */
+	static var _savedLogicWidth:Int = 0;
+	static var _savedLogicHeight:Int = 0;
+	/** readPixels 尺寸与目标不符、走了 CPU resize 的次数（超采样未生效的信号） */
+	static var _cpuResizeCount:Int = 0;
+
 	/** 由 PlayState.create() 调用；成功返回 true */
 	public static function begin():Bool
 	{
@@ -106,6 +122,17 @@ class RenderClock
 		_height = Std.int(Math.max(240, d.renderHeight));
 		_songName = (PlayState.SONG != null) ? PlayState.SONG.song : 'song';
 
+		// 超采样准备：目标分辨率与当前窗口 framebuffer 不一致时，首帧 resize 窗口
+		// 并锁定逻辑坐标。begin() 在 create() 中途调用，此刻窗口尺寸稳定、可读。
+		_savedWindowWidth = FlxG.stage.window.width;
+		_savedWindowHeight = FlxG.stage.window.height;
+		_savedLogicWidth = FlxG.width;
+		_savedLogicHeight = FlxG.height;
+		_savedScaleMode = FlxG.scaleMode;
+		_supersamplePending = (_savedWindowWidth != _width || _savedWindowHeight != _height);
+		_supersampleApplied = false;
+		_cpuResizeCount = 0;
+
 		var root:String = Sys.getCwd() + 'renders/';
 		outputDir = root + sanitize(_songName) + '-' + DateTools.format(Date.now(), '%Y%m%d_%H%M%S') + '/';
 		try
@@ -131,6 +158,9 @@ class RenderClock
 		_clockCorrections = 0;
 		logLine('[begin] ' + _songName + ' / ' + _fps + 'fps / ' + _width + 'x' + _height);
 		logLine('[output] ' + outputDir);
+		logLine('[window] native=' + _savedWindowWidth + 'x' + _savedWindowHeight
+			+ ' logic=' + _savedLogicWidth + 'x' + _savedLogicHeight
+			+ ' -> supersample=' + _supersamplePending);
 
 		// 交付形式分流：MP4 = rawvideo 直连 ffmpeg（最快）；PNG = 只落帧序列；
 		// PNG+MP4 = 两者都做（保留逐帧素材，但仍有压缩与写盘开销）。
@@ -208,6 +238,8 @@ class RenderClock
 	static function onPreUpdate():Void
 	{
 		if (!active) return;
+		// create() 已完成，首帧把窗口 framebuffer 放大到目标分辨率
+		if (!_supersampleApplied) applySupersampling();
 		// 暂停菜单 / 淡入转场等 subState 打开时冻结渲染时钟：不推进帧号、不截帧。
 		// 否则暂停界面会被录进成片，且虚拟时间轴会继续往前跑。
 		if (FlxG.state != null && FlxG.state.subState != null)
@@ -225,6 +257,77 @@ class RenderClock
 	static function onStateLeaving():Void
 	{
 		if (active) abort('state switch / game reset');
+	}
+
+	/**
+	 * 首帧（create 已完成后）把窗口 framebuffer 放大到目标分辨率。
+	 *
+	 * 必须在 create() 之后做：begin() 在 PlayState.create() 中途调用，若那时
+	 * 就 resizeGame，紧随其后的 PlayState 自适应缩放模式切换（约 842 行）会
+	 * 把我们装好的 RenderScaleMode 覆盖掉。preUpdate 首帧时 create 已完成，
+	 * 此刻切换最稳。
+	 *
+	 * 逻辑坐标锁在 _savedLogicWidth x _savedLogicHeight，因此所有 1280x720
+	 * 硬编码的 HUD / 相机坐标都不受影响；readPixels 读回的是放大后的原生
+	 * framebuffer，不再需要 CPU 插值拉伸 —— 这才是真正的超采样。
+	 */
+	static function applySupersampling():Void
+	{
+		if (_supersampleApplied) return;
+		_supersampleApplied = true;
+		if (!_supersamplePending)
+		{
+			logLine('[supersample] native window matches target, no resize needed');
+			return;
+		}
+		#if desktop
+		// create() 到这里已完成（含 PlayState 842 行的自适应 width 切换）。
+		// 以"此刻"的 scaleMode / 逻辑尺寸为还原基准，而不是 begin() 时的旧值，
+		// 这样收尾能精确还原到渲染开始前的真实现场。
+		_savedLogicWidth = FlxG.width;
+		_savedLogicHeight = FlxG.height;
+		_savedScaleMode = FlxG.scaleMode;
+		try
+		{
+			// 用锁定逻辑尺寸的 scaleMode 接管 measure，再改窗口物理尺寸
+			FlxG.scaleMode = new flixel.system.scaleModes.RenderScaleMode(_savedLogicWidth, _savedLogicHeight);
+			FlxG.stage.window.resize(_width, _height);
+			// resize 事件是异步的，主动 measure 一次让本帧就生效
+			FlxG.resizeGame(_width, _height);
+			logLine('[supersample] window ' + _savedWindowWidth + 'x' + _savedWindowHeight
+				+ ' -> ' + _width + 'x' + _height + ' / logic locked '
+				+ FlxG.width + 'x' + FlxG.height
+				+ ' / scale ' + FlxG.scaleMode.scale.x + ',' + FlxG.scaleMode.scale.y);
+		}
+		catch (e:Dynamic)
+		{
+			// resize 失败就退回旧行为：CPU resize readPixels 结果（至少不会崩）
+			logLine('[supersample] FAILED: ' + Std.string(e) + ' -> CPU resize fallback');
+			try { FlxG.scaleMode = _savedScaleMode; } catch (e2:Dynamic) {}
+		}
+		#else
+		logLine('[supersample] skipped (not desktop target)');
+		#end
+	}
+
+	/** cleanup 时把窗口分辨率 / scaleMode 还原到渲染前 */
+	static function restoreWindow():Void
+	{
+		if (!_supersamplePending || !_supersampleApplied) return;
+		#if desktop
+		try
+		{
+			FlxG.stage.window.resize(_savedWindowWidth, _savedWindowHeight);
+			FlxG.scaleMode = _savedScaleMode;
+			FlxG.resizeGame(_savedWindowWidth, _savedWindowHeight);
+			logLine('[supersample] restored window ' + _savedWindowWidth + 'x' + _savedWindowHeight);
+		}
+		catch (e:Dynamic)
+		{
+			logLine('[supersample] restore FAILED: ' + Std.string(e));
+		}
+		#end
+		_supersampleApplied = false;
 	}
 
 	/**
@@ -259,10 +362,28 @@ class RenderClock
 			// Tilemap / shader 节点并触发 hxSehException（访问违规）。
 			var img:Image = FlxG.stage.window.readPixels(null);
 			if (img == null) throw 'Window.readPixels returned null';
-			if (img.width != _width || img.height != _height)
+			// readPixels 尺寸 = 窗口逻辑尺寸 × 系统 DPI scale（见 NativeWindow.hx:350）。
+			//  - 等于目标：超采样完美命中；
+			//  - 大于目标：DPI>1 的额外超采样，缩到目标是高质量降采样（更好）；
+			//  - 小于目标：窗口 resize 没生效 → 放大糊，记入日志以便排查。
+			// 无论哪种，都 resize 到目标，保证写进 ffmpeg 的字节数精确匹配 rawvideo 声明。
+			var nativeW:Int = img.width;
+			var nativeH:Int = img.height;
+			if (nativeW < _width || nativeH < _height)
 			{
+				_cpuResizeCount++;
+				if (_cpuResizeCount <= 2)
+					logLine('[capture] readPixels ' + nativeW + 'x' + nativeH + ' < target '
+						+ _width + 'x' + _height + ' -> UPSCALE (supersample INEFFECTIVE, blurry)');
+			}
+			if (nativeW != _width || nativeH != _height)
+			{
+				if (frame == 0)
+					logLine('[capture] first frame native ' + nativeW + 'x' + nativeH
+						+ ' -> target ' + _width + 'x' + _height
+						+ (nativeW > _width ? ' (DPI downscale)' : ''));
 				try { img.resize(_width, _height); }
-				catch (e:Dynamic) logLine('[resize skipped] ' + Std.string(e) + ' -> native ' + img.width + 'x' + img.height);
+				catch (e:Dynamic) logLine('[resize skipped] ' + Std.string(e) + ' -> native ' + nativeW + 'x' + nativeH);
 			}
 			var pngLen:Int = 0;
 			if (_usePNG)
@@ -392,6 +513,8 @@ class RenderClock
 		catch (e:Dynamic) {}
 		if (Main.fpsLayer != null) Main.fpsLayer.visible = _savedFPSVisible;
 		if (Main.gameLogVar != null) Main.gameLogVar.visible = _savedLogVisible;
+		// 窗口物理分辨率与 scaleMode 最后还原（会触发 resizeGame）
+		restoreWindow();
 	}
 
 	/** 正常收尾：完整合成（混音 + 过场拼接） */
@@ -420,8 +543,12 @@ class RenderClock
 		logLine('[finish] frames=' + frame + ' / captureErrors=' + _errorCount
 			+ ' / skippedSubFrames=' + _skippedSubFrames
 			+ ' / clockCorrections=' + _clockCorrections
+			+ ' / cpuResizedFrames=' + _cpuResizeCount
 			+ (_firstError != '' ? ' / firstError=' + _firstError : '')
 			+ ' / video=' + videoPath);
+		if (_cpuResizeCount > 0)
+			logLine('[quality] WARNING: readPixels was SMALLER than target on ' + _cpuResizeCount
+				+ ' frames (window resize blocked?). Output was CPU-upscaled and may look soft.');
 		writeManifest(videoPath, '');
 
 		var summary:String = Language.get('render_finish_popup') + '\n' + outputDir

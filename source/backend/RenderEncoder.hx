@@ -105,9 +105,14 @@ class RenderEncoder
 			'-an'
 		];
 		if (_encoder == 'h264_nvenc')
-			args = args.concat(['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', Std.string(crf), '-pix_fmt', 'yuv420p']);
+			args = args.concat(['-c:v', 'h264_nvenc', '-preset', 'p5', '-rc', 'vbr', '-cq', Std.string(crf), '-pix_fmt', 'yuv420p']);
 		else
-			args = args.concat(['-c:v', 'libx264', '-preset', 'veryfast', '-crf', Std.string(crf), '-pix_fmt', 'yuv420p']);
+			// 离线渲染不赶时间：medium + tune animation 在同 crf 下明显优于 veryfast，
+			// 尤其保住 UI 文字 / 高对比边缘。tune animation 针对卡通风格优化。
+			args = args.concat([
+				'-c:v', 'libx264', '-preset', 'medium', '-tune', 'animation',
+				'-crf', Std.string(crf), '-pix_fmt', 'yuv420p'
+			]);
 		args.push(_videoOnly);
 
 		try
@@ -377,7 +382,7 @@ class RenderEncoder
 			fc += all.join('') + 'concat=n=' + idx + ':v=1:a=1[v][a]';
 			args = args.concat([
 				'-filter_complex', fc, '-map', '[v]', '-map', '[a]',
-				'-c:v', 'libx264', '-preset', 'veryfast', '-crf', Std.string(_crf),
+				'-c:v', 'libx264', '-preset', 'medium', '-tune', 'animation', '-crf', Std.string(_crf),
 				'-c:a', 'aac', '-b:a', '192k', out
 			]);
 		}
@@ -389,7 +394,7 @@ class RenderEncoder
 			fc += vs.join('') + 'concat=n=' + idx + ':v=1:a=0[v]';
 			args = args.concat([
 				'-filter_complex', fc, '-map', '[v]', '-an',
-				'-c:v', 'libx264', '-preset', 'veryfast', '-crf', Std.string(_crf), out
+				'-c:v', 'libx264', '-preset', 'medium', '-tune', 'animation', '-crf', Std.string(_crf), out
 			]);
 		}
 		log('[encoder] cutscene args: ' + args.join(' '));
