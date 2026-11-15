@@ -567,6 +567,7 @@ class PauseSubState extends MusicBeatSubstate
 				case 'Options':
 					PlayState.instance.paused = true; // For lua
 					PlayState.instance.vocals.volume = 0;
+					PlayState.instance.opponentVocals.volume = 0;
 					PlayState.instance.canResync = false;
 					MusicBeatState.switchState(new OptionsState());
 					if(ClientPrefs.data.pauseMusic != 'None')
@@ -628,6 +629,7 @@ class PauseSubState extends MusicBeatSubstate
 
 		FlxG.sound.music.volume = 0;
 		PlayState.instance.vocals.volume = 0;
+		PlayState.instance.opponentVocals.volume = 0;
 
 		if(noTrans)
 		{

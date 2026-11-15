@@ -2801,30 +2801,37 @@ tempScore += '${lblScore}: ${songScore}';
 		{
 			if (songData.needsVoices)
 			{
-				// Inst 与人声统一从 audioModDir 加载（loadSongAudio 不回退 funkin，缺失即 null）。
-				// 优先：角色指定(postfix) > Voices-Player / Voices-Opponent > 无后缀合并 Voices
-				function tryVoices(postfix:String):Sound
-				{
-					var fileBase:String = 'Voices';
-					if (postfix != null) fileBase += '-' + postfix;
-					// 追加 SpecialVocal 后缀，与 Inst 的 specialInst 对称：
-					// 优先 Voices-{角色}-SpecialVocal > Voices-Player/Opponent-SpecialVocal > Voices-SpecialVocal，命中即止（任一存在即可）。
-					if (songData.specialVocal != null && songData.specialVocal.length > 0)
-						fileBase += '-' + songData.specialVocal;
-					return Paths.loadSongAudio(songData.song, fileBase, audioModDir);
-				}
+			// Inst 与人声统一从 audioModDir 加载（loadSongAudio 不回退 funkin，缺失即 null）。
+			// 优先：角色指定(postfix) > Voices-Player / Voices-Opponent > 无后缀合并 Voices
+			// 只有「单个 Voices（可带 -SpecialVocal 后缀）」的模组是合并轨，此时只加载 vocals 一条：
+			// 若两条 FlxSound 都加载同一文件会双份叠加播放，且 miss 只静音其中一条，
+			// 表现为人声变小而不是消失、hit 后又变回双倍音量。
+			function tryVoices(postfix:String):Sound
+			{
+				var fileBase:String = 'Voices';
+				if (postfix != null) fileBase += '-' + postfix;
+				// 追加 SpecialVocal 后缀，与 Inst 的 specialInst 对称：
+				// 优先 Voices-{角色}-SpecialVocal > Voices-Player/Opponent-SpecialVocal > Voices-SpecialVocal，命中即止（任一存在即可）。
+				if (songData.specialVocal != null && songData.specialVocal.length > 0)
+					fileBase += '-' + songData.specialVocal;
+				return Paths.loadSongAudio(songData.song, fileBase, audioModDir);
+			}
 
-				var playerVocalPostfix = (boyfriend.vocalsFile == null || boyfriend.vocalsFile.length < 1) ? boyfriend.curCharacter : boyfriend.vocalsFile;
-				var playerVocals:Sound = tryVoices(playerVocalPostfix);
-				if (playerVocals == null) playerVocals = tryVoices('Player');
-				if (playerVocals == null) playerVocals = tryVoices(null);
-				if (playerVocals != null && playerVocals.length > 0) vocals.loadEmbedded(playerVocals);
+			var playerVocalPostfix = (boyfriend.vocalsFile == null || boyfriend.vocalsFile.length < 1) ? boyfriend.curCharacter : boyfriend.vocalsFile;
+			var playerVocals:Sound = tryVoices(playerVocalPostfix);
+			if (playerVocals == null) playerVocals = tryVoices('Player');
+			if (playerVocals == null) playerVocals = tryVoices(null);
+			if (playerVocals != null && playerVocals.length > 0) vocals.loadEmbedded(playerVocals);
 
-				var oppVocalPostfix = (dad.vocalsFile == null || dad.vocalsFile.length < 1) ? dad.curCharacter : dad.vocalsFile;
-				var oppVocals:Sound = tryVoices(oppVocalPostfix);
-				if (oppVocals == null) oppVocals = tryVoices('Opponent');
-				if (oppVocals == null) oppVocals = tryVoices(null);
-				if (oppVocals != null && oppVocals.length > 0) opponentVocals.loadEmbedded(oppVocals);
+			var oppVocalPostfix = (dad.vocalsFile == null || dad.vocalsFile.length < 1) ? dad.curCharacter : dad.vocalsFile;
+			var oppVocals:Sound = tryVoices(oppVocalPostfix);
+			if (oppVocals == null) oppVocals = tryVoices('Opponent');
+			// 对手侧不回退到无后缀 Voices：那是玩家侧已经在播放的合并轨。
+			// 与 ChartingState 保持一致 —— 只有找到对手专属轨时才加载 opponentVocals，
+			// 让 opponentVocals.length <= 0 的合并轨分支真正生效。
+			// loadSongAudio 带缓存，同源文件必返回同一 Sound 引用，这里再兜底判一次重。
+			if (oppVocals != null && oppVocals == playerVocals) oppVocals = null;
+			if (oppVocals != null && oppVocals.length > 0) opponentVocals.loadEmbedded(oppVocals);
 			}
 		}
 		catch (e:Dynamic) {}
@@ -4633,6 +4640,8 @@ tempScore += '${lblScore}: ${songScore}';
 		var checkVocals = [vocals, opponentVocals];
 		for (voc in checkVocals)
 		{
+			// 合并轨时 opponentVocals 未加载（length == 0），无需参与重同步
+			if (voc.length <= 0) continue;
 			if (FlxG.sound.music.time < vocals.length)
 			{
 				voc.time = FlxG.sound.music.time;
@@ -6710,7 +6719,8 @@ tempScore += '${lblScore}: ${songScore}';
 			}
 		}
 
-		vocals.volume = 1;
+		// 人声恢复统一由 goodNoteHit / opponentNoteHit 负责；
+		// 此处原本无条件写 vocals.volume = 1，playOpponent 时会误把 BF 轨恢复。
 
 		if (!ClientPrefs.data.comboStacking && comboGroup.members.length > 0)
 		{
@@ -8006,6 +8016,12 @@ tempScore += '${lblScore}: ${songScore}';
 		// miss 时立即隐藏该列 Hold Cover
 		hideHoldCover(true, direction);
 
+		// 人声静音必须放在所有 early return 之前：guitarHeroSustains 开启时，
+		// 长条头/尾音 miss 会在下面的 guitarHeroSustains 分支提前返回，
+		// 原本放在函数末尾的静音会被整个跳过，导致 miss 后人声照常播放。
+		if (playOpponent && opponentVocals.length > 0) opponentVocals.volume = 0;
+		else vocals.volume = 0;
+
 		// score and data
 		var subtract:Float = pressMissDamage;
 		if(note != null) subtract = note.missHealth;
@@ -8107,9 +8123,7 @@ tempScore += '${lblScore}: ${songScore}';
 				gf.specialAnim = true;
 			}
 		}
-		// playOpponent 时玩家唱的是对手人声轨
-		if(playOpponent && opponentVocals.length > 0) opponentVocals.volume = 0;
-		else vocals.volume = 0;
+		// 人声静音已在函数开头统一处理（早于所有 early return）
 	}
 
 	// Kade Complex 准确率模式的 wife3 权重函数（移植自 Etterna）

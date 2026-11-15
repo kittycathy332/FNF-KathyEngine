@@ -1926,10 +1926,12 @@ class FreeplayState extends MusicBeatState
 				audioModDir = findModWithSong(PlayState.SONG.song);
 			if (audioModDir == null) audioModDir = '';
 
-			if (PlayState.SONG.needsVoices)
-			{
+		if (PlayState.SONG.needsVoices)
+		{
+			// 记录玩家侧实际加载的人声，供对手侧做合并轨判重
+			var playerPreviewSound:Sound = null;
 
-				// 优先：角色指定(postfix) > Voices-Player / Voices-Opponent > 无后缀合并 Voices
+			// 优先：角色指定(postfix) > Voices-Player / Voices-Opponent > 无后缀合并 Voices
 				function tryVoices(postfix:String):Sound
 				{
 					var fileBase:String = 'Voices';
@@ -1955,9 +1957,10 @@ class FreeplayState extends MusicBeatState
 					if (loadedVocals == null) loadedVocals = tryVoices('Player');
 					if (loadedVocals == null) loadedVocals = tryVoices(null);
 
-					if (loadedVocals != null && loadedVocals.length > 0)
-					{
-						vocals.loadEmbedded(loadedVocals);
+				if (loadedVocals != null && loadedVocals.length > 0)
+				{
+					playerPreviewSound = loadedVocals;
+					vocals.loadEmbedded(loadedVocals);
 						FlxG.sound.list.add(vocals);
 						vocals.persist = vocals.looped = true;
 						vocals.volume = 0.8;
@@ -1982,7 +1985,8 @@ class FreeplayState extends MusicBeatState
 
 						var loadedVocals:Sound = tryVoices(oppVocalPostfix);
 						if (loadedVocals == null) loadedVocals = tryVoices('Opponent');
-						if (loadedVocals == null) loadedVocals = tryVoices(null);
+						// 不回退到无后缀 Voices：那是玩家侧已加载的合并轨，重复加载会让预览人声叠加
+						if (loadedVocals != null && loadedVocals == playerPreviewSound) loadedVocals = null;
 
 							if (loadedVocals != null && loadedVocals.length > 0)
 							{
