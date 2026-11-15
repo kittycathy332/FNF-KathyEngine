@@ -2139,6 +2139,12 @@ class FreeplayState extends MusicBeatState
 			return;
 		var moddirLoad:String = (Mods.currentModDirectory != null && Mods.currentModDirectory.length > 0) ? Mods.currentModDirectory : 'global';
 			var replayFolderLoad:String = Paths.mods(moddirLoad + '/replay');
+			// 模组目录名可能带空格 / 大小写差异（Android 大小写敏感），还原成磁盘真实路径
+			if (ClientPrefs.data.modPathCompat)
+			{
+				var resolvedReplayDir:String = Paths.resolveModPath(replayFolderLoad);
+				if (resolvedReplayDir != null) replayFolderLoad = resolvedReplayDir;
+			}
 			if (FileSystem.exists(replayFolderLoad))
 			{
 				var filesLoad:Array<String> = FileSystem.readDirectory(replayFolderLoad);
@@ -2569,6 +2575,11 @@ class FreeplayState extends MusicBeatState
 		cachedReplayIndex = new Map();
 
 		var replayFolderCheck:String = Paths.mods(moddirCheck + '/replay');
+		if (ClientPrefs.data.modPathCompat)
+		{
+			var resolvedDir:String = Paths.resolveModPath(replayFolderCheck);
+			if (resolvedDir != null) replayFolderCheck = resolvedDir;
+		}
 		
 		if (!FileSystem.exists(replayFolderCheck))
 		{

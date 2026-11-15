@@ -289,6 +289,9 @@ import haxe.io.BytesInput;
 	public var timebarStyle:String = "Psych";
 	public var legacynotepos:Bool = false;
 	public var legacyHUD:Bool = false; // 兼容旧版Psych(0.6.x): 将HUD元素直接加入state而非uiGroup, 供旧模组脚本用getObjectOrder/setObjectOrder定位
+	// 模组资源路径宽松解析：兼容文件名含空格 / % / 标点 / 大小写不一致的移植模组。
+	// false = 回到修复前的严格精确路径匹配（Windows 不解析、Android 仅大小写）。
+	public var modPathCompat:Bool = true;
 	public var chartingVersion:String = '1.0.4-Kathy'; // 制谱器版本: '1.0.4-Kathy' | '1.0.4-Official' | '0.7.3' | '0.6.3'
 	// Lua API 兼容版本：决定 setObjectCamera / doTween* / makeAnimatedLuaSprite 等 API 的默认参数与行为
 	// 'auto' = 自动识别（暂时回落到 1.0.4），'1.0.4' = KathyEngine 原生（默认），'0.7.3' / '0.6.3' = 旧版脚本兼容
@@ -747,8 +750,9 @@ class ClientPrefs {
 		if (Reflect.fields(defaultData).length == 0) {
 			defaultData.fakeOSVersion = '1.5.1';
 			defaultData.fakePsychVersion = '1.0.4';
-			defaultData.enableLegacyClassAlias = true;
-			defaultData.windowTitle = 'Kathy Engine';
+		defaultData.enableLegacyClassAlias = true;
+		defaultData.modPathCompat = true;
+		defaultData.windowTitle = 'Kathy Engine';
 			defaultData.windowTitlePreset = 'Kathy Engine';
 		}
 

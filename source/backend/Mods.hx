@@ -53,7 +53,7 @@ class Mods
 		_globalExistsCache = new Map();
 		PlayState._songAudioModCache = null;
 		Paths.clearAtlasCache();
-		#if mobile
+		#if sys
 		Paths.clearModPathCache();
 		#end
 		ScriptPreload.invalidate();

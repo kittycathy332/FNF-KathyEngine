@@ -11,6 +11,7 @@ import flixel.FlxSprite;
 import flixel.util.FlxTimer;
 import backend.CustomFadeTransition;
 import backend.ClientPrefs;
+import backend.Paths;
 import states.MainMenuState;
 import objects.Note;
 import objects.StrumNote;
@@ -101,6 +102,13 @@ class CompatibilityScriptsSubState extends BaseOptionsMenu
 			Language.get("legacy_hud_desc"),
 			'legacyHUD',
 			BOOL);
+		addOption(option);
+		// 模组资源路径宽松解析（兼容文件名带空格 / % / 标点 / 大小写不一致的移植模组）
+		option = new Option(Language.get('mod_path_compat'),
+			Language.get("mod_path_compat_desc"),
+			'modPathCompat',
+			BOOL);
+		option.onChange = function() Paths.clearModPathCache();
 		addOption(option);
 
 

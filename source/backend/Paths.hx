@@ -557,12 +557,26 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 
 	// 与 loadSongAudio 完全一致的绝对路径解析，供外部按路径释放音频缓存时复用，
 	// 确保"释放"与"缓存"使用同一 key，避免路径不一致导致缓存永远清不掉。
-	inline public static function getSongAudioPath(song:String, fileBase:String, ?modDir:String = ''):String
+	// 模组路径先经 resolveModPath 还原磁盘真实文件名（大小写 / 空格 / % / 标点差异），
+	// 结果按原始路径缓存，保证探测、加载、trackPreviewSound、releaseSoundCache 拿到同一个 key。
+	public static function getSongAudioPath(song:String, fileBase:String, ?modDir:String = ''):String
 	{
 		var key:String = '${formatToSongPath(song)}/$fileBase.${SOUND_EXT}';
-		return (modDir != null && modDir.length > 0)
+		var raw:String = (modDir != null && modDir.length > 0)
 			? mods('$modDir/songs/$key')
 			: getFolderPath(key, 'songs');
+		#if sys
+		if (ClientPrefs.data.modPathCompat && modDir != null && modDir.length > 0)
+		{
+			var hit:String = _audioPathCache.get(raw);
+			if (hit != null) return hit;
+			var resolved:String = resolveModPath(raw);
+			if (resolved == null) resolved = raw;
+			_audioPathCache.set(raw, resolved);
+			return resolved;
+		}
+		#end
+		return raw;
 	}
 
 	// 从 currentTrackedSounds 中移除指定音频缓存，并尽力释放其底层 asset 与解码数据，
@@ -908,24 +922,31 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 	inline static public function mods(key:String = '')
 		return #if android StorageUtil.getExternalStorageDirectory() + #else Sys.getCwd() + #end 'mods/' + key;
 
-	#if mobile
-	// mod 路径解析用的目录列举缓存（Android 上 readDirectory 是固定开销）
+	#if sys
+	// mod 路径解析用的目录列举缓存（Android 上 readDirectory 是固定开销，故仅移动端常驻缓存）
 	static var _dirCache:Map<String, Array<String>> = new Map();
 	static var _dirMutex:sys.thread.Mutex = new sys.thread.Mutex();
+	// 歌曲音频「规范化路径 -> 磁盘真实路径」映射；切模组时随 clearModPathCache 一起清
+	static var _audioPathCache:Map<String, String> = new Map();
 
 	public static function clearModPathCache():Void
 	{
 		_dirMutex.acquire();
 		_dirCache.clear();
+		_audioPathCache.clear();
 		_dirMutex.release();
 	}
 
 	static function listDirectory(dir:String):Array<String>
 	{
+		#if mobile
 		_dirMutex.acquire();
 		var entries:Array<String> = _dirCache.get(dir);
 		_dirMutex.release();
 		if (entries != null) return entries;
+		#else
+		var entries:Array<String> = null;
+		#end
 
 		try
 		{
@@ -937,22 +958,43 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 			return null;
 		}
 
+		#if mobile
 		_dirMutex.acquire();
 		_dirCache.set(dir, entries);
 		_dirMutex.release();
+		#end
 		return entries;
 	}
 	#end
 
 	/**
-	 * 大小写不敏感的 mod 路径解析：精确路径不存在时逐层按目录项匹配。
-	 * 返回 null 表示确实找不到；找不到时调用方回退到原路径。
+	 * 路径段匹配等级：3=精确、2=仅大小写不同、1=规范化后等价、0=不匹配。
+	 * 带扩展名的段先分离扩展名再比较，避免 formatToSongPath 删除 '.' 导致误匹配。
+	 * 例：请求 space-breaker-4k-godly.json，磁盘 Space-Breaker-4k Godly.json → 等级 1 命中。
 	 */
-	public static function resolveModPath(path:String):String
+	static function pathPartRank(entry:String, part:String):Int
 	{
-		if (path == null) return null;
-		if (FileSystem.exists(path)) return path;
+		if (entry == part) return 3;
+		if (entry.toLowerCase() == part.toLowerCase()) return 2;
+
+		var eDot:Int = entry.lastIndexOf('.');
+		var pDot:Int = part.lastIndexOf('.');
+		if (eDot > 0 && pDot > 0)
+		{
+			if (entry.substr(eDot).toLowerCase() != part.substr(pDot).toLowerCase()) return 0;
+			return formatToSongPath(entry.substr(0, eDot)) == formatToSongPath(part.substr(0, pDot)) ? 1 : 0;
+		}
+		return formatToSongPath(entry) == formatToSongPath(part) ? 1 : 0;
+	}
+
+	/**
+	 * 修复前的旧解析行为：仅移动端逐层做大小写不敏感匹配，其它平台直接放弃。
+	 * modPathCompat 关闭时用它，保证设置能真正回退到旧行为。
+	 */
+	static function resolveModPathCaseOnly(path:String):String
+	{
 		#if mobile
+		if (FileSystem.exists(path)) return path;
 		var root:String = mods();
 		if (!path.startsWith(root)) return null;
 
@@ -967,10 +1009,50 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 			var match:String = null;
 			for (entry in entries)
 			{
-				if (entry.toLowerCase() == lower)
+				if (entry.toLowerCase() == lower) { match = entry; break; }
+			}
+			if (match == null) return null;
+			current += '/' + match;
+		}
+		return path.endsWith('/') ? current + '/' : current;
+		#else
+		return null;
+		#end
+	}
+
+	/**
+	 * 模组路径解析：精确路径不存在时逐层按目录项匹配，覆盖大小写差异（Android/Linux）
+	 * 与 formatToSongPath 规范化差异（空格、%、标点）。全 sys 平台生效 ——
+	 * Windows 大小写不敏感，但空格 / % 仍匹配不上，同样需要这一层。
+	 * modPathCompat 关闭时走 resolveModPathCaseOnly（完全回到修复前）。
+	 * 返回 null 表示确实找不到；调用方回退到原路径。
+	 */
+	public static function resolveModPath(path:String):String
+	{
+		if (path == null) return null;
+		#if sys
+		if (!ClientPrefs.data.modPathCompat) return resolveModPathCaseOnly(path);
+		if (FileSystem.exists(path)) return path;
+		var root:String = mods();
+		if (!path.startsWith(root)) return null;
+
+		var current:String = root.substr(0, root.length - 1);
+		for (part in path.substr(root.length).split('/'))
+		{
+			if (part.length == 0) continue;
+			var entries:Array<String> = listDirectory(current);
+			if (entries == null) return null;
+
+			var bestRank:Int = 0;
+			var match:String = null;
+			for (entry in entries)
+			{
+				var rank:Int = pathPartRank(entry, part);
+				if (rank > bestRank)
 				{
+					bestRank = rank;
 					match = entry;
-					break;
+					if (rank == 3) break;
 				}
 			}
 			if (match == null) return null;

@@ -285,8 +285,9 @@ class Song
 		{
 			if(Mods.currentModDirectory != null && Mods.currentModDirectory.length > 0)
 			{
-				var dir:String = Paths.mods(Mods.currentModDirectory + '/data/' + formattedFolder);
-				if(FileSystem.exists(dir) && FileSystem.isDirectory(dir))
+				var rawDir:String = Paths.mods(Mods.currentModDirectory + '/data/' + formattedFolder);
+				var dir:String = ClientPrefs.data.modPathCompat ? Paths.resolveModPath(rawDir) : rawDir;
+				if(dir != null && FileSystem.exists(dir) && FileSystem.isDirectory(dir))
 				{
 					for(f in FileSystem.readDirectory(dir))
 					{
