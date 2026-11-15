@@ -43,6 +43,11 @@ import openfl.ui.Keyboard;
 @:cppInclude('./external/gamemode_client.h')
 @:cppFileCode('#define GAMEMODE_AUTO')
 #end
+// iOS: liblime.a 要 mbedTLS 2.x 的 *_ret 符号，libhxcpp 带的是 3.6.7（已移除）。
+// 该头文件用 TARGET_OS_IPHONE 守卫，非 iOS 平台展开为空，不影响其它平台。
+#if ios
+@:cppInclude('./external/mbedtls_compat.h')
+#end
 // // // // // // // // //
 class Main extends Sprite
 {
