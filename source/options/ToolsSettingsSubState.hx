@@ -86,6 +86,16 @@ class ToolsSettingsSubState extends BaseOptionsMenu
 				CoolUtil.showPopUp(Language.getWithFallback('open_data_folder_failed', 'Could not open the data folder.'), 'Data Folder');
 		};
 
+		// 渲染导出设置（独立子界面，配置存进 ClientPrefs.data）
+		var option:Option = new Option(Language.get('render_settings'),
+			Language.get('render_settings_desc'),
+			'_toolRenderSettings',
+			BUTTON);
+		addOption(option);
+		option.onChange = function() {
+			openSubState(new options.RenderSettingsSubState());
+		};
+
 		super();
 	}
 }

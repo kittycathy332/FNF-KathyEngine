@@ -292,6 +292,25 @@ import haxe.io.BytesInput;
 	// 模组资源路径宽松解析：兼容文件名含空格 / % / 标点 / 大小写不一致的移植模组。
 	// false = 回到修复前的严格精确路径匹配（Windows 不解析、Android 仅大小写）。
 	public var modPathCompat:Bool = true;
+
+	// ===== 离线渲染 / 视频导出配置 =====
+	// 这里只存配置，不参与 PlayState 正常游玩；消费方是 backend 下的渲染模块。
+	// renderBackend: 'Offline' 帧号虚拟时钟 | 'SlowMotion' 慢速实时 | 'Realtime' 时间戳重定时
+	public var renderBackend:String = 'Offline';
+	public var renderInputSource:String = 'BotPlay'; // 'BotPlay' | 'Replay'
+	public var renderFPS:Int = 60;
+	public var renderWidth:Int = 1280;
+	public var renderHeight:Int = 720;
+	public var renderOutput:String = 'MP4'; // 'MP4' rawvideo 直连 ffmpeg | 'PNG' 只落帧序列 | 'PNG+MP4' 两者
+	public var renderEncoder:String = 'libx264'; // 'libx264' | 'h264_nvenc'（不可用时自动回退）
+	public var renderSlowFactor:Float = 0.25; // 仅 SlowMotion 后端：playbackRate 倍率
+	public var renderRange:String = 'Countdown'; // 'Countdown' | 'SongOnly'
+	public var renderCutscene:String = 'FFmpeg'; // 'FFmpeg' | 'Freeze' | 'Skip'
+	public var renderAudio:Bool = true; // 混入原始 Inst / Voices 音轨
+	public var renderCRF:Int = 20; // H.264 质量，18 高 ~ 28 低
+	public var renderSeed:Int = 12345; // 固定随机种子，保证同曲可复现
+	public var renderHideOverlay:Bool = true; // 导出时隐藏 FPS / 调试浮层
+
 	public var chartingVersion:String = '1.0.4-Kathy'; // 制谱器版本: '1.0.4-Kathy' | '1.0.4-Official' | '0.7.3' | '0.6.3'
 	// Lua API 兼容版本：决定 setObjectCamera / doTween* / makeAnimatedLuaSprite 等 API 的默认参数与行为
 	// 'auto' = 自动识别（暂时回落到 1.0.4），'1.0.4' = KathyEngine 原生（默认），'0.7.3' / '0.6.3' = 旧版脚本兼容
@@ -752,6 +771,20 @@ class ClientPrefs {
 			defaultData.fakePsychVersion = '1.0.4';
 		defaultData.enableLegacyClassAlias = true;
 		defaultData.modPathCompat = true;
+		defaultData.renderBackend = 'Offline';
+		defaultData.renderInputSource = 'BotPlay';
+		defaultData.renderFPS = 60;
+		defaultData.renderWidth = 1280;
+		defaultData.renderHeight = 720;
+		defaultData.renderOutput = 'MP4';
+		defaultData.renderEncoder = 'libx264';
+		defaultData.renderSlowFactor = 0.25;
+		defaultData.renderRange = 'Countdown';
+		defaultData.renderCutscene = 'FFmpeg';
+		defaultData.renderAudio = true;
+		defaultData.renderCRF = 20;
+		defaultData.renderSeed = 12345;
+		defaultData.renderHideOverlay = true;
 		defaultData.windowTitle = 'Kathy Engine';
 			defaultData.windowTitlePreset = 'Kathy Engine';
 		}
@@ -803,6 +836,37 @@ class ClientPrefs {
 		if (data.soundTrayStyle == null) {
 			data.soundTrayStyle = 'Flixel';
 		}
+
+		// 渲染功能首次升级：旧存档的 renderOutput='PNG+MP4' 会继续走「每帧 PNG 压缩+写盘」
+		// 的慢速路径。若存档里还没有新加的 renderEncoder 字段，说明是升级前的存档，
+		// 自动切到高速直连模式（用户之后仍可在设置里改回去）。
+		if (Reflect.hasField(FlxG.save.data, 'renderOutput')
+			&& !Reflect.hasField(FlxG.save.data, 'renderEncoder')
+			&& Reflect.field(FlxG.save.data, 'renderOutput') == 'PNG+MP4')
+		{
+			data.renderOutput = 'MP4';
+		}
+
+		// 离线渲染配置：老存档升级兜底（存档里没有该键 / 字段为 null 时补默认值）
+		final renderDefaults:Map<String, Dynamic> = [
+			'renderBackend' => 'Offline',
+			'renderInputSource' => 'BotPlay',
+			'renderFPS' => 60,
+			'renderWidth' => 1280,
+			'renderHeight' => 720,
+			'renderOutput' => 'MP4',
+			'renderEncoder' => 'libx264',
+			'renderSlowFactor' => 0.25,
+			'renderRange' => 'Countdown',
+			'renderCutscene' => 'FFmpeg',
+			'renderAudio' => true,
+			'renderCRF' => 20,
+			'renderSeed' => 12345,
+			'renderHideOverlay' => true
+		];
+		for (key => value in renderDefaults)
+			if (!Reflect.hasField(FlxG.save.data, key) || Reflect.field(data, key) == null)
+				Reflect.setField(data, key, value);
 
 		// 为 comboOffset 新增的槽位补默认值（兼容老存档升级；[6,7]msTimeTxt，超出槽位保留但已不使用）
 		if (data.comboOffset == null)

@@ -322,7 +322,21 @@ class CustomFadeTransition extends FlxSubState {
             if (!isTransIn) {
                 ClientPrefs.data.randomIndex = FlxG.random.int(0, kathyImages.length - 1, [lastRandomIndex]);
             }
-            lastRandomIndex = ClientPrefs.data.randomIndex;
+
+            // 存档里的索引可能越界：换语言 / 换模组后图片数量会变，且 isTransIn 时
+            // 不重新随机、直接沿用上一次的值（ClientPrefs 默认是 32）。越界后
+            // kathyImages[...] 为 null → Paths.image(null) → StringMap.exists(null)
+            // → hxSehException，表现为「进不去曲目」。这里统一钳制回合法范围。
+            if (kathyImages.length == 0)
+                kathyImages.push('menuExtend/CustomFadeTransition/Blue_Archive/' + ClientPrefs.data.blueArchiveLanguage + '/LoadingImage_44_Kr');
+            var imgIndex:Int = ClientPrefs.data.randomIndex;
+            if (imgIndex < 0 || imgIndex >= kathyImages.length)
+            {
+                imgIndex %= kathyImages.length;
+                if (imgIndex < 0) imgIndex += kathyImages.length;
+            }
+            ClientPrefs.data.randomIndex = imgIndex;
+            lastRandomIndex = imgIndex;
 
             transBlack = new FlxSprite().makeGraphic(1, 1, FlxColor.BLACK);
             transBlack.setGraphicSize(FlxG.width * 1.2, FlxG.height * 1.2);

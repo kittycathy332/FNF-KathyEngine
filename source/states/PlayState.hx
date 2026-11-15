@@ -818,6 +818,17 @@ isReplaying = false;
 		instakillOnMiss = ClientPrefs.getGameplaySetting('instakill');
 		practiceMode = ClientPrefs.getGameplaySetting('practice');
 		cpuControlled = ClientPrefs.getGameplaySetting('botplay');
+		// 离线渲染：设置页勾选「渲染下一首曲目」后，进入 PlayState 时接管时钟。
+		// 只在这里启动一次，后续帧由 RenderClock 的 preUpdate / postDraw 钩子驱动。
+		if (backend.RenderClock.requested)
+		{
+			if (backend.RenderClock.begin())
+			{
+				// 当前仅接入 BotPlay（按 strumTime 自动命中）；Replay 载入尚未接线
+				cpuControlled = true;
+				if (ClientPrefs.data.renderRange == 'SongOnly') skipCountdown = true;
+			}
+		}
 		guitarHeroSustains = ClientPrefs.data.guitarHeroSustains;
 		sustainTailFixMode = ClientPrefs.data.sustainTailFix;
 		holdReleaseInstantMiss = ClientPrefs.data.holdReleaseInstantMiss;
@@ -1942,6 +1953,17 @@ isReplaying = false;
 		var foundFile:Bool = false;
 		var fileName:String = Paths.video(name);
 
+		// 离线渲染：hxvlc 过场按实时播放，会与帧号驱动的虚拟时间轴脱节。
+		// 这里只记录文件路径，由合成阶段用 ffmpeg concat 拼接，游戏继续走正常流程。
+		if (backend.RenderClock.active)
+		{
+			backend.RenderClock.registerCutscene(fileName);
+			inCutscene = false;
+			canPause = true;
+			startAndEnd();
+			return null;
+		}
+
 		#if sys
 		if (FileSystem.exists(fileName))
 		#else
@@ -2620,6 +2642,8 @@ tempScore += '${lblScore}: ${songScore}';
 
 	public function setSongTime(time:Float)
 	{
+		// 渲染模式下禁止 seek：音频已冻结，且 seek 会把虚拟时间轴打乱
+		if (backend.RenderClock.active) return;
 		FlxG.sound.music.pause();
 		vocals.pause();
 		opponentVocals.pause();
@@ -2665,11 +2689,13 @@ tempScore += '${lblScore}: ${songScore}';
 		@:privateAccess
 		FlxG.sound.playMusic(inst._sound, 1, false);
 		#if FLX_PITCH FlxG.sound.music.pitch = playbackRate; #end
-		FlxG.sound.music.onComplete = finishSong.bind();
+		if (!backend.RenderClock.active) FlxG.sound.music.onComplete = finishSong.bind();
 		vocals.play();
 		opponentVocals.play();
 
-		setSongTime(Math.max(0, startOnTime - 500) + Conductor.offset);
+		// 渲染模式下时间轴由帧号连续推进，不能用音频时钟重置；音频随后由 RenderClock 冻结
+		if (!backend.RenderClock.active)
+			setSongTime(Math.max(0, startOnTime - 500) + Conductor.offset);
 		startOnTime = 0;
 
 		if(paused) {
@@ -2683,6 +2709,7 @@ tempScore += '${lblScore}: ${songScore}';
 
 		// Song duration in a float, useful for the time left feature
 		songLength = FlxG.sound.music.length;
+		if (backend.RenderClock.active) backend.RenderClock.onSongStart(songLength);
 		FlxTween.tween(timeBar, {alpha: 1}, 0.5, {ease: FlxEase.circOut});
 		FlxTween.tween(timeTxt, {alpha: 1}, 0.5, {ease: FlxEase.circOut});
 
@@ -4629,7 +4656,7 @@ tempScore += '${lblScore}: ${songScore}';
 
 	function resyncVocals():Void
 	{
-		if(finishTimer != null) return;
+		if(finishTimer != null || backend.RenderClock.active) return;
 
 		trace('resynced vocals at ' + Math.floor(Conductor.songPosition));
 
@@ -4995,16 +5022,21 @@ tempScore += '${lblScore}: ${songScore}';
 
 		if (startedCountdown && !paused)
 		{
-			Conductor.songPosition += elapsed * 1000 * playbackRate;
-			if (Conductor.songPosition >= Conductor.offset)
+			// 离线渲染：songPosition 由 RenderClock 在 preUpdate 里按帧号写入。
+			// 这里绝不能再累加 elapsed 或 lerp 回音频时钟，否则墙钟会重新渗进输出。
+			if (!backend.RenderClock.active)
 			{
-				var _syncK:Float = ClientPrefs.data.useFrameAdaptiveSync
-				? 5 * (ClientPrefs.data.framerate / 60) * ClientPrefs.data.syncSpeedMultiplier
-				: 5;
-			Conductor.songPosition = FlxMath.lerp(FlxG.sound.music.time + Conductor.offset, Conductor.songPosition, Math.exp(-elapsed * _syncK));
-				var timeDiff:Float = Math.abs((FlxG.sound.music.time + Conductor.offset) - Conductor.songPosition);
-				if (timeDiff > 1000 * playbackRate)
-					Conductor.songPosition = Conductor.songPosition + 1000 * FlxMath.signOf(timeDiff);
+				Conductor.songPosition += elapsed * 1000 * playbackRate;
+				if (Conductor.songPosition >= Conductor.offset)
+				{
+					var _syncK:Float = ClientPrefs.data.useFrameAdaptiveSync
+					? 5 * (ClientPrefs.data.framerate / 60) * ClientPrefs.data.syncSpeedMultiplier
+					: 5;
+				Conductor.songPosition = FlxMath.lerp(FlxG.sound.music.time + Conductor.offset, Conductor.songPosition, Math.exp(-elapsed * _syncK));
+					var timeDiff:Float = Math.abs((FlxG.sound.music.time + Conductor.offset) - Conductor.songPosition);
+					if (timeDiff > 1000 * playbackRate)
+						Conductor.songPosition = Conductor.songPosition + 1000 * FlxMath.signOf(timeDiff);
+				}
 			}
 
 			// 线性 BPM 过渡：实时刷新全局 BPM / 节拍，供图标缩放、脚本等使用
@@ -5016,7 +5048,7 @@ tempScore += '${lblScore}: ${songScore}';
 		{
 			if (startedCountdown && Conductor.songPosition >= Conductor.offset)
 				startSong();
-			else if(!startedCountdown)
+			else if(!startedCountdown && !backend.RenderClock.active)
 				Conductor.songPosition = -Conductor.crochet * 5 + Conductor.offset;
 		}
 		else if (!paused && updateTime)
@@ -6297,6 +6329,8 @@ tempScore += '${lblScore}: ${songScore}';
 	public var transitioning = false;
 	public function endSong()
 	{
+		// 离线渲染不切结算页：由 RenderClock 按帧数收尾（endSong 返回 Bool）
+		if (backend.RenderClock.active) { backend.RenderClock.finish(); return false; }
 		// 重置回放按键状态
 		replayHeldKeys = [false, false, false, false];
 		
@@ -7390,7 +7424,7 @@ tempScore += '${lblScore}: ${songScore}';
 		// 关闭时沿用原逻辑（依赖上一帧 update 缓存的 n.canBeHit 与 songPosition）。
 		var preciseHit:Bool = ClientPrefs.data.preciseHit;
 		var lastTime:Float = Conductor.songPosition;
-		if (preciseHit && FlxG.sound.music != null && FlxG.sound.music.playing)
+		if (preciseHit && !backend.RenderClock.active && FlxG.sound.music != null && FlxG.sound.music.playing)
 			Conductor.songPosition = FlxG.sound.music.time + Conductor.offset;
 
 		var plrInputNotes:Array<Note> = notes.members.filter(function(n:Note):Bool {
@@ -7496,7 +7530,7 @@ tempScore += '${lblScore}: ${songScore}';
 		//									- Shadow Mario
 
 	// [毫秒级精确判定] 开启时 songPosition 被临时改为精确值，这里还原为本帧原值，避免影响后续逻辑与音符视觉位置（防抖动）；下一帧 update 会重新从音频时钟同步。
-	if (preciseHit) Conductor.songPosition = lastTime;
+	if (preciseHit && !backend.RenderClock.active) Conductor.songPosition = lastTime;
 
 		var spr:StrumNote = playerSideStrums().members[key];
 		if(strumsBlocked[key] != true && spr != null && (spr.animation.curAnim == null || spr.animation.curAnim.name != 'confirm'))
@@ -9796,6 +9830,8 @@ tempScore += '${lblScore}: ${songScore}';
 
 	public function runSongSyncThread()
 	{
+		// 离线渲染单帧可能远超看门狗的 250ms 阈值，会被误判卡死并 setSongTime 倒带
+		if (backend.RenderClock.active) return;
 		Thread.create(function()
 		{
 			while (!endingSong && !paused && !shutdownThread)
