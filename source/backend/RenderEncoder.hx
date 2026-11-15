@@ -6,6 +6,19 @@ import sys.FileSystem;
 import sys.thread.Thread;
 import haxe.io.Bytes;
 
+/** 合成所需的音频信息，全部来自渲染期 PlayState 的真实记录 */
+typedef RenderAudioInfo = {
+	var song:String;
+	var rate:Float;
+	var offsetMs:Float;
+	var mixAudio:Bool;
+	var cutscenes:Array<String>;
+	var songAudio:Array<String>;
+	var soundEvents:Array<{key:String, atMs:Float, volume:Float}>;
+	var leadMs:Float;
+	var durationSec:Float;
+}
+
 /**
  * rawvideo 直连 ffmpeg 的编码与合成。
  *
@@ -164,8 +177,7 @@ class RenderEncoder
 	 * 收尾：关闭 stdin → 等待编码结束 → 混入音轨 → 拼接过场。
 	 * 返回最终 MP4 路径（失败返回 ''）。
 	 */
-	public static function finish(song:String, playbackRate:Float, offsetMs:Float,
-		mixAudio:Bool, cutscenes:Array<String>, log:String->Void):String
+	public static function finish(info:RenderAudioInfo, log:String->Void):String
 	{
 		if (!_running || _proc == null) return '';
 		_running = false;
@@ -180,24 +192,34 @@ class RenderEncoder
 		if (code != 0 || !FileSystem.exists(_videoOnly)) return '';
 
 		var finalPath:String = _outputDir + 'output.mp4';
-		var audio:Array<String> = mixAudio ? collectAudio(song, log) : [];
-
-		if (audio.length == 0)
+		var audioMixed:Bool = false;
+		if (info.mixAudio)
+		{
+			var wav:String = _outputDir + 'audio_track.wav';
+			if (buildAudioTrack(wav, info, log))
+			{
+				var args:Array<String> = [
+					'-y', '-hide_banner', '-loglevel', 'error',
+					'-i', _videoOnly, '-i', wav,
+					'-map', '0:v', '-map', '1:a',
+					'-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
+					'-t', fmtTime(info.durationSec), finalPath
+				];
+				audioMixed = run(args, log, 'mux');
+			}
+			if (!audioMixed) log('[encoder] audio build/mux failed, falling back to video-only');
+		}
+		if (!audioMixed)
 		{
 			try { File.copy(_videoOnly, finalPath); }
 			catch (e:Dynamic) { log('[encoder] copy failed: ' + Std.string(e)); return ''; }
-			log('[encoder] no audio mixed (mixAudio=false or no audio files found)');
-		}
-		else if (!muxAudio(_videoOnly, finalPath, audio, playbackRate, offsetMs, log))
-		{
-			log('[encoder] audio mux failed, falling back to video-only copy');
-			try { File.copy(_videoOnly, finalPath); } catch (e:Dynamic) { return ''; }
+			log('[encoder] video only (mixAudio=false or no usable audio)');
 		}
 
-		if (cutscenes != null && cutscenes.length > 0 && FileSystem.exists(finalPath))
+		if (info.cutscenes != null && info.cutscenes.length > 0 && FileSystem.exists(finalPath))
 		{
 			var joined:String = _outputDir + 'with_cutscenes.mp4';
-			if (joinCutscenes(finalPath, joined, cutscenes, audio.length > 0, log))
+			if (joinCutscenes(finalPath, joined, info.cutscenes, audioMixed, log))
 			{
 				log('[encoder] cutscenes joined -> ' + joined);
 				return joined;
@@ -207,62 +229,119 @@ class RenderEncoder
 		return finalPath;
 	}
 
-	/** 按引擎的加载顺序探测当前曲目的伴奏 / 人声文件 */
-	static function collectAudio(song:String, log:String->Void):Array<String>
+	static function fmtTime(sec:Float):String
+		return Std.string(Math.round(sec * 1000) / 1000);
+
+	/**
+	 * 重建音轨：主音轨整体延后 leadMs+offsetMs（倒计时段），
+	 * 倒计时等即时音效按各自记录的视频时间点叠加，最后裁剪到视频时长。
+	 * 分两步产出 wav 再与视频封装，避免 -shortest 把视频尾部裁掉。
+	 */
+	static function buildAudioTrack(out:String, info:RenderAudioInfo, log:String->Void):Bool
+	{
+		var tracks:Array<String> = [];
+		if (info.songAudio != null)
+			for (p in info.songAudio)
+				if (p != null && FileSystem.exists(p) && tracks.indexOf(p) < 0) tracks.push(p);
+		if (tracks.length == 0)
+		{
+			log('[encoder] no recorded song tracks, using filename fallback');
+			tracks = collectAudioFallback(info.song, log);
+		}
+		if (tracks.length == 0 && (info.soundEvents == null || info.soundEvents.length == 0)) return false;
+
+		var mainCount:Int = tracks.length;
+		var sfxFiles:Array<String> = [];
+		var delays:Array<Float> = [];
+		var volumes:Array<Float> = [];
+		// 视频 t 时 songPosition = (-lead + offset) + t*rate，而 music.time = songPosition - offset，
+		// 所以音频起点正好是 t = lead/rate —— offset 在两端抵消，不需要额外叠加。
+		var songDelay:Float = info.leadMs;
+		if (info.soundEvents != null)
+		{
+			for (e in info.soundEvents)
+			{
+				var f:String = resolveSound(e.key, log);
+				if (f == null) continue;
+				sfxFiles.push(f);
+				// e.atMs 已经是相对视频起点的绝对位置，不能再加 songDelay
+				delays.push(e.atMs);
+				volumes.push(e.volume);
+			}
+		}
+		log('[encoder] audio plan: songTracks=' + tracks.length + ' sfx=' + sfxFiles.length
+			+ ' songDelay=' + Math.round(songDelay) + 'ms duration=' + fmtTime(info.durationSec) + 's');
+
+		var all:Array<String> = tracks.concat(sfxFiles);
+		var args:Array<String> = ['-y', '-hide_banner', '-loglevel', 'error'];
+		for (f in all) args = args.concat(['-i', f]);
+
+		var fc:String = '';
+		var labels:Array<String> = [];
+		for (i in 0...mainCount)
+		{
+			fc += '[' + i + ':a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo';
+			if (info.rate != 1 && info.rate > 0.5 && info.rate < 2.0) fc += ',atempo=' + info.rate;
+			if (songDelay > 0) fc += ',adelay=' + Std.int(songDelay) + ':all=1';
+			fc += '[a' + i + '];';
+			labels.push('[a' + i + ']');
+		}
+		for (j in 0...sfxFiles.length)
+		{
+			var i:Int = mainCount + j;
+			fc += '[' + i + ':a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo'
+				+ ',volume=' + volumes[j]
+				+ ',adelay=' + Std.int(delays[j]) + ':all=1[a' + i + '];';
+			labels.push('[a' + i + ']');
+		}
+		fc += labels.join('') + 'amix=inputs=' + all.length
+			+ ':duration=longest:normalize=0,apad,atrim=0:' + fmtTime(info.durationSec) + '[a]';
+
+		args = args.concat([
+			'-filter_complex', fc, '-map', '[a]',
+			'-c:a', 'pcm_s16le', '-t', fmtTime(info.durationSec), out
+		]);
+		log('[encoder] audio args: ' + args.join(' '));
+		return run(args, log, 'audio track');
+	}
+
+	/** 兜底：没有渲染期记录时，只选一条 Inst，绝不把多个 Inst 变体叠加 */
+	static function collectAudioFallback(song:String, log:String->Void):Array<String>
 	{
 		var out:Array<String> = [];
 		var modDir:String = Mods.currentModDirectory;
-		var bases:Array<String> = [];
 		var s = PlayState.SONG;
-		if (s != null && s.specialInst != null && s.specialInst.length > 0)
-			bases.push('Inst-' + s.specialInst);
-		bases.push('Inst');
-		if (s != null && s.specialVocal != null && s.specialVocal.length > 0)
+		var instBase:String = (s != null && s.specialInst != null && s.specialInst.length > 0)
+			? 'Inst-' + s.specialInst : 'Inst';
+		var ip:String = Paths.getSongAudioPath(song, instBase, modDir);
+		if (!FileSystem.exists(ip)) ip = Paths.getSongAudioPath(song, 'Inst', modDir);
+		if (FileSystem.exists(ip)) out.push(ip);
+		var vocalSuffix:String = (s != null && s.specialVocal != null && s.specialVocal.length > 0)
+			? '-' + s.specialVocal : '';
+		for (b in ['Voices-Player', 'Voices-Opponent', 'Voices'])
 		{
-			bases.push('Voices-' + s.specialVocal);
-			bases.push('Voices-Player-' + s.specialVocal);
-			bases.push('Voices-Opponent-' + s.specialVocal);
+			var p:String = Paths.getSongAudioPath(song, b + vocalSuffix, modDir);
+			if (FileSystem.exists(p) && out.indexOf(p) < 0) out.push(p);
 		}
-		bases = bases.concat(['Voices', 'Voices-Player', 'Voices-Opponent']);
-		for (b in bases)
-		{
-			var p:String = Paths.getSongAudioPath(song, b, modDir);
-			if (p != null && FileSystem.exists(p) && out.indexOf(p) < 0) out.push(p);
-		}
-		log('[encoder] audio files (' + out.length + '): ' + out.join(' | '));
+		log('[encoder] fallback audio files (' + out.length + '): ' + out.join(' | '));
 		return out;
 	}
 
-	static function muxAudio(video:String, out:String, audio:Array<String>,
-		rate:Float, offsetMs:Float, log:String->Void):Bool
+	/** 倒计时音效：先查当前模组覆盖，再回退 assets/shared/sounds */
+	static function resolveSound(key:String, log:String->Void):String
 	{
-		var args:Array<String> = ['-y', '-hide_banner', '-loglevel', 'error', '-i', video];
-		for (a in audio) args = args.concat(['-i', a]);
-
-		var n:Int = audio.length;
-		var fc:String = '';
-		var labels:Array<String> = [];
-		for (i in 0...n)
+		var ext:String = Paths.SOUND_EXT;
+		var modDir:String = Mods.currentModDirectory;
+		var candidates:Array<String> = [];
+		if (modDir != null && modDir.length > 0)
 		{
-			var src:String = '[' + (i + 1) + ':a]';
-			if (rate != 1 && rate > 0.5 && rate < 2.0)
-			{
-				fc += src + 'atempo=' + rate + '[a' + i + '];';
-				labels.push('[a' + i + ']');
-			}
-			else labels.push(src);
+			candidates.push('mods/' + modDir + '/sounds/' + key + '.' + ext);
+			candidates.push('mods/' + modDir + '/shared/sounds/' + key + '.' + ext);
 		}
-		fc += labels.join('') + 'amix=inputs=' + n + ':duration=first:normalize=0';
-		if (offsetMs > 0) fc += ',adelay=' + Std.int(offsetMs) + '|' + Std.int(offsetMs);
-		fc += '[a]';
-
-		args = args.concat([
-			'-filter_complex', fc,
-			'-map', '0:v', '-map', '[a]',
-			'-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest', out
-		]);
-		log('[encoder] mux args: ' + args.join(' '));
-		return run(args, log, 'mux');
+		candidates.push('assets/shared/sounds/' + key + '.' + ext);
+		for (c in candidates) if (FileSystem.exists(c)) return c;
+		log('[encoder] sfx not found: ' + key);
+		return null;
 	}
 
 	/** 片头拼接过场：统一缩放/帧率后用 concat filter，失败不影响主视频 */

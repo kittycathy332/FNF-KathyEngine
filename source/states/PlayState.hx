@@ -2195,6 +2195,11 @@ isReplaying = false;
 				callOnLuas('onCountdownTick', [swagCounter]);
 				callOnHScript('onCountdownTick', [tick, swagCounter]);
 
+				// 离线渲染：登记倒计时音效，合成阶段按当前虚拟时间点混回成片
+				if (backend.RenderClock.active && swagCounter < 4)
+					backend.RenderClock.registerSound(
+						['intro3', 'intro2', 'intro1', 'introGo'][swagCounter] + introSoundsSuffix, 0.6);
+
 				swagCounter += 1;
 			}, 5);
 		}
@@ -2841,7 +2846,11 @@ tempScore += '${lblScore}: ${songScore}';
 				// 优先 Voices-{角色}-SpecialVocal > Voices-Player/Opponent-SpecialVocal > Voices-SpecialVocal，命中即止（任一存在即可）。
 				if (songData.specialVocal != null && songData.specialVocal.length > 0)
 					fileBase += '-' + songData.specialVocal;
-				return Paths.loadSongAudio(songData.song, fileBase, audioModDir);
+				var snd:Sound = Paths.loadSongAudio(songData.song, fileBase, audioModDir);
+				// 离线渲染：登记真正加载成功的人声文件，避免合成阶段把多个候选版本叠加
+				if (snd != null && snd.length > 0 && backend.RenderClock.active)
+					backend.RenderClock.registerSongAudio(Paths.getSongAudioPath(songData.song, fileBase, audioModDir));
+				return snd;
 			}
 
 			var playerVocalPostfix = (boyfriend.vocalsFile == null || boyfriend.vocalsFile.length < 1) ? boyfriend.curCharacter : boyfriend.vocalsFile;
@@ -2874,7 +2883,11 @@ tempScore += '${lblScore}: ${songScore}';
 		try
 		{
 			var instFileBase:String = (songData.specialInst != null && songData.specialInst.length > 0) ? 'Inst-${songData.specialInst}' : 'Inst';
-			inst.loadEmbedded(Paths.loadSongAudio(songData.song, instFileBase, audioModDir));
+			var instSound:Sound = Paths.loadSongAudio(songData.song, instFileBase, audioModDir);
+			inst.loadEmbedded(instSound);
+			// 离线渲染：只登记这一个实际加载的伴奏，不再把所有 Inst-* 变体都混进成片
+			if (instSound != null && backend.RenderClock.active)
+				backend.RenderClock.registerSongAudio(Paths.getSongAudioPath(songData.song, instFileBase, audioModDir));
 		}
 		catch (e:Dynamic) {}
 		FlxG.sound.list.add(inst);
@@ -6854,7 +6867,10 @@ tempScore += '${lblScore}: ${songScore}';
 			// 调整显示格式，保留两位小数
 			var modeLabel:String = "";
 			if (ClientPrefs.data.showModeLabelInMsTxt) {
-				if (isReplaying) {
+				if (backend.RenderClock.active) {
+					// 离线渲染：优先标注 RENDER，区别于实时游玩的 BOT/REP
+					modeLabel = "(RENDER)";
+				} else if (isReplaying) {
 					modeLabel = "(REP)";
 				} else if (cpuControlled) {
 					modeLabel = "(BOT)";

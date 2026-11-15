@@ -62,9 +62,17 @@ class RenderClock
 	static var _frameReady:Bool = false;
 	static var _interrupted:String = '';
 	static var _skippedSubFrames:Int = 0;
+	/** 运行期时钟参数被外部改写并校正回来的次数（应为 0，非 0 说明还有别的干扰源） */
+	static var _clockCorrections:Int = 0;
 	static var _usePipe:Bool = false;
 	static var _usePNG:Bool = true;
 	static var _cutscenes:Array<String> = [];
+	/** 游戏实际加载的伴奏 / 人声文件路径（由 PlayState 加载处登记，去重） */
+	public static var songAudio:Array<String> = [];
+	/** 渲染期间播放的即时音效：key=资源名，atMs=相对视频起点，volume=音量 */
+	public static var soundEvents:Array<{key:String, atMs:Float, volume:Float}> = [];
+	/** 倒计时段长度，换算成视频时间轴上的毫秒 */
+	static var _leadMs:Float = 0;
 	static var _firstError:String = '';
 	static var _errorCount:Int = 0;
 	static var _logLines:Array<String> = [];
@@ -120,6 +128,7 @@ class RenderClock
 		_frameReady = false;
 		_interrupted = '';
 		_skippedSubFrames = 0;
+		_clockCorrections = 0;
 		logLine('[begin] ' + _songName + ' / ' + _fps + 'fps / ' + _width + 'x' + _height);
 		logLine('[output] ' + outputDir);
 
@@ -128,6 +137,9 @@ class RenderClock
 		_usePipe = (d.renderOutput == 'MP4' || d.renderOutput == 'PNG+MP4');
 		_usePNG = (d.renderOutput == 'PNG' || d.renderOutput == 'PNG+MP4');
 		_cutscenes = [];
+		songAudio = [];
+		soundEvents = [];
+		_leadMs = 0;
 		logLine('[mode] output=' + d.renderOutput + ' pipe=' + _usePipe + ' png=' + _usePNG
 			+ ' encoder=' + d.renderEncoder + ' crf=' + d.renderCRF);
 		if (_usePipe)
@@ -150,14 +162,15 @@ class RenderClock
 		// 只约束累加器，不改 vcr.paused、不手动 step/draw —— 避免与引擎主循环重入
 		FlxG.fixedTimestep = true;
 		FlxG.timeScale = 1;
-		FlxG.updateFramerate = _fps;
-		FlxG.drawFramerate = _fps;
-		d.framerate = _fps;
-		// set_drawFramerate() 会重写 _maxAccumulation，必须放在最后
+		FlxG.updateFramerate = _fps; // 决定 _stepMS 与 FlxG.elapsed
+		// 刻意不动 drawFramerate / ClientPrefs.data.framerate：
+		// 窗口仍按玩家设定的帧率跑，虚拟时间轴只由 stepMS + 累加器上限决定，
+		// 两者彻底解耦，也避免与 FPS 计数器的自动调速互相打架。
+		// set_updateFramerate() 可能触碰 _maxAccumulation，钉死放在最后
 		@:privateAccess FlxG.game._maxAccumulation = 1000 / _fps;
 		FlxG.random.initialSeed = d.renderSeed;
-		logLine('[clock] stepMS=' + (1000 / _fps) + 'ms, maxAccumulation pinned to one step'
-			+ ' (was update/draw/pref ' + _savedUpdateFramerate + '/' + _savedDrawFramerate + '/' + _savedFrameratePref + ')');
+		logLine('[clock] stepMS=' + (1000 / _fps) + 'ms pinned; drawFramerate left at '
+			+ _savedDrawFramerate + ' (user pref ' + _savedFrameratePref + ')');
 
 		// 倒计时段的起点与 PlayState.startCountdown() 的赋值保持一致
 		_startSongPos = (d.renderRange == 'SongOnly')
@@ -212,6 +225,25 @@ class RenderClock
 	static function onStateLeaving():Void
 	{
 		if (active) abort('state switch / game reset');
+	}
+
+	/**
+	 * 帧末把时钟参数钉回去。
+	 * updateFramerate 决定 _stepMS → FlxG.elapsed（FlxTimer / 倒计时的步长）；
+	 * _maxAccumulation 决定一帧最多 step 几次（超过一帧就丢画面）。
+	 * 任何外部改写都会让虚拟时间轴与画面脱节，这里统一兜底。
+	 */
+	static function enforceClock():Void
+	{
+		if (FlxG.updateFramerate != _fps) { FlxG.updateFramerate = _fps; _clockCorrections++; }
+		if (FlxG.timeScale != 1) { FlxG.timeScale = 1; _clockCorrections++; }
+		var stepMs:Float = 1000 / _fps;
+		var cur:Float = @:privateAccess FlxG.game._maxAccumulation;
+		if (cur > stepMs)
+		{
+			@:privateAccess FlxG.game._maxAccumulation = stepMs;
+			_clockCorrections++;
+		}
 	}
 
 	/** 每帧一次：截屏落盘，然后推进帧号 */
@@ -269,6 +301,9 @@ class RenderClock
 		}
 
 		frame++;
+		// 帧末把时钟参数钉回去：若 FPS 计数器或模组脚本在本帧改过，
+		// 下一帧的 updateElapsed() 就会用错 _stepSeconds / 累加器上限。
+		enforceClock();
 		// 连续失败就别空转整首歌了，直接收尾并把错误交给弹窗 / 日志
 		if (_errorCount >= 10 && frame < 20)
 		{
@@ -284,10 +319,16 @@ class RenderClock
 	{
 		if (!active) return;
 		var d = ClientPrefs.data;
+		var rate:Float = (PlayState.instance != null) ? PlayState.instance.playbackRate : 1;
+		if (rate <= 0) rate = 1;
 		var leadMs:Float = (d != null && d.renderRange == 'SongOnly') ? 0 : Conductor.crochet * 5;
-		totalFrames = Math.ceil((leadMs + songLengthMs) / (1000 / _fps));
+		// songPosition 每帧推进 (1000/fps)*rate，故总帧数要除以 rate；
+		// 音轨在视频时间轴上的起点是 leadMs/rate（倒计时段）。
+		_leadMs = leadMs / rate;
+		totalFrames = Math.ceil((leadMs + songLengthMs) / (1000 / _fps) / rate);
 		freezeAudio();
-		logLine('[song] length=' + songLengthMs + 'ms totalFrames=' + totalFrames);
+		logLine('[song] length=' + songLengthMs + 'ms leadMs=' + _leadMs
+			+ ' rate=' + rate + ' totalFrames=' + totalFrames);
 		trace('[RenderClock] totalFrames = ' + totalFrames);
 	}
 
@@ -361,11 +402,24 @@ class RenderClock
 		var d = ClientPrefs.data;
 		var videoPath:String = '';
 		if (_usePipe)
-			videoPath = RenderEncoder.finish(_songName,
-				(PlayState.instance != null ? PlayState.instance.playbackRate : 1),
-				Conductor.offset, (d != null && d.renderAudio), _cutscenes, logLine);
+		{
+			var rate:Float = (PlayState.instance != null) ? PlayState.instance.playbackRate : 1;
+			if (rate <= 0) rate = 1;
+			videoPath = RenderEncoder.finish({
+				song: _songName,
+				rate: rate,
+				offsetMs: Conductor.offset,
+				mixAudio: (d != null && d.renderAudio),
+				cutscenes: _cutscenes,
+				songAudio: songAudio,
+				soundEvents: soundEvents,
+				leadMs: _leadMs,
+				durationSec: frame / _fps
+			}, logLine);
+		}
 		logLine('[finish] frames=' + frame + ' / captureErrors=' + _errorCount
 			+ ' / skippedSubFrames=' + _skippedSubFrames
+			+ ' / clockCorrections=' + _clockCorrections
 			+ (_firstError != '' ? ' / firstError=' + _firstError : '')
 			+ ' / video=' + videoPath);
 		writeManifest(videoPath, '');
@@ -390,7 +444,8 @@ class RenderClock
 		cleanup();
 		var partial:String = _usePipe ? RenderEncoder.abort(logLine) : '';
 		logLine('[abort] reason=' + reason + ' frames=' + frame
-			+ ' / skippedSubFrames=' + _skippedSubFrames + ' / partial=' + partial);
+			+ ' / skippedSubFrames=' + _skippedSubFrames
+			+ ' / clockCorrections=' + _clockCorrections + ' / partial=' + partial);
 		writeManifest(partial, reason);
 		if (!silent)
 		{
@@ -410,6 +465,28 @@ class RenderClock
 			try { backend.CoolUtil.showPopUp(summary, Language.get('render_menu')); }
 			catch (e:Dynamic) logLine('[popup error] ' + Std.string(e));
 		}, 200);
+	}
+
+	/** 由 PlayState 音频加载处调用：登记游戏实际加载的伴奏 / 人声文件（去重） */
+	public static function registerSongAudio(path:String):Void
+	{
+		if (!active || path == null || !FileSystem.exists(path)) return;
+		if (songAudio.indexOf(path) < 0)
+		{
+			songAudio.push(path);
+			logLine('[audio] song track: ' + path);
+		}
+	}
+
+	/** 由 PlayState 播放即时音效处调用：把虚拟时间换算成视频时间轴上的毫秒 */
+	public static function registerSound(key:String, volume:Float):Void
+	{
+		if (!active || key == null) return;
+		var rate:Float = (PlayState.instance != null) ? PlayState.instance.playbackRate : 1;
+		if (rate <= 0) rate = 1;
+		var atMs:Float = (Conductor.songPosition - _startSongPos) / rate;
+		soundEvents.push({key: key, atMs: atMs, volume: volume});
+		logLine('[audio] sfx: ' + key + ' at ' + Math.round(atMs) + 'ms vol=' + volume);
 	}
 
 	/** 由 PlayState.startVideo() 调用：记录过场文件路径，合成阶段用 concat 拼接 */
@@ -436,6 +513,7 @@ class RenderClock
 				videoPath: videoPath,
 				interrupted: interrupted,
 				skippedSubFrames: _skippedSubFrames,
+				clockCorrections: _clockCorrections,
 				captureErrors: _errorCount,
 				firstError: _firstError,
 				encoder: d.renderEncoder,

@@ -168,7 +168,10 @@ class PsychFPSCounter extends TextField
 			}
 
 			// Set Update and Draw framerate to the current FPS every 1.5 second to prevent "slowness" issue
-			if ((FlxG.updateFramerate >= currentFPS + 5 || FlxG.updateFramerate <= currentFPS - 5)
+			// 离线渲染期间必须跳过：改 updateFramerate 会让 FlxG.elapsed 偏离 1/fps（倒计时加速），
+			// 改 drawFramerate 的 setter 会重写 _maxAccumulation（一帧多 step → 丢帧）。
+			if (!backend.RenderClock.active
+				&& (FlxG.updateFramerate >= currentFPS + 5 || FlxG.updateFramerate <= currentFPS - 5)
 				&& haxe.Timer.stamp() - lastFramerateUpdateTime >= 1.5
 				&& currentFPS >= 30)
 			{

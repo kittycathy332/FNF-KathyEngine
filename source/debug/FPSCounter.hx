@@ -236,7 +236,12 @@ class FPSCounter extends Sprite
 		var textLines:Array<String> = [];
 
 		// FPS信息 - 根据设置显示（附带原生GC开关状态标记）
-		if (ClientPrefs.data.fpsShowFPS) textLines.push('FPS: $currentFPS ${gcStateLabel()}');
+		// 离线渲染时在 FPS 数字后标注 (RENDER)，仅 Kathy 详细样式才有此标签
+		if (ClientPrefs.data.fpsShowFPS)
+		{
+			var renderTag:String = backend.RenderClock.active ? " (RENDER)" : "";
+			textLines.push('FPS: $currentFPS$renderTag ${gcStateLabel()}');
+		}
 		if (ClientPrefs.data.fpsShowDelay) textLines.push('Delay: ${currentDelay}ms');
 		if (ClientPrefs.data.fpsShowRAM) textLines.push('RAM: ${formatMemory(memory)}');
 		if (ClientPrefs.data.fpsShowMemPeak) textLines.push('MEM Peak: ${formatMemory(memoryPeakMegas)}');
