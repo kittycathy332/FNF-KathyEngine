@@ -7,12 +7,12 @@ echo Makking the main haxelib and setuping folder in same time..
 mkdir ~/haxelib && haxelib setup ~/haxelib
 echo Installing dependencies...
 echo This might take a few moments depending on your internet speed.
-haxelib git hxcpp https://github.com/kittycathy332/hxcpp-SDE.git main-261101 --quiet
+haxelib git hxcpp https://github.com/kittycathy332/hxcpp-SDE.git main --quiet
 # hxcpp git 源码版需要重新编译命令行工具（hxcpp.n），否则构建时会卡在交互提示
 HAXELIB_PATH=$(haxelib config)
 ( cd "$HAXELIB_PATH/hxcpp/git/tools/hxcpp" && haxe compile.hxml )
 haxelib install lime 8.3.2 --quiet --skip-dependencies
-haxelib install libhxcpp 6.0.0-rc.1 --skip-dependencies
+# haxelib install libhxcpp 6.0.0-rc.1 --skip-dependencies
 haxelib install openfl 9.5.2 --quiet --skip-dependencies
 haxelib install flixel 5.9.0 --quiet
 haxelib install flixel-addons 4.0.2 --quiet --skip-dependencies
@@ -41,5 +41,5 @@ haxelib git haxeui-flixel https://github.com/kittycathy332/haxeui-flixel.git mas
 haxelib git funkin.vis https://github.com/FunkinCrew/funkVis 22b1ce089dd924f15cdc4632397ef3504d464e90 --quiet --skip-dependencies
 haxelib git grig.audio https://gitlab.com/haxe-grig/grig.audio.git cbf91e2180fd2e374924fe74844086aab7891666 --quiet
 haxelib git spine-haxe https://github.com/kittycathy332/spine-haxe-Archive.git  --quiet --skip-dependencies
-haxelib run libhxcpp setup
+# haxelib run libhxcpp setup
 echo Finished!
