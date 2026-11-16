@@ -5,6 +5,9 @@ import sys.io.File;
 import sys.FileSystem;
 import sys.thread.Thread;
 import haxe.io.Bytes;
+import hx.concurrent.collection.Queue;
+import sys.thread.Mutex;
+import sys.thread.Semaphore;
 
 /** 合成所需的音频信息，全部来自渲染期 PlayState 的真实记录 */
 typedef RenderAudioInfo = {
@@ -15,6 +18,8 @@ typedef RenderAudioInfo = {
 	var cutscenes:Array<String>;
 	var songAudio:Array<String>;
 	var soundEvents:Array<{key:String, atMs:Float, volume:Float}>;
+	/** 渲染期自动捕获的中途音效（事件 / 脚本 / stage 播放的音频） */
+	var sfx:Array<{path:String, atMs:Float, volume:Float, looped:Bool, durMs:Float}>;
 	var leadMs:Float;
 	var durationSec:Float;
 }
@@ -42,6 +47,21 @@ class RenderEncoder
 	static var _crf:Int = 20;
 	static var _frames:Int = 0;
 	static var _running:Bool = false;
+
+	// ===== 异步写入流水线：GPU 读回(主线程) 与 ffmpeg 编码(后台线程) 重叠 =====
+	/** 待写入 ffmpeg 的帧队列；Bytes 在主线程生成，writer 线程只管写管道 */
+	static var _writeQueue:Queue<Bytes> = null;
+	/** 剩余槽位信号量：上限 8 帧（8×8.3MB≈66MB），防止内存无限堆积 */
+	static var _slots:Semaphore = null;
+	/** writer 线程是否已退出（队列排空且收到结束信号） */
+	static var _writerDone:Bool = false;
+	/** writer 停止标志：drain 时置位，避免用 null 哨兵（Queue 对 null 处理不可靠） */
+	static var _stopWriter:Bool = false;
+	/** writer 线程已成功写入的帧数（用于收尾对账，避免依赖槽位计数造成死锁） */
+	static var _writtenFrames:Int = 0;
+	/** 保存 log 回调，供无参的 drainAndClose 使用 */
+	static var _log:String->Void = null;
+	static inline var QUEUE_CAP:Int = 8;
 
 	public static function locate(log:String->Void):String
 	{
@@ -85,6 +105,7 @@ class RenderEncoder
 		_height = height;
 		_fps = fps;
 		_crf = crf;
+		_log = log;
 		_frames = 0;
 		_videoOnly = outputDir + 'video_only.mp4';
 
@@ -126,8 +147,34 @@ class RenderEncoder
 				try { while (true) p.stderr.readByte(); }
 				catch (e:Dynamic) {}
 			});
+
+			// 异步写入线程：主线程负责 GPU 读回并入队，这里并行把队列内容写进管道。
+			// 这样 readPixels 的 GPU 等待与 ffmpeg 编码不再串行，充分利用多核。
+			_writeQueue = new Queue<Bytes>();
+			_slots = new Semaphore(QUEUE_CAP);
+			_writerDone = false;
+			_stopWriter = false;
+			_writtenFrames = 0;
+			Thread.create(function()
+			{
+				while (!_stopWriter)
+				{
+					// 短超时轮询：既避免忙等，又能及时响应 stopWriter 标志
+					var b:Bytes = _writeQueue.pop(100);
+					if (b == null) continue;
+					try { p.stdin.writeBytes(b, 0, b.length); _writtenFrames++; }
+					catch (e:Dynamic)
+					{
+						log('[encoder] writer error: ' + Std.string(e));
+						break;
+					}
+					_slots.release(); // 归还槽位，唤醒被背压的主线程
+				}
+				_writerDone = true;
+			});
+
 			_running = true;
-			log('[encoder] pipe started: ' + _ffmpeg + ' / ' + _encoder
+			log('[encoder] pipe started (async writer x' + QUEUE_CAP + '): ' + _ffmpeg + ' / ' + _encoder
 				+ ' / ' + width + 'x' + height + '@' + fps + ' / crf=' + crf);
 			return true;
 		}
@@ -135,16 +182,51 @@ class RenderEncoder
 		{
 			log('[encoder] pipe start FAILED: ' + Std.string(e));
 			_proc = null;
+		_log = null;
 			return false;
 		}
 	}
 
-	/** 写一帧 RGBA 原始像素（零拷贝，直接写 stdin） */
+	/**
+	 * 提交一帧 RGBA 原始像素到异步写入队列。
+	 * 队列满时会在此短暂背压（等 writer 归还槽位），但不直接等 ffmpeg 编码完成。
+	 */
 	public static function writeFrame(bytes:Bytes):Void
 	{
 		if (!_running || _proc == null) return;
-		_proc.stdin.writeBytes(bytes, 0, bytes.length);
+		if (_slots != null) _slots.acquire(); // 有空槽才入队，控制内存上限
+		if (_writeQueue != null) _writeQueue.push(bytes);
 		_frames++;
+	}
+
+	/**
+	 * 排空队列并关闭 stdin 前的同步点：等 writer 写完所有已入队的帧，
+	 * 再置停止标志让它退出。必须在 stdin.close() 之前调用，否则会丢尾帧。
+	 */
+	static function drainAndClose():Void
+	{
+		if (_writeQueue != null)
+		{
+			var target:Int = _frames;
+			// 等 writer 把所有已入队的帧写完（按实际写入帧数对账，writer 异常退出也不会死等）
+			var waited:Int = 0;
+			while (_writtenFrames < target && !_writerDone && waited < 30000)
+			{
+				Sys.sleep(0.002);
+				waited += 2;
+			}
+			if (_writtenFrames != target && _log != null)
+				_log('[encoder] drain mismatch: written=' + _writtenFrames + ' queued=' + target);
+			_stopWriter = true; // 通知 writer 线程退出
+			waited = 0;
+			while (!_writerDone && waited < 2000)
+			{
+				Sys.sleep(0.005);
+				waited += 5;
+			}
+		}
+		_writeQueue = null;
+		_slots = null;
 	}
 
 	public static function isRunning():Bool return _running && _proc != null;
@@ -158,11 +240,13 @@ class RenderEncoder
 	{
 		if (!_running || _proc == null) return '';
 		_running = false;
+		drainAndClose(); // 先把队列里已提交的帧写完，再关 stdin
 		try { _proc.stdin.close(); } catch (e:Dynamic) {}
 		var code:Int = -1;
 		try { code = _proc.exitCode(); } catch (e:Dynamic) {}
 		try { _proc.close(); } catch (e:Dynamic) {}
 		_proc = null;
+		_log = null;
 		log('[encoder] ABORT pipe closed exit=' + code + ' frames=' + _frames);
 		if (code == 0 && FileSystem.exists(_videoOnly))
 		{
@@ -186,11 +270,13 @@ class RenderEncoder
 	{
 		if (!_running || _proc == null) return '';
 		_running = false;
+		drainAndClose(); // 等队列排空再关 stdin，保证尾帧不丢
 		try { _proc.stdin.close(); } catch (e:Dynamic) {}
 		var code:Int = -1;
 		try { code = _proc.exitCode(); } catch (e:Dynamic) {}
 		try { _proc.close(); } catch (e:Dynamic) {}
 		_proc = null;
+		_log = null;
 		log('[encoder] pipe closed exit=' + code + ' frames=' + _frames
 			+ ' size=' + (FileSystem.exists(_videoOnly) ? FileSystem.stat(_videoOnly).size : 0));
 
@@ -253,12 +339,15 @@ class RenderEncoder
 			log('[encoder] no recorded song tracks, using filename fallback');
 			tracks = collectAudioFallback(info.song, log);
 		}
-		if (tracks.length == 0 && (info.soundEvents == null || info.soundEvents.length == 0)) return false;
+		if (tracks.length == 0 && (info.soundEvents == null || info.soundEvents.length == 0)
+			&& (info.sfx == null || info.sfx.length == 0)) return false;
 
 		var mainCount:Int = tracks.length;
 		var sfxFiles:Array<String> = [];
 		var delays:Array<Float> = [];
 		var volumes:Array<Float> = [];
+		var durs:Array<Float> = [];
+		var loops:Array<Bool> = [];
 		// 视频 t 时 songPosition = (-lead + offset) + t*rate，而 music.time = songPosition - offset，
 		// 所以音频起点正好是 t = lead/rate —— offset 在两端抵消，不需要额外叠加。
 		var songDelay:Float = info.leadMs;
@@ -272,14 +361,44 @@ class RenderEncoder
 				// e.atMs 已经是相对视频起点的绝对位置，不能再加 songDelay
 				delays.push(e.atMs);
 				volumes.push(e.volume);
+				durs.push(-1);
+				loops.push(false);
+			}
+		}
+		// 渲染期自动捕获的中途音效（事件 / 脚本 / stage 播放的音频），路径已在游戏内解析好
+		var autoCount:Int = 0;
+		if (info.sfx != null)
+		{
+			for (e in info.sfx)
+			{
+				if (e == null || e.path == null || e.volume <= 0.001) continue;
+				if (!FileSystem.exists(e.path))
+				{
+					log('[encoder] sfx missing on disk: ' + e.path);
+					continue;
+				}
+				sfxFiles.push(e.path);
+				delays.push(Math.max(0, e.atMs));
+				volumes.push(e.volume);
+				durs.push(e.durMs);
+				loops.push(e.looped);
+				autoCount++;
 			}
 		}
 		log('[encoder] audio plan: songTracks=' + tracks.length + ' sfx=' + sfxFiles.length
-			+ ' songDelay=' + Math.round(songDelay) + 'ms duration=' + fmtTime(info.durationSec) + 's');
+			+ ' (auto=' + autoCount + ') songDelay=' + Math.round(songDelay)
+			+ 'ms duration=' + fmtTime(info.durationSec) + 's');
 
 		var all:Array<String> = tracks.concat(sfxFiles);
 		var args:Array<String> = ['-y', '-hide_banner', '-loglevel', 'error'];
-		for (f in all) args = args.concat(['-i', f]);
+		for (i in 0...all.length)
+		{
+			// 循环音效（环境音 / 持续 BGM）必须让 ffmpeg 自己续播，再用 atrim 截到实际时长
+			if (i >= mainCount && loops[i - mainCount])
+				args = args.concat(['-stream_loop', '-1', '-i', all[i]]);
+			else
+				args = args.concat(['-i', all[i]]);
+		}
 
 		var fc:String = '';
 		var labels:Array<String> = [];
@@ -294,9 +413,17 @@ class RenderEncoder
 		for (j in 0...sfxFiles.length)
 		{
 			var i:Int = mainCount + j;
-			fc += '[' + i + ':a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo'
-				+ ',volume=' + volumes[j]
-				+ ',adelay=' + Std.int(delays[j]) + ':all=1[a' + i + '];';
+			// durMs <= 0 表示"一直播到视频结束"：用剩余时长兜底，避免无限循环输入拖住编码
+			var dur:Float = durs[j];
+			if (dur <= 0) dur = Math.max(0, info.durationSec - delays[j] / 1000);
+			var f:String = '[' + i + ':a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo';
+			if (volumes[j] != 1) f += ',volume=' + volumes[j];
+			if (dur > 0) f += ',atrim=0:' + fmtTime(dur);
+			// atrim 之后 PTS 不会归零，adelay 会算错起点，必须先重置时间戳
+			f += ',asetpts=PTS-STARTPTS';
+			if (delays[j] > 0) f += ',adelay=' + Std.int(delays[j]) + ':all=1';
+			f += '[a' + i + '];';
+			fc += f;
 			labels.push('[a' + i + ']');
 		}
 		fc += labels.join('') + 'amix=inputs=' + all.length

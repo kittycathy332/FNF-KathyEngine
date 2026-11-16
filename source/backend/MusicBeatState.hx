@@ -139,6 +139,9 @@ class MusicBeatState extends FlxState
 		super.create();
 
 		if(!skip) {
+			// 转场也属于成片内容，渲染时照常打开。
+			// 关键在 RenderClock.onPreUpdate：转场期间必须让虚拟时钟照常推进并截帧
+			// （旧版见到 subState 就冻结，而 FlxTimer 照走，才导致倒计时被压快 + 开场丢帧）。
 			openSubState(new CustomFadeTransition(0.5, true));
 		}
 		FlxTransitionableState.skipNextTransOut = false;

@@ -7,6 +7,18 @@ import sys.FileSystem;
 import haxe.Json;
 
 /**
+ * 一条自动捕获的即时音效。
+ * atMs 是视频时间轴上的起点，durMs <= 0 表示"一直播到视频结束"。
+ */
+typedef SfxTrack = {
+	var path:String;
+	var atMs:Float;
+	var volume:Float;
+	var looped:Bool;
+	var durMs:Float;
+}
+
+/**
  * 离线渲染驱动（"视频软件式"渲染，不是录屏）。
  *
  * 重要：不接管主循环。早期版本用 FlxG.vcr.paused + 手动 step()/draw()，
@@ -14,17 +26,21 @@ import haxe.Json;
  * CustomFadeTransition.create() 在 Paths 缓存不一致时崩溃（hxSehException）。
  *
  * 现在的做法只约束 FlxGame 自己的累加器：
- *  1. fixedTimestep = true + updateFramerate = fps
+ *  1. fixedTimestep = true + updateFramerate = drawFramerate = stage.frameRate = fps
  *     → _stepMS = 1000/fps，updateElapsed() 恒算出 FlxG.elapsed = 1/fps
  *       （elapsed 是 (default,null) 只读属性，不需要写）。
  *  2. 把 _maxAccumulation 钉死为 1000/fps（== _stepMS）→ while 循环
  *     每帧最多执行一次 step()：慢帧不补跑、快帧攒够才跑，都不丢帧。
- *  3. drawFramerate 与 ClientPrefs.data.framerate 同步设为 fps，
- *     避免 FPSCounter 每帧把窗口帧率改回用户设定值。
+ *     注意 set_drawFramerate() 会把 _maxAccumulation 改写成 2000/fps - 1（≈两步），
+ *     所以每次设定帧率之后都必须重新钉一次，否则会"跑两步、只截一帧"。
+ *  3. ClientPrefs.data.framerate 也同步改成 fps，让读它的模组 / 脚本保持一致。
  *  4. preUpdate 按帧号写 Conductor.songPosition 并置 _frameReady；
  *     postDraw 仅在 _frameReady 时截帧 —— 因为 draw() 每事件都会跑，
  *     而 step() 可能隔一次才跑，不这样做会截出重复帧。
- *  5. 截帧走 lime 官方 FlxG.stage.window.readPixels()（内部 glReadPixels +
+ *  5. 开场淡入转场（CustomFadeTransition）在渲染时被 MusicBeatState 跳过：
+ *     它是 subState，若照旧打开会让 PlayState.update 停摆而 FlxTimer 继续走，
+ *     造成倒计时被压快 + 开场丢 0.5s（45 帧 @90fps）。
+ *  6. 截帧走 lime 官方 FlxG.stage.window.readPixels()（内部 glReadPixels +
  *     自动垂直翻转）。绝不能用 BitmapData.draw(FlxG.game)：硬件/tile 渲染下
  *     Cairo 递归渲染 Tilemap/shader 会触发 hxSehException（访问违规）。
  *
@@ -47,7 +63,9 @@ class RenderClock
 	static var _savedTimeScale:Float = 1;
 	static var _savedUpdateFramerate:Int = 60;
 	static var _savedDrawFramerate:Int = 60;
+	static var _savedStageFrameRate:Float = 60;
 	static var _savedFrameratePref:Int = 60;
+	static var _savedAutoPause:Bool = true;
 	static var _savedMaxAccumulation:Float = 0;
 	static var _savedMusicVolume:Float = 1;
 	static var _savedVocalsVolume:Float = 1;
@@ -64,6 +82,14 @@ class RenderClock
 	static var _skippedSubFrames:Int = 0;
 	/** 运行期时钟参数被外部改写并校正回来的次数（应为 0，非 0 说明还有别的干扰源） */
 	static var _clockCorrections:Int = 0;
+	/** 真正执行过的 step() 次数。与 frame 数对比即可判断是否"跑了逻辑却没截帧" */
+	static var _stepCount:Int = 0;
+	/** 有 step 但没有对应截帧的次数（>0 说明画面上真丢了一帧的内容） */
+	static var _lostSteps:Int = 0;
+	/** 分阶段耗时统计（毫秒累计）：定位渲染瓶颈在读回还是管道写入 */
+	static var _perfReadMs:Float = 0;
+	static var _perfWriteMs:Float = 0;
+	static var _perfFrames:Int = 0;
 	static var _usePipe:Bool = false;
 	static var _usePNG:Bool = true;
 	static var _cutscenes:Array<String> = [];
@@ -71,6 +97,19 @@ class RenderClock
 	public static var songAudio:Array<String> = [];
 	/** 渲染期间播放的即时音效：key=资源名，atMs=相对视频起点，volume=音量 */
 	public static var soundEvents:Array<{key:String, atMs:Float, volume:Float}> = [];
+	/**
+	 * 渲染期间自动捕获的即时音效。
+	 * 与 soundEvents 的区别：soundEvents 靠调用点手工登记（倒计时），
+	 * 这里由每帧扫描 Flixel 声音池自动得到 —— 事件、脚本、stage、FlxG.sound.play()
+	 * 播放的音频都能覆盖，不需要改任何调用点。
+	 */
+	public static var sfxTimeline:Array<SfxTrack> = [];
+	/** 正在播放中的音效（FlxSound 对象 → 轨道），停止后移入 sfxTimeline */
+	static var _activeSfx:Map<flixel.sound.FlxSound, SfxTrack> = new Map();
+	/** Sound 资源对象 → 磁盘文件路径 的反查缓存（来源 Paths.currentTrackedSounds） */
+	static var _soundPathCache:Map<openfl.media.Sound, String> = new Map();
+	/** 本次渲染捕获到的音效总数（写日志 / manifest 用） */
+	static var _sfxSeen:Int = 0;
 	/** 倒计时段长度，换算成视频时间轴上的毫秒 */
 	static var _leadMs:Float = 0;
 	static var _firstError:String = '';
@@ -156,6 +195,8 @@ class RenderClock
 		_interrupted = '';
 		_skippedSubFrames = 0;
 		_clockCorrections = 0;
+		_stepCount = 0;
+		_lostSteps = 0;
 		logLine('[begin] ' + _songName + ' / ' + _fps + 'fps / ' + _width + 'x' + _height);
 		logLine('[output] ' + outputDir);
 		logLine('[window] native=' + _savedWindowWidth + 'x' + _savedWindowHeight
@@ -169,6 +210,10 @@ class RenderClock
 		_cutscenes = [];
 		songAudio = [];
 		soundEvents = [];
+		sfxTimeline = [];
+		_activeSfx = new Map();
+		_soundPathCache = new Map();
+		_sfxSeen = 0;
 		_leadMs = 0;
 		logLine('[mode] output=' + d.renderOutput + ' pipe=' + _usePipe + ' png=' + _usePNG
 			+ ' encoder=' + d.renderEncoder + ' crf=' + d.renderCRF);
@@ -186,21 +231,36 @@ class RenderClock
 		_savedTimeScale = FlxG.timeScale;
 		_savedUpdateFramerate = FlxG.updateFramerate;
 		_savedDrawFramerate = FlxG.drawFramerate;
+		_savedStageFrameRate = (FlxG.stage != null) ? FlxG.stage.frameRate : _savedDrawFramerate;
 		_savedFrameratePref = d.framerate;
 		_savedMaxAccumulation = @:privateAccess FlxG.game._maxAccumulation;
 
 		// 只约束累加器，不改 vcr.paused、不手动 step/draw —— 避免与引擎主循环重入
 		FlxG.fixedTimestep = true;
 		FlxG.timeScale = 1;
-		FlxG.updateFramerate = _fps; // 决定 _stepMS 与 FlxG.elapsed
-		// 刻意不动 drawFramerate / ClientPrefs.data.framerate：
-		// 窗口仍按玩家设定的帧率跑，虚拟时间轴只由 stepMS + 累加器上限决定，
-		// 两者彻底解耦，也避免与 FPS 计数器的自动调速互相打架。
-		// set_updateFramerate() 可能触碰 _maxAccumulation，钉死放在最后
+
+		// ===== 渲染期：把所有 FPS / 更新相关设定强行改为输出帧率 =====
+		// 顺序很重要：set_drawFramerate() 内部会把 _maxAccumulation 改写成
+		// 2000/fps - 1（≈ 两步），set_updateFramerate() 又会重算 _stepMS/_stepSeconds。
+		// 所以必须在两者之后再把累加器钉成恰好一步，否则单帧可能跑两次 step()
+		// 却只截一张图 —— 帧数对得上，画面内容却跳过一帧（= 肉眼丢帧）。
+		FlxG.updateFramerate = _fps; // 决定 _stepMS / _stepSeconds / FlxG.elapsed
+		FlxG.drawFramerate = _fps; // 决定 stage.frameRate（窗口发起 onEnterFrame 的频率）
+		if (FlxG.stage != null) FlxG.stage.frameRate = _fps;
+		d.framerate = _fps; // 让读 ClientPrefs.data.framerate 的模组 / 脚本也保持一致
+		// 渲染期间禁止失焦自动暂停：FlxGame.onEnterFrame 在 _lostFocus && autoPause 时
+		// 整帧 return，会让长时间渲染中途停住（且 step 与截帧配对全乱）。
+		_savedAutoPause = FlxG.autoPause;
+		FlxG.autoPause = false;
 		@:privateAccess FlxG.game._maxAccumulation = 1000 / _fps;
 		FlxG.random.initialSeed = d.renderSeed;
-		logLine('[clock] stepMS=' + (1000 / _fps) + 'ms pinned; drawFramerate left at '
-			+ _savedDrawFramerate + ' (user pref ' + _savedFrameratePref + ')');
+		logLine('[clock] ALL fps pinned to ' + _fps + ': update=' + FlxG.updateFramerate
+			+ ' draw=' + FlxG.drawFramerate
+			+ ' stage=' + ((FlxG.stage != null) ? Std.string(FlxG.stage.frameRate) : 'n/a')
+			+ ' pref=' + d.framerate
+			+ ' stepMS=' + (1000 / _fps) + ' maxAccum=' + (1000 / _fps)
+			+ ' (was update=' + _savedUpdateFramerate + ' draw=' + _savedDrawFramerate
+			+ ' stage=' + _savedStageFrameRate + ' pref=' + _savedFrameratePref + ')');
 
 		// 倒计时段的起点与 PlayState.startCountdown() 的赋值保持一致
 		_startSongPos = (d.renderRange == 'SongOnly')
@@ -240,17 +300,45 @@ class RenderClock
 		if (!active) return;
 		// create() 已完成，首帧把窗口 framebuffer 放大到目标分辨率
 		if (!_supersampleApplied) applySupersampling();
-		// 暂停菜单 / 淡入转场等 subState 打开时冻结渲染时钟：不推进帧号、不截帧。
-		// 否则暂停界面会被录进成片，且虚拟时间轴会继续往前跑。
-		if (FlxG.state != null && FlxG.state.subState != null)
+
+		// 只有暂停菜单才冻结时钟：暂停界面不属于成片，且此时游戏逻辑停摆，
+		// 继续推进虚拟时间会在恢复后造成跳变。
+		//
+		// 开场淡入转场（CustomFadeTransition）、对话等 subState 是成片的一部分，
+		// 必须照常推进帧号并截帧 —— preUpdate/postDraw 是全局信号，subState 打开时
+		// 依然每帧派发，所以这里不 return 就能把转场动画完整录进开头。
+		//
+		// 关键：旧版"见到任何 subState 就冻结"本身才是丢帧元凶 —— 转场期间
+		// PlayState.update 停摆、FlxTimer（倒计时）照走，虚拟时钟却不动，
+		// 于是倒计时空转 45 步（0.5s × 90fps）而画面一帧没录。现在虚拟时钟
+		// 与 FlxTimer 同步推进，倒计时恢复原速，转场画面也进成片。
+		if (isPauseOpen())
 		{
 			_frameReady = false;
 			_skippedSubFrames++;
 			return;
 		}
+
+		// 上一个 step 还没等到 draw() 就又 step 了一次 → 中间那帧画面永远丢了
+		if (_frameReady) _lostSteps++;
+		_stepCount++;
+
 		_frameReady = true;
 		var rate:Float = (PlayState.instance != null) ? PlayState.instance.playbackRate : 1;
 		Conductor.songPosition = _startSongPos + frame * (1000 / _fps) * rate;
+	}
+
+	/**
+	 * 暂停菜单是否打开。以 PlayState.paused 为主判据（最可靠、不依赖类名反射），
+	 * 类名只作兜底。用 inString 匹配避免 cpp 目标下 DCE 剥掉类元数据后反射失败。
+	 */
+	static function isPauseOpen():Bool
+	{
+		var ps = PlayState.instance;
+		if (ps != null && ps.paused) return true;
+		if (FlxG.state == null || FlxG.state.subState == null) return false;
+		var name:String = Type.getClassName(Type.getClass(FlxG.state.subState));
+		return name != null && name.indexOf('PauseSubState') >= 0;
 	}
 
 	/** state 切换 / resetGame：中断渲染 */
@@ -331,18 +419,49 @@ class RenderClock
 	}
 
 	/**
-	 * 帧末把时钟参数钉回去。
-	 * updateFramerate 决定 _stepMS → FlxG.elapsed（FlxTimer / 倒计时的步长）；
-	 * _maxAccumulation 决定一帧最多 step 几次（超过一帧就丢画面）。
-	 * 任何外部改写都会让虚拟时间轴与画面脱节，这里统一兜底。
+	 * 帧末把全部帧率参数钉回去。
+	 *
+	 * 四个量必须同时正确，缺一个都会让"逻辑步"和"截帧"错位：
+	 *  - updateFramerate → _stepMS / _stepSeconds → FlxG.elapsed（FlxTimer、补间的步长）
+	 *  - drawFramerate   → stage.frameRate（窗口多久调一次 onEnterFrame）
+	 *  - ClientPrefs.data.framerate → 模组 / 脚本读它做自适应同步
+	 *  - _maxAccumulation → 单帧最多跑几次 step()，必须 == 一步，否则会"跑两步截一帧"
+	 *
+	 * 注意 set_drawFramerate() 会把 _maxAccumulation 改写成 2000/fps - 1，
+	 * 所以累加器的修正必须放在最后。
 	 */
 	static function enforceClock():Void
 	{
-		if (FlxG.updateFramerate != _fps) { FlxG.updateFramerate = _fps; _clockCorrections++; }
-		if (FlxG.timeScale != 1) { FlxG.timeScale = 1; _clockCorrections++; }
+		if (FlxG.updateFramerate != _fps)
+		{
+			FlxG.updateFramerate = _fps;
+			_clockCorrections++;
+		}
+		if (FlxG.drawFramerate != _fps)
+		{
+			FlxG.drawFramerate = _fps;
+			_clockCorrections++;
+		}
+		if (FlxG.stage != null && FlxG.stage.frameRate != _fps)
+		{
+			FlxG.stage.frameRate = _fps;
+			_clockCorrections++;
+		}
+		var d = ClientPrefs.data;
+		if (d != null && d.framerate != _fps)
+		{
+			d.framerate = _fps;
+			_clockCorrections++;
+		}
+		if (FlxG.timeScale != 1)
+		{
+			FlxG.timeScale = 1;
+			_clockCorrections++;
+		}
+		// 放在最后：set_drawFramerate() 会覆盖它
 		var stepMs:Float = 1000 / _fps;
 		var cur:Float = @:privateAccess FlxG.game._maxAccumulation;
-		if (cur > stepMs)
+		if (Math.abs(cur - stepMs) > 0.01)
 		{
 			@:privateAccess FlxG.game._maxAccumulation = stepMs;
 			_clockCorrections++;
@@ -352,9 +471,20 @@ class RenderClock
 	/** 每帧一次：截屏落盘，然后推进帧号 */
 	static function onPostDraw():Void
 	{
-		if (!active || !_frameReady) return;
+		if (!active) return;
+		if (!_frameReady)
+		{
+			// 这一帧没跑 step()（窗口帧率高于输出帧率时会出现），不截帧，只做时钟纠错。
+			// 截帧与 step 严格 1:1，才能保证成片每个渲染帧恰好是一步逻辑。
+			enforceClock();
+			return;
+		}
 		_frameReady = false;
+		// 先扫描这一帧的声音池：本帧新起播的音效起点就是当前帧号，
+		// 放在截帧之前才能把"这一帧刚开始的声音"算在正确的时间点上。
+		scanSounds();
 		var path:String = outputDir + 'frames/frame_' + StringTools.lpad(Std.string(frame), '0', 6) + '.png';
+		var tRead0:Float = Date.now().getTime();
 		try
 		{
 			// lime 官方的窗口 framebuffer 读回（内部 glReadPixels + 自动垂直翻转）。
@@ -393,10 +523,25 @@ class RenderClock
 				pngLen = bytes.length;
 				File.saveBytes(path, bytes);
 			}
+			var tRead1:Float = Date.now().getTime();
 			if (_usePipe)
 			{
 				// img.buffer.data.buffer 就是 readPixels 得到的 RGBA Bytes，零拷贝写 stdin
 				RenderEncoder.writeFrame(img.buffer.data.buffer);
+			}
+			// 分阶段计时：每 600 帧汇总一次，定位瓶颈在读回 / 翻转还是管道写入
+			_perfReadMs += tRead1 - tRead0;
+			_perfWriteMs += Date.now().getTime() - tRead1;
+			_perfFrames++;
+			if (_perfFrames >= 600)
+			{
+				logLine('[perf] ' + _perfFrames + ' frames: read+flip='
+					+ Math.round(_perfReadMs / _perfFrames * 100) / 100 + 'ms'
+					+ ' writePipe=' + Math.round(_perfWriteMs / _perfFrames * 100) / 100 + 'ms'
+					+ ' (at frame ' + frame + ')');
+				_perfReadMs = 0;
+				_perfWriteMs = 0;
+				_perfFrames = 0;
 			}
 			if (frame == 0)
 			{
@@ -486,6 +631,7 @@ class RenderClock
 		if (!active) return;
 		active = false;
 		_frameReady = false;
+		_activeSfx = new Map(); // 释放对 FlxSound / Sound 的强引用，避免跨曲目残留
 		requested = false; // 中断后不要在下一次进 PlayState 时又自动开渲
 		FlxG.signals.preUpdate.remove(onPreUpdate);
 		FlxG.signals.postDraw.remove(onPostDraw);
@@ -497,6 +643,7 @@ class RenderClock
 		FlxG.updateFramerate = _savedUpdateFramerate;
 		FlxG.fixedTimestep = _savedFixedTimestep;
 		FlxG.timeScale = _savedTimeScale;
+		FlxG.autoPause = _savedAutoPause;
 		// 恢复累加器上限要放在最后：set_drawFramerate() 会重写它
 		@:privateAccess FlxG.game._maxAccumulation = _savedMaxAccumulation;
 		try
@@ -521,6 +668,7 @@ class RenderClock
 	public static function finish():Void
 	{
 		if (!active) return;
+		flushSounds(); // 仍在播放的音效按"播到视频结束"归档，必须早于 cleanup
 		cleanup();
 		var d = ClientPrefs.data;
 		var videoPath:String = '';
@@ -536,16 +684,26 @@ class RenderClock
 				cutscenes: _cutscenes,
 				songAudio: songAudio,
 				soundEvents: soundEvents,
+				sfx: sfxTimeline,
 				leadMs: _leadMs,
 				durationSec: frame / _fps
 			}, logLine);
 		}
-		logLine('[finish] frames=' + frame + ' / captureErrors=' + _errorCount
+		logLine('[finish] frames=' + frame + ' / steps=' + _stepCount
+			+ ' / lostSteps=' + _lostSteps
+			+ ' / captureErrors=' + _errorCount
 			+ ' / skippedSubFrames=' + _skippedSubFrames
 			+ ' / clockCorrections=' + _clockCorrections
 			+ ' / cpuResizedFrames=' + _cpuResizeCount
+			+ ' / sfxCaptured=' + _sfxSeen
 			+ (_firstError != '' ? ' / firstError=' + _firstError : '')
 			+ ' / video=' + videoPath);
+		if (_lostSteps > 0)
+			logLine('[timing] WARNING: ' + _lostSteps + ' logic steps had no captured frame '
+				+ '(accelerator allowed >1 step per draw). Content skipped.');
+		if (frame != _stepCount + _skippedSubFrames)
+			logLine('[timing] note: frames(' + frame + ') != steps(' + _stepCount
+				+ ') + skipped(' + _skippedSubFrames + ')');
 		if (_cpuResizeCount > 0)
 			logLine('[quality] WARNING: readPixels was SMALLER than target on ' + _cpuResizeCount
 				+ ' frames (window resize blocked?). Output was CPU-upscaled and may look soft.');
@@ -568,10 +726,13 @@ class RenderClock
 	{
 		if (!active) return;
 		_interrupted = reason;
+		flushSounds();
 		cleanup();
 		var partial:String = _usePipe ? RenderEncoder.abort(logLine) : '';
-		logLine('[abort] reason=' + reason + ' frames=' + frame
+		logLine('[abort] reason=' + reason + ' frames=' + frame + ' / steps=' + _stepCount
+			+ ' / lostSteps=' + _lostSteps
 			+ ' / skippedSubFrames=' + _skippedSubFrames
+			+ ' / sfxCaptured=' + _sfxSeen
 			+ ' / clockCorrections=' + _clockCorrections + ' / partial=' + partial);
 		writeManifest(partial, reason);
 		if (!silent)
@@ -616,6 +777,184 @@ class RenderClock
 		logLine('[audio] sfx: ' + key + ' at ' + Math.round(atMs) + 'ms vol=' + volume);
 	}
 
+	/** 当前虚拟时间在视频时间轴上的毫秒（帧号 × 帧间隔，不受 timeScale 影响） */
+	static function videoMs():Float
+		return frame * (1000 / _fps);
+
+	/**
+	 * 每帧扫描 Flixel 的声音池，自动捕获"曲目中途播放的音频"。
+	 *
+	 * 为什么扫描而不是改调用点：模组播放音频的路径太多 —— PlayState 事件、
+	 * HScript / Stage 脚本、FlxG.sound.play()、playMusic()、直接往
+	 * defaultSoundGroup 里塞……它们最终都会落在 FlxG.sound.list 或某个
+	 * FlxSoundGroup 里，扫描是唯一能全覆盖、又不必改每个调用点的做法。
+	 *
+	 * 主音轨（Inst / Voices）由 songAudio 通道整体混入，这里必须排除，
+	 * 否则会与延后 leadMs 的主音轨叠成双份。
+	 */
+	static function scanSounds():Void
+	{
+		if (FlxG.sound == null) return;
+		var now:Float = videoMs();
+
+		// 1) 收集当前所有音效对象：list 覆盖 play()，两个默认组再兜一层 playMusic()
+		var pool:Array<flixel.sound.FlxSound> = [];
+		try
+		{
+			var list = FlxG.sound.list;
+			if (list != null && list.members != null)
+				for (s in list.members) if (s != null) pool.push(s);
+		}
+		catch (e:Dynamic) {}
+		try
+		{
+			var groups:Array<flixel.sound.FlxSoundGroup> = [FlxG.sound.defaultSoundGroup, FlxG.sound.defaultMusicGroup];
+			for (g in groups)
+			{
+				if (g == null || g.sounds == null) continue;
+				for (s in g.sounds) if (s != null && pool.indexOf(s) < 0) pool.push(s);
+			}
+		}
+		catch (e:Dynamic) {}
+
+		// 2) 新开始播放的
+		for (s in pool)
+		{
+			if (_activeSfx.exists(s)) continue;
+			var playing:Bool = false;
+			try { playing = s.playing; } catch (e:Dynamic) {}
+			if (!playing) continue;
+
+			var snd:Dynamic = null;
+			try { @:privateAccess snd = s._sound; } catch (e:Dynamic) {}
+			var path:String = soundFilePath(snd);
+			if (path == null) continue;
+			if (isSongTrack(path)) continue;      // Inst / Voices 已由 songAudio 处理
+			if (isCountdownSfx(path)) continue;   // 倒计时已由 registerSound 登记，避免重复混音
+
+			var vol:Float = 1;
+			try { vol = s.volume; } catch (e:Dynamic) {}
+			if (vol <= 0.001) continue;           // 静音音效没有任何贡献，白占一条输入
+			var looped:Bool = false;
+			try { looped = s.looped; } catch (e:Dynamic) {}
+
+			_activeSfx.set(s, {path: path, atMs: now, volume: vol, looped: looped, durMs: -1});
+			logLine('[audio] sfx start: ' + path + ' at ' + Math.round(now) + 'ms vol=' + vol
+				+ (looped ? ' loop' : ''));
+		}
+
+		// 3) 已经停下的（自然播完 / 被 stop / autoDestroy）→ 定长度入列
+		var done:Array<flixel.sound.FlxSound> = [];
+		for (s in _activeSfx.keys())
+		{
+			var still:Bool = false;
+			try { still = (s != null && s.playing); } catch (e:Dynamic) {}
+			if (!still) done.push(s);
+		}
+		for (s in done)
+		{
+			var t:SfxTrack = _activeSfx.get(s);
+			_activeSfx.remove(s);
+			if (t == null) continue;
+			t.durMs = Math.max(0, now - t.atMs);
+			sfxTimeline.push(t);
+			_sfxSeen++;
+			logLine('[audio] sfx end: ' + t.path + ' dur=' + Math.round(t.durMs) + 'ms');
+		}
+	}
+
+	/** 收尾时把仍在播放的音效归档为"播到视频结束" */
+	static function flushSounds():Void
+	{
+		for (s in _activeSfx.keys())
+		{
+			var t:SfxTrack = _activeSfx.get(s);
+			if (t == null) continue;
+			t.durMs = -1;
+			sfxTimeline.push(t);
+			_sfxSeen++;
+			logLine('[audio] sfx still playing at end: ' + t.path + ' from ' + Math.round(t.atMs) + 'ms');
+		}
+		_activeSfx = new Map();
+	}
+
+	/**
+	 * 从 Sound 资源对象反查它对应的磁盘文件。
+	 * Paths.returnSound() 把「路径 → Sound」存进了 currentTrackedSounds，
+	 * 反过来查即可 —— 不需要覆盖 Flixel 或拦截加载。
+	 */
+	static function soundFilePath(snd:Dynamic):String
+	{
+		if (snd == null) return null;
+		var key:openfl.media.Sound = cast snd;
+		var hit:String = _soundPathCache.get(key);
+		if (hit != null) return (hit == '') ? null : hit;
+
+		var found:String = null;
+		try
+		{
+			for (file => s in backend.Paths.currentTrackedSounds)
+			{
+				if (s != null && s == snd) { found = file; break; }
+			}
+		}
+		catch (e:Dynamic) {}
+		// 兜底：脚本直接塞字符串路径（不经过 Paths.returnSound）时，
+		// 资源只登记在 OpenFL 的 Assets 缓存里。key 是 asset id，可能不含 assets/ 前缀。
+		if (found == null)
+		{
+			try
+			{
+				// Assets.cache 静态类型是 IAssetCache 接口，实际实现是 AssetCache
+				var ac:openfl.utils.AssetCache = cast openfl.utils.Assets.cache;
+				for (id => s in ac.sound)
+				{
+					if (s == null || s != snd) continue;
+					found = id;
+					if (found != null && !FileSystem.exists(found) && FileSystem.exists('assets/' + found))
+						found = 'assets/' + found;
+					break;
+				}
+			}
+			catch (e:Dynamic) {}
+		}
+		_soundPathCache.set(key, found == null ? '' : found);
+		return found;
+	}
+
+	/** 取路径的文件名主干（小写、去目录、去扩展名） */
+	static function baseName(path:String):String
+	{
+		var p:String = path.toLowerCase();
+		var slash:Int = p.lastIndexOf('/');
+		if (slash < 0) slash = p.lastIndexOf('\\');
+		var n:String = (slash >= 0) ? p.substr(slash + 1) : p;
+		var dot:Int = n.lastIndexOf('.');
+		return (dot > 0) ? n.substr(0, dot) : n;
+	}
+
+	/** Inst / Voices 变体（Inst, Inst-erect, Voices-Player ...）走 songAudio 通道 */
+	static function isSongTrack(path:String):Bool
+	{
+		var n:String = baseName(path);
+		return StringTools.startsWith(n, 'inst') || StringTools.startsWith(n, 'voices');
+	}
+
+	/** 已由 PlayState.registerSound 手工登记的倒计时音效，按资源名去重 */
+	static function isCountdownSfx(path:String):Bool
+	{
+		if (soundEvents.length == 0) return false;
+		var n:String = baseName(path);
+		for (e in soundEvents)
+		{
+			if (e.key == null) continue;
+			var k:String = e.key.toLowerCase();
+			// 手工登记的 key 可能带变体后缀（intro3 / intro3-pixel），用前缀兼容
+			if (n == k || StringTools.startsWith(n, k)) return true;
+		}
+		return false;
+	}
+
 	/** 由 PlayState.startVideo() 调用：记录过场文件路径，合成阶段用 concat 拼接 */
 	public static function registerCutscene(path:String):Void
 	{
@@ -654,6 +993,8 @@ class RenderClock
 				mixAudio: d.renderAudio,
 				crf: d.renderCRF,
 				seed: d.renderSeed,
+				sfxCaptured: _sfxSeen,
+				sfx: sfxTimeline,
 				playbackRate: (PlayState.instance != null ? PlayState.instance.playbackRate : 1),
 				offset: Conductor.offset,
 				noteOffset: d.noteOffset,
