@@ -782,6 +782,20 @@ class RenderClock
 		return frame * (1000 / _fps);
 
 	/**
+	 * HUD 统计数据（NPS 等）专用的单调时间源，单位毫秒。
+	 *
+	 * 渲染时返回帧号驱动的虚拟时间：成片是 0.47 倍速这样的慢速回放，
+	 * 若用真实墙钟，1 秒窗口会按真实秒滑走，NPS 就变成"真实每秒命中数"，
+	 * 被放大数倍且随卡顿抖动，与画面里的曲目进度对不上。
+	 * 正常游玩时返回真实墙钟，行为与原 haxe.Timer.stamp()*1000 完全一致。
+	 */
+	public static function hudTimeMs():Float
+	{
+		if (active) return frame * (1000 / _fps);
+		return haxe.Timer.stamp() * 1000;
+	}
+
+	/**
 	 * 每帧扫描 Flixel 的声音池，自动捕获"曲目中途播放的音频"。
 	 *
 	 * 为什么扫描而不是改调用点：模组播放音频的路径太多 —— PlayState 事件、

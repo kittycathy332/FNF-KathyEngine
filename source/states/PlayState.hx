@@ -125,8 +125,9 @@ class PlayState extends MusicBeatState
 	private static var _psAdaptiveActive:Bool = false;
 
 	//杂七杂八的新特性
-	// 存命中时间戳（haxe.Timer.stamp() 秒级浮点），替代原 Array<Date> + Date.now()，
+	// 存命中时间戳（毫秒），替代原 Array<Date> + Date.now()，
 	// 消除每帧 Date 分配 + 系统调用 + O(n) remove。仅用于计算 NPS。
+	// 时间源统一走 RenderClock.hudTimeMs()：正常游玩是墙钟，离线渲染是虚拟时钟。
 	var notesHitArray:Array<Float> = [];
 	var nps:Int = 0;
 	var maxNPS:Int = 0;
@@ -5355,7 +5356,8 @@ tempScore += '${lblScore}: ${songScore}';
 
 		{
 			// 原地过滤：只保留最近 1000ms 内的命中时间戳，避免 Array.remove() 的 O(n) 移动开销
-			var now:Float = haxe.Timer.stamp() * 1000;
+			// 离线渲染时用虚拟时钟（帧号驱动），保证 NPS 跟随成片时间轴而非真实墙钟
+			var now:Float = backend.RenderClock.hudTimeMs();
 			var writeIdx:Int = 0;
 			for (readIdx in 0...notesHitArray.length)
 			{
@@ -8481,7 +8483,7 @@ tempScore += '${lblScore}: ${songScore}';
 				combo++;
 				if (combo > maxCombo) maxCombo = combo;
 				//if(combo > 9999) combo = 9999;
-				notesHitArray.unshift(haxe.Timer.stamp() * 1000);
+				notesHitArray.unshift(backend.RenderClock.hudTimeMs());
 				popUpScore(note);
 			}
 			// 特性2：长条最后一个尾音命中时，算作一个有效命中判定 —— 加 combo + 显示评级，但不加分
@@ -8491,7 +8493,7 @@ tempScore += '${lblScore}: ${songScore}';
 				var tailLeniencyMs:Float = (holdTailLeniency) ? holdTailLeniencyMs : 0;
 				combo++;
 				if (combo > maxCombo) maxCombo = combo;
-				notesHitArray.unshift(haxe.Timer.stamp() * 1000);
+				notesHitArray.unshift(backend.RenderClock.hudTimeMs());
 				popUpScore(note, false, tailLeniencyMs); // scoreGain=false：只显示评级/计入准度，不加 songScore
 			}
 			// 长条按住期间每个命中节段：开启长条准确率时计入准确率（分子/分母各 +1）
@@ -8680,7 +8682,7 @@ tempScore += '${lblScore}: ${songScore}';
 		{
 			combo++;
 			if (combo > maxCombo) maxCombo = combo;
-			notesHitArray.unshift(haxe.Timer.stamp() * 1000);
+			notesHitArray.unshift(backend.RenderClock.hudTimeMs());
 		}
 		// 特性2：长条尾音命中同样计入一次有效命中（连击 + 准度），但不加分
 		else if (holdTailJudge && note.parent != null && note.parent.tail.length > 0
@@ -8688,7 +8690,7 @@ tempScore += '${lblScore}: ${songScore}';
 		{
 			combo++;
 			if (combo > maxCombo) maxCombo = combo;
-			notesHitArray.unshift(haxe.Timer.stamp() * 1000);
+			notesHitArray.unshift(backend.RenderClock.hudTimeMs());
 		}
 
 		var gainHealth:Bool = true;
