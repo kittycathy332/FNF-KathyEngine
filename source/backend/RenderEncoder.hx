@@ -45,6 +45,8 @@ class RenderEncoder
 	static var _height:Int = 720;
 	static var _fps:Int = 60;
 	static var _crf:Int = 20;
+	/** 像素级无损：libx264rgb + qp=0 + rgb24，RGB 值逐像素保真 */
+	static var _lossless:Bool = false;
 	static var _frames:Int = 0;
 	static var _running:Bool = false;
 
@@ -98,13 +100,14 @@ class RenderEncoder
 
 	/** 起 pipe 进程；失败返回 false，由 RenderClock 回退到 PNG 模式 */
 	public static function begin(outputDir:String, width:Int, height:Int, fps:Int, crf:Int,
-		requestedEncoder:String, log:String->Void):Bool
+		requestedEncoder:String, lossless:Bool, log:String->Void):Bool
 	{
 		_outputDir = outputDir;
 		_width = width;
 		_height = height;
 		_fps = fps;
 		_crf = crf;
+		_lossless = lossless;
 		_log = log;
 		_frames = 0;
 		_videoOnly = outputDir + 'video_only.mp4';
@@ -125,7 +128,32 @@ class RenderEncoder
 			'-s', width + 'x' + height, '-r', Std.string(fps), '-i', 'pipe:0',
 			'-an'
 		];
-		if (_encoder == 'h264_nvenc')
+		if (_lossless)
+		{
+			// 真无损：RGB 像素直接进 libx264rgb，qp=0 不做有损量化。
+			// ultrafast 只影响压缩率，不影响无损性；成片会很大，但每个像素可复现。
+			if (hasEncoder(_ffmpeg, 'libx264rgb'))
+			{
+				_encoder = 'libx264rgb';
+				args = args.concat([
+					'-c:v', 'libx264rgb', '-preset', 'ultrafast',
+					'-qp', '0', '-pix_fmt', 'rgb24'
+				]);
+				log('[encoder] LOSSLESS RGB: libx264rgb qp=0 rgb24 (pixel-exact)');
+				log('[encoder] WARNING: lossless files are very large (often GBs); '
+					+ 'keep the output drive fast and mostly empty, and use MP4-only output');
+			}
+			else
+			{
+				_encoder = 'libx264';
+				args = args.concat([
+					'-c:v', 'libx264', '-preset', 'ultrafast',
+					'-qp', '0', '-pix_fmt', 'yuv444p'
+				]);
+				log('[encoder] libx264rgb unavailable -> yuv444p qp=0 (RGB->YUV may round)');
+			}
+		}
+		else if (_encoder == 'h264_nvenc')
 			args = args.concat(['-c:v', 'h264_nvenc', '-preset', 'p5', '-rc', 'vbr', '-cq', Std.string(crf), '-pix_fmt', 'yuv420p']);
 		else
 			// 离线渲染不赶时间：medium + tune animation 在同 crf 下明显优于 veryfast，
@@ -175,7 +203,8 @@ class RenderEncoder
 
 			_running = true;
 			log('[encoder] pipe started (async writer x' + QUEUE_CAP + '): ' + _ffmpeg + ' / ' + _encoder
-				+ ' / ' + width + 'x' + height + '@' + fps + ' / crf=' + crf);
+				+ ' / ' + width + 'x' + height + '@' + fps
+				+ (_lossless ? ' / qp=0 LOSSLESS' : ' / crf=' + crf));
 			return true;
 		}
 		catch (e:Dynamic)
@@ -230,6 +259,10 @@ class RenderEncoder
 	}
 
 	public static function isRunning():Bool return _running && _proc != null;
+
+	/** 当前 video_only 文件大小（MB），用于诊断无损模式随文件增长变慢的问题 */
+	public static function videoSizeMB():Float
+		return Math.round(safeFileSize(_videoOnly) / 1024 / 1024 * 10) / 10;
 
 	/**
 	 * 中断收尾：只关 stdin 让 ffmpeg 正常 finalize，跳过混音 / 拼接等耗时后期。

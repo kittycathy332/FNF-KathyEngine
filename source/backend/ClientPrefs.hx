@@ -310,6 +310,8 @@ import haxe.io.BytesInput;
 	public var renderCRF:Int = 20; // H.264 质量，18 高 ~ 28 低
 	public var renderSeed:Int = 12345; // 固定随机种子，保证同曲可复现
 	public var renderHideOverlay:Bool = true; // 导出时隐藏 FPS / 调试浮层
+	public var renderLossless:Bool = false; // 像素级无损：按原逻辑分辨率截帧 + RGB 无损编码，不放大、不压缩（默认关闭）
+	public var renderLosslessMigrated:Bool = false; // 内部迁移标记：老存档强制关闭一次，之后尊重用户选择
 
 	public var chartingVersion:String = '1.0.4-Kathy'; // 制谱器版本: '1.0.4-Kathy' | '1.0.4-Official' | '0.7.3' | '0.6.3'
 	// Lua API 兼容版本：决定 setObjectCamera / doTween* / makeAnimatedLuaSprite 等 API 的默认参数与行为
@@ -785,6 +787,8 @@ class ClientPrefs {
 		defaultData.renderCRF = 20;
 		defaultData.renderSeed = 12345;
 		defaultData.renderHideOverlay = true;
+		defaultData.renderLossless = false;
+		defaultData.renderLosslessMigrated = true; // 新存档不需要迁移
 		defaultData.windowTitle = 'Kathy Engine';
 			defaultData.windowTitlePreset = 'Kathy Engine';
 		}
@@ -862,11 +866,20 @@ class ClientPrefs {
 			'renderAudio' => true,
 			'renderCRF' => 20,
 			'renderSeed' => 12345,
-			'renderHideOverlay' => true
+			'renderHideOverlay' => true,
+			'renderLossless' => false
 		];
 		for (key => value in renderDefaults)
 			if (!Reflect.hasField(FlxG.save.data, key) || Reflect.field(data, key) == null)
 				Reflect.setField(data, key, value);
+
+		// 用户要求无损输出默认关闭：老存档只强制关一次，
+		// 之后若主动开启，标记会保证不再被重置。
+		if (!data.renderLosslessMigrated)
+		{
+			data.renderLossless = false;
+			data.renderLosslessMigrated = true;
+		}
 
 		// 为 comboOffset 新增的槽位补默认值（兼容老存档升级；[6,7]msTimeTxt，超出槽位保留但已不使用）
 		if (data.comboOffset == null)

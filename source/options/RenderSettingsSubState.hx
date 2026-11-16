@@ -71,6 +71,12 @@ class RenderSettingsSubState extends BaseOptionsMenu
 		option.displayFormat = '%v px';
 		addOption(option);
 
+		option = new Option(Language.get('render_lossless'),
+			Language.get('render_lossless_desc'),
+			'renderLossless',
+			BOOL);
+		addOption(option);
+
 		option = new Option(Language.get('render_output'),
 			Language.get('render_output_desc'),
 			'renderOutput',
@@ -138,8 +144,10 @@ class RenderSettingsSubState extends BaseOptionsMenu
 			Language.get('render_crf_desc'),
 			'renderCRF',
 			INT);
-		option.minValue = 16;
-		option.maxValue = 30;
+		// ffmpeg/x264 与 NVENC 的 CQ 范围都是 0~51；0 为无损，51 最低质量。
+		// 无损模式会忽略这个值（走 qp=0 RGB），这里放宽供有损模式做极端质量/体积取舍。
+		option.minValue = 0;
+		option.maxValue = 51;
 		option.displayFormat = 'CRF %v';
 		addOption(option);
 

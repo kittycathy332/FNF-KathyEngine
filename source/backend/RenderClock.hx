@@ -120,11 +120,14 @@ class RenderClock
 	static var _leadMs:Float = 0;
 	static var _firstError:String = '';
 	static var _errorCount:Int = 0;
-	static var _logLines:Array<String> = [];
 
-	// ===== 超采样：把窗口 framebuffer 放大到目标分辨率，逻辑坐标保持不变 =====
-	/** 目标分辨率与当前窗口不同，需要在首帧 resize 窗口 */
+	// ===== 画布准备：逻辑坐标恒定，只有窗口/编码器尺寸按模式决定 =====
+	/** 需要在首帧调整窗口并（可能）启动编码器 */
 	static var _supersamplePending:Bool = false;
+	/** 无损模式必须等 create() 完成后才知道真实逻辑尺寸，编码器延迟到首帧启动 */
+	static var _encoderPending:Bool = false;
+	/** 像素级无损：原逻辑分辨率截帧 + RGB 无损编码 */
+	static var _lossless:Bool = true;
 	/** applySupersampling 只执行一次（含失败情形） */
 	static var _supersampleApplied:Bool = false;
 	/** 渲染前的窗口物理尺寸，收尾时还原 */
@@ -166,15 +169,18 @@ class RenderClock
 		_width = Std.int(Math.max(320, d.renderWidth));
 		_height = Std.int(Math.max(240, d.renderHeight));
 		_songName = (PlayState.SONG != null) ? PlayState.SONG.song : 'song';
+		_lossless = d.renderLossless;
 
-		// 超采样准备：目标分辨率与当前窗口 framebuffer 不一致时，首帧 resize 窗口
-		// 并锁定逻辑坐标。begin() 在 create() 中途调用，此刻窗口尺寸稳定、可读。
+		// begin() 在 PlayState.create() 中途调用，此刻 PlayStateScaleMode 还没应用，
+		// 真正的逻辑尺寸要等首帧 preUpdate 才能确定。无损模式必须按真实逻辑尺寸
+		// 开管道，所以窗口调整和编码器启动都推迟到 applySupersampling()。
 		_savedWindowWidth = FlxG.stage.window.width;
 		_savedWindowHeight = FlxG.stage.window.height;
 		_savedLogicWidth = FlxG.width;
 		_savedLogicHeight = FlxG.height;
 		_savedScaleMode = FlxG.scaleMode;
-		_supersamplePending = (_savedWindowWidth != _width || _savedWindowHeight != _height);
+		_supersamplePending = _lossless || (_savedWindowWidth != _width || _savedWindowHeight != _height);
+		_encoderPending = _lossless && (d.renderOutput == 'MP4' || d.renderOutput == 'PNG+MP4');
 		_supersampleApplied = false;
 		_cpuResizeCount = 0;
 
@@ -194,18 +200,18 @@ class RenderClock
 			return false;
 		}
 
-		_logLines = [];
 		_firstError = '';
 		_errorCount = 0;
 		_frameReady = false;
 		_interrupted = '';
 		_skippedSubFrames = 0;
 		_clockCorrections = 0;
-		logLine('[begin] ' + _songName + ' / ' + _fps + 'fps / ' + _width + 'x' + _height);
+		logLine('[begin] ' + _songName + ' / ' + _fps + 'fps / '
+			+ (_lossless ? 'LOSSLESS (size locked to logical)' : _width + 'x' + _height));
 		logLine('[output] ' + outputDir);
 		logLine('[window] native=' + _savedWindowWidth + 'x' + _savedWindowHeight
 			+ ' logic=' + _savedLogicWidth + 'x' + _savedLogicHeight
-			+ ' -> supersample=' + _supersamplePending);
+			+ ' -> prepare=' + _supersamplePending);
 
 		// 交付形式分流：MP4 = rawvideo 直连 ffmpeg（最快）；PNG = 只落帧序列；
 		// PNG+MP4 = 两者都做（保留逐帧素材，但仍有压缩与写盘开销）。
@@ -220,16 +226,19 @@ class RenderClock
 		_sfxSeen = 0;
 		_leadMs = 0;
 		logLine('[mode] output=' + d.renderOutput + ' pipe=' + _usePipe + ' png=' + _usePNG
-			+ ' encoder=' + d.renderEncoder + ' crf=' + d.renderCRF);
-		if (_usePipe)
+			+ ' lossless=' + _lossless + ' encoder=' + d.renderEncoder + ' crf=' + d.renderCRF);
+		if (_usePipe && !_encoderPending)
 		{
-			if (!RenderEncoder.begin(outputDir, _width, _height, _fps, d.renderCRF, d.renderEncoder, logLine))
+			if (!RenderEncoder.begin(outputDir, _width, _height, _fps, d.renderCRF,
+				d.renderEncoder, false, logLine))
 			{
 				logLine('[fallback] pipe unavailable -> PNG sequence mode');
 				_usePipe = false;
 				_usePNG = true;
 			}
 		}
+		else if (_encoderPending)
+			logLine('[encoder] deferred to first frame (needs real logical size)');
 
 		_savedFixedTimestep = FlxG.fixedTimestep;
 		_savedTimeScale = FlxG.timeScale;
@@ -307,7 +316,8 @@ class RenderClock
 
 		active = true;
 		requested = false;
-		trace('[RenderClock] begin: $_songName / $_fps fps / ${_width}x$_height -> ' + outputDir);
+		trace('[RenderClock] begin: $_songName / $_fps fps / '
+			+ (_lossless ? 'LOSSLESS(logical)' : '${_width}x$_height') + ' -> ' + outputDir);
 		return true;
 	}
 
@@ -394,53 +404,74 @@ class RenderClock
 	}
 
 	/**
-	 * 首帧（create 已完成后）把窗口 framebuffer 放大到目标分辨率。
+	 * 首帧（create 已完成后）确定画布与编码器尺寸。
 	 *
 	 * 必须在 create() 之后做：begin() 在 PlayState.create() 中途调用，若那时
 	 * 就 resizeGame，紧随其后的 PlayState 自适应缩放模式切换（约 842 行）会
 	 * 把我们装好的 RenderScaleMode 覆盖掉。preUpdate 首帧时 create 已完成，
-	 * 此刻切换最稳。
+	 * 此刻拿到的 FlxG.width/height 才是真实逻辑尺寸。
 	 *
-	 * 逻辑坐标锁在 _savedLogicWidth x _savedLogicHeight，因此所有 1280x720
-	 * 硬编码的 HUD / 相机坐标都不受影响；readPixels 读回的是放大后的原生
-	 * framebuffer，不再需要 CPU 插值拉伸 —— 这才是真正的超采样。
+	 * 无损模式下 _width/_height 会被改写成这个真实逻辑尺寸，窗口也缩到同一尺寸，
+	 * 于是 readPixels() 得到的就是游戏原始像素，没有 GPU 插值、没有放大。
+	 * 逻辑分辨率在任何模式下都不会被导出尺寸改写。
 	 */
 	static function applySupersampling():Void
 	{
 		if (_supersampleApplied) return;
 		_supersampleApplied = true;
-		if (!_supersamplePending)
-		{
-			logLine('[supersample] native window matches target, no resize needed');
-			return;
-		}
 		#if desktop
 		// create() 到这里已完成（含 PlayState 842 行的自适应 width 切换）。
-		// 以"此刻"的 scaleMode / 逻辑尺寸为还原基准，而不是 begin() 时的旧值，
-		// 这样收尾能精确还原到渲染开始前的真实现场。
+		// 以"此刻"的 scaleMode / 逻辑尺寸为还原基准，而不是 begin() 时的旧值。
 		_savedLogicWidth = FlxG.width;
 		_savedLogicHeight = FlxG.height;
 		_savedScaleMode = FlxG.scaleMode;
+		var d = ClientPrefs.data;
 		try
 		{
-			// 用锁定逻辑尺寸的 scaleMode 接管 measure，再改窗口物理尺寸
-			FlxG.scaleMode = new flixel.system.scaleModes.RenderScaleMode(_savedLogicWidth, _savedLogicHeight);
-			FlxG.stage.window.resize(_width, _height);
-			// resize 事件是异步的，主动 measure 一次让本帧就生效
-			FlxG.resizeGame(_width, _height);
-			logLine('[supersample] window ' + _savedWindowWidth + 'x' + _savedWindowHeight
-				+ ' -> ' + _width + 'x' + _height + ' / logic locked '
-				+ FlxG.width + 'x' + FlxG.height
-				+ ' / scale ' + FlxG.scaleMode.scale.x + ',' + FlxG.scaleMode.scale.y);
+			if (_lossless)
+			{
+				_width = _savedLogicWidth;
+				_height = _savedLogicHeight;
+			}
+
+			if (_supersamplePending)
+			{
+				FlxG.scaleMode = new flixel.system.scaleModes.RenderScaleMode(_savedLogicWidth, _savedLogicHeight);
+				FlxG.stage.window.resize(_width, _height);
+				// resize 事件是异步的，主动 measure 一次让本帧就生效
+				FlxG.resizeGame(_width, _height);
+			}
+
+			logLine('[canvas] ' + (_lossless ? 'LOSSLESS' : 'EXPORT') + ' render '
+				+ _width + 'x' + _height
+				+ ' / logic locked ' + FlxG.width + 'x' + FlxG.height
+				+ ' (window ' + _savedWindowWidth + 'x' + _savedWindowHeight
+				+ ' -> ' + _width + 'x' + _height + ')');
+
+			if (_encoderPending)
+			{
+				_encoderPending = false;
+				if (_usePipe)
+				{
+					if (!RenderEncoder.begin(outputDir, _width, _height, _fps, d.renderCRF,
+						d.renderEncoder, _lossless, logLine))
+					{
+						logLine('[fallback] pipe unavailable -> PNG sequence mode');
+						_usePipe = false;
+						_usePNG = true;
+					}
+				}
+			}
 		}
 		catch (e:Dynamic)
 		{
-			// resize 失败就退回旧行为：CPU resize readPixels 结果（至少不会崩）
-			logLine('[supersample] FAILED: ' + Std.string(e) + ' -> CPU resize fallback');
+			logLine('[canvas] FAILED: ' + Std.string(e) + ' -> PNG fallback');
+			_usePipe = false;
+			_usePNG = true;
 			try { FlxG.scaleMode = _savedScaleMode; } catch (e2:Dynamic) {}
 		}
 		#else
-		logLine('[supersample] skipped (not desktop target)');
+		logLine('[canvas] skipped (not desktop target)');
 		#end
 	}
 
@@ -542,27 +573,32 @@ class RenderClock
 			var img:Image = FlxG.stage.window.readPixels(null);
 			if (img == null) throw 'Window.readPixels returned null';
 			// readPixels 尺寸 = 窗口逻辑尺寸 × 系统 DPI scale（见 NativeWindow.hx:350）。
-			//  - 等于目标：超采样完美命中；
-			//  - 大于目标：DPI>1 的额外超采样，缩到目标是高质量降采样（更好）；
-			//  - 小于目标：窗口 resize 没生效 → 放大糊，记入日志以便排查。
-			// 无论哪种，都 resize 到目标，保证写进 ffmpeg 的字节数精确匹配 rawvideo 声明。
+			// 无损模式下目标就是原逻辑尺寸；若仍不一致（DPI 缩放），用最近邻取样
+			// 而不是 img.resize() 的双线性插值，避免把原始像素混色。
 			var nativeW:Int = img.width;
 			var nativeH:Int = img.height;
-			if (nativeW < _width || nativeH < _height)
-			{
-				_cpuResizeCount++;
-				if (_cpuResizeCount <= 2)
-					logLine('[capture] readPixels ' + nativeW + 'x' + nativeH + ' < target '
-						+ _width + 'x' + _height + ' -> UPSCALE (supersample INEFFECTIVE, blurry)');
-			}
+			var frameBytes:haxe.io.Bytes = img.buffer.data.buffer;
 			if (nativeW != _width || nativeH != _height)
 			{
+				if (nativeW < _width || nativeH < _height)
+				{
+					_cpuResizeCount++;
+					if (_cpuResizeCount <= 2)
+						logLine('[capture] readPixels ' + nativeW + 'x' + nativeH + ' < target '
+							+ _width + 'x' + _height + ' -> UPSCALE (quality degraded)');
+				}
 				if (frame == 0)
 					logLine('[capture] first frame native ' + nativeW + 'x' + nativeH
 						+ ' -> target ' + _width + 'x' + _height
-						+ (nativeW > _width ? ' (DPI downscale)' : ''));
-				try { img.resize(_width, _height); }
-				catch (e:Dynamic) logLine('[resize skipped] ' + Std.string(e) + ' -> native ' + nativeW + 'x' + nativeH);
+						+ (_lossless ? ' (nearest-neighbor, pixel-exact)' : ''));
+				if (_lossless)
+					frameBytes = resizeNearestRGBA(frameBytes, nativeW, nativeH, _width, _height);
+				else
+				{
+					try { img.resize(_width, _height); }
+					catch (e:Dynamic) logLine('[resize skipped] ' + Std.string(e) + ' -> native ' + nativeW + 'x' + nativeH);
+					frameBytes = img.buffer.data.buffer;
+				}
 			}
 			var pngLen:Int = 0;
 			if (_usePNG)
@@ -575,8 +611,8 @@ class RenderClock
 			var tRead1:Float = Date.now().getTime();
 			if (_usePipe)
 			{
-				// img.buffer.data.buffer 就是 readPixels 得到的 RGBA Bytes，零拷贝写 stdin
-				RenderEncoder.writeFrame(img.buffer.data.buffer);
+				// 无损模式下 frameBytes 已是原始像素（或最近邻取样结果），直接写 stdin
+				RenderEncoder.writeFrame(frameBytes);
 			}
 			// 分阶段计时：每 600 帧汇总一次，定位瓶颈在读回 / 翻转还是管道写入
 			_perfReadMs += tRead1 - tRead0;
@@ -589,6 +625,7 @@ class RenderClock
 				logLine('[perf] ' + _perfFrames + ' frames: read+flip='
 					+ Math.round(_perfReadMs / _perfFrames * 100) / 100 + 'ms'
 					+ ' writePipe=' + Math.round(_perfWriteMs / _perfFrames * 100) / 100 + 'ms'
+					+ ' videoMB=' + RenderEncoder.videoSizeMB()
 					+ ' (at frame ' + (frame + 1) + ')');
 				_perfReadMs = 0;
 				_perfWriteMs = 0;
@@ -1069,11 +1106,22 @@ class RenderClock
 		catch (e:Dynamic) logLine('[writeManifest error] ' + Std.string(e));
 	}
 
-	/** 写日志文件：release 构建会关掉 trace，这是唯一的可见诊断通道 */
+	/**
+	 * 写日志文件：release 构建会关掉 trace，这是唯一的可见诊断通道。
+	 *
+	 * 必须追加写，不能每次 saveContent(全文) —— 密集谱面每个音符都会打
+	 * [audio] sfx start/end，日志涨到几千行后，全文重写变成 O(n²)，
+	 * 表现为"越到渲染后期越卡"。这里改成 append，单次写入恒定。
+	 */
 	static function logLine(s:String):Void
 	{
-		_logLines.push(DateTools.format(Date.now(), '%H:%M:%S') + ' ' + s);
-		try { File.saveContent(outputDir + 'render_log.txt', _logLines.join('\n')); }
+		var line:String = DateTools.format(Date.now(), '%H:%M:%S') + ' ' + s + '\n';
+		try
+		{
+			var out = File.append(outputDir + 'render_log.txt', false);
+			out.writeString(line);
+			out.close();
+		}
 		catch (e:Dynamic) {}
 	}
 
@@ -1085,5 +1133,31 @@ class RenderClock
 	static function sanitize(s:String):String
 	{
 		return ~/[^A-Za-z0-9_\-]/g.replace(s, '_');
+	}
+
+	/**
+	 * 无损模式下的 DPI 尺寸修正：最近邻取样，不引入插值混色。
+	 * 正常 100% 缩放下 readPixels 尺寸已等于逻辑尺寸，这个函数不会被调用。
+	 */
+	static function resizeNearestRGBA(src:haxe.io.Bytes, sw:Int, sh:Int, dw:Int, dh:Int):haxe.io.Bytes
+	{
+		var out:haxe.io.Bytes = haxe.io.Bytes.alloc(dw * dh * 4);
+		for (y in 0...dh)
+		{
+			var sy:Int = Std.int(y * sh / dh);
+			if (sy >= sh) sy = sh - 1;
+			for (x in 0...dw)
+			{
+				var sx:Int = Std.int(x * sw / dw);
+				if (sx >= sw) sx = sw - 1;
+				var si:Int = (sy * sw + sx) * 4;
+				var di:Int = (y * dw + x) * 4;
+				out.set(di, src.get(si));
+				out.set(di + 1, src.get(si + 1));
+				out.set(di + 2, src.get(si + 2));
+				out.set(di + 3, src.get(si + 3));
+			}
+		}
+		return out;
 	}
 }
