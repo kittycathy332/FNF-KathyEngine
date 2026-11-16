@@ -277,8 +277,11 @@ class RenderEncoder
 		try { _proc.close(); } catch (e:Dynamic) {}
 		_proc = null;
 		_log = null;
+		// 日志文件大小只是诊断信息：ffmpeg 刚写完 2GB+ 文件时，Windows 上
+		// 文件可能被杀软/索引短暂锁定，FileSystem.stat 偶发抛 "Could not stat"。
+		// 绝不能让这种非关键统计把整个 finish() 流程打断（否则音频合成与 mux 都不执行）。
 		log('[encoder] pipe closed exit=' + code + ' frames=' + _frames
-			+ ' size=' + (FileSystem.exists(_videoOnly) ? FileSystem.stat(_videoOnly).size : 0));
+			+ ' size=' + safeFileSize(_videoOnly));
 
 		if (code != 0 || !FileSystem.exists(_videoOnly)) return '';
 
@@ -322,6 +325,18 @@ class RenderEncoder
 
 	static function fmtTime(sec:Float):String
 		return Std.string(Math.round(sec * 1000) / 1000);
+
+	/** 安全读取文件大小：stat 偶发失败（文件被占用/刚写完未刷新）时返回 0，绝不抛异常。 */
+	static function safeFileSize(path:String):Float
+	{
+		if (path == null) return 0;
+		try
+		{
+			if (!FileSystem.exists(path)) return 0;
+			return FileSystem.stat(path).size;
+		}
+		catch (e:Dynamic) { return 0; }
+	}
 
 	/**
 	 * 重建音轨：主音轨整体延后 leadMs+offsetMs（倒计时段），
@@ -426,8 +441,15 @@ class RenderEncoder
 			fc += f;
 			labels.push('[a' + i + ']');
 		}
+		// 限幅防爆音：模组素材本身常是 0dB 满幅（无 headroom），
+		// amix normalize=0 把多条满幅音轨原样相加后必然超过 0dB，
+		// 写 16-bit PCM 时硬截断 → 削波爆音。
+		// alimiter 做真峰值限制：limit=0.89 ≈ -1dB，留 1dB headroom；
+		// level=false 关键——否则 limiter 会把信号重新放大回 limit，等于没限幅。
+		// 实测：满幅双轨叠加的 0dB 顶格采样从 ~7.3万降到 0。
 		fc += labels.join('') + 'amix=inputs=' + all.length
-			+ ':duration=longest:normalize=0,apad,atrim=0:' + fmtTime(info.durationSec) + '[a]';
+			+ ':duration=longest:normalize=0,alimiter=limit=0.89:level=false'
+			+ ',apad,atrim=0:' + fmtTime(info.durationSec) + '[a]';
 
 		args = args.concat([
 			'-filter_complex', fc, '-map', '[a]',

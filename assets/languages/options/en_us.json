@@ -812,7 +812,7 @@
     "render_input_botplay": "Automatic play",
     "render_input_replay": "Saved replay",
     "render_fps": "Output frame rate",
-    "render_fps_desc": "Frame rate of the exported video. Higher rates look smoother and use more disk space for the frame sequence.",
+    "render_fps_desc": "Frame rate of the exported video. Higher rates look smoother. Judgment runs at 8x this rate (e.g. 90fps -> 720Hz), so higher values also give finer ms accuracy.",
     "render_width": "Output width",
     "render_width_desc": "Export width in pixels. The render window is resized to this resolution for true supersampling - higher values give sharper text and edges but take longer and use more disk space.",
     "render_height": "Output height",

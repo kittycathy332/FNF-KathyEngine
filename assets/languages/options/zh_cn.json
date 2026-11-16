@@ -807,7 +807,7 @@
     "render_input_botplay": "自动演奏",
     "render_input_replay": "回放成绩",
     "render_fps": "输出帧率",
-    "render_fps_desc": "导出视频的帧率。帧率越高画面越流畅，帧序列占用的磁盘空间也越大。",
+    "render_fps_desc": "导出视频的帧率，越高越流畅。判定以该帧率的 8 倍运行（如 90fps → 720Hz），因此帧率越高，判定毫秒精度也越高。",
     "render_width": "输出宽度",
     "render_width_desc": "导出画面的像素宽度。渲染窗口会真实放大到此分辨率（超采样），数值越高文字和边缘越清晰，但耗时和占用磁盘也越大。",
     "render_height": "输出高度",

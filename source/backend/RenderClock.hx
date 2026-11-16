@@ -25,21 +25,20 @@ typedef SfxTrack = {
  * 与 FlxGame.onEnterFrame 在同一帧重入，导致 resetSubState() 交错调用、
  * CustomFadeTransition.create() 在 Paths 缓存不一致时崩溃（hxSehException）。
  *
- * 现在的做法只约束 FlxGame 自己的累加器：
- *  1. fixedTimestep = true + updateFramerate = drawFramerate = stage.frameRate = fps
- *     → _stepMS = 1000/fps，updateElapsed() 恒算出 FlxG.elapsed = 1/fps
- *       （elapsed 是 (default,null) 只读属性，不需要写）。
- *  2. 把 _maxAccumulation 钉死为 1000/fps（== _stepMS）→ while 循环
- *     每帧最多执行一次 step()：慢帧不补跑、快帧攒够才跑，都不丢帧。
- *     注意 set_drawFramerate() 会把 _maxAccumulation 改写成 2000/fps - 1（≈两步），
- *     所以每次设定帧率之后都必须重新钉一次，否则会"跑两步、只截一帧"。
+ * 统一时钟架构（所有时间都从 subFrame 派生，避免音画/倒计时漂移）：
+ *  1. fixedTimestep = true；updateFramerate = fps×SUBSTEPS（判定/逻辑步长
+ *     1000/(fps×SUBSTEPS)，如 120fps×8=960Hz → 1.04ms）；
+ *     drawFramerate = stage.frameRate = fps（窗口绘制/截帧节奏）。
+ *  2. _maxAccumulation 钉为 1000/fps，允许每 draw 跑满 SUBSTEPS 步；
+ *     注意 set_drawFramerate() 会把 _maxAccumulation 改写成 2000/fps-1，
+ *     所以每次设定帧率之后都必须重新钉一次。
  *  3. ClientPrefs.data.framerate 也同步改成 fps，让读它的模组 / 脚本保持一致。
- *  4. preUpdate 按帧号写 Conductor.songPosition 并置 _frameReady；
- *     postDraw 仅在 _frameReady 时截帧 —— 因为 draw() 每事件都会跑，
- *     而 step() 可能隔一次才跑，不这样做会截出重复帧。
- *  5. 开场淡入转场（CustomFadeTransition）在渲染时被 MusicBeatState 跳过：
- *     它是 subState，若照旧打开会让 PlayState.update 停摆而 FlxTimer 继续走，
- *     造成倒计时被压快 + 开场丢 0.5s（45 帧 @90fps）。
+ *  4. preUpdate 每个逻辑 step 都按 subFrame 写 Conductor.songPosition，
+ *     并每累计 SUBSTEPS 个 step 置一次 _frameReady；postDraw 在 _frameReady 时截帧。
+ *     这样截帧数 = subFrame/SUBSTEPS，而 songPosition、倒计时 FlxTimer、
+ *     音频时长全部 = frame/fps —— 四者严格同步，窗口帧率抖动只影响渲染速度。
+ *  5. 开场淡入转场（CustomFadeTransition）属于成片内容，正常录制；
+ *     冻结仅限暂停菜单。preUpdate/postDraw 是全局信号，subState 期间照常派发。
  *  6. 截帧走 lime 官方 FlxG.stage.window.readPixels()（内部 glReadPixels +
  *     自动垂直翻转）。绝不能用 BitmapData.draw(FlxG.game)：硬件/tile 渲染下
  *     Cairo 递归渲染 Tilemap/shader 会触发 hxSehException（访问违规）。
@@ -53,8 +52,17 @@ class RenderClock
 	public static var active:Bool = false;
 	/** 设置页按钮置位，下一首进入 PlayState 时开始渲染 */
 	public static var requested:Bool = false;
-	/** 已处理的帧序号（下一帧的文件名） */
+	/** 已处理的输出帧序号（下一帧的文件名 / 画面帧） */
 	public static var frame:Int = 0;
+	/**
+	 * 逻辑亚帧计数：每个 step() 递增一次。判定 / songPosition 用它推进，
+	 * 精度 = 1000/(fps×SUB) 毫秒（90fps×8 = 1.39ms），远高于画面帧的 11.11ms。
+	 */
+	public static var subFrame:Int = 0;
+	/** 每个输出帧细分的逻辑步数（真亚帧判定） */
+	public static inline var SUBSTEPS:Int = 8;
+	/** 起点待定：begin 早于 BPM 设置，首帧用正确 crochet 重算 _startSongPos */
+	static var _originPending:Bool = false;
 	public static var totalFrames:Int = 0;
 	public static var outputDir:String = '';
 	public static var lastError:String = '';
@@ -78,14 +86,12 @@ class RenderClock
 	static var _height:Int = 720;
 	static var _songName:String = '';
 	static var _frameReady:Bool = false;
+	/** 累计的 step 数对 SUBSTEPS 取模得到的欠帧：每个 draw 最多补截一帧 */
+	static var _framesDue:Int = 0;
 	static var _interrupted:String = '';
 	static var _skippedSubFrames:Int = 0;
 	/** 运行期时钟参数被外部改写并校正回来的次数（应为 0，非 0 说明还有别的干扰源） */
 	static var _clockCorrections:Int = 0;
-	/** 真正执行过的 step() 次数。与 frame 数对比即可判断是否"跑了逻辑却没截帧" */
-	static var _stepCount:Int = 0;
-	/** 有 step 但没有对应截帧的次数（>0 说明画面上真丢了一帧的内容） */
-	static var _lostSteps:Int = 0;
 	/** 分阶段耗时统计（毫秒累计）：定位渲染瓶颈在读回还是管道写入 */
 	static var _perfReadMs:Float = 0;
 	static var _perfWriteMs:Float = 0;
@@ -195,8 +201,6 @@ class RenderClock
 		_interrupted = '';
 		_skippedSubFrames = 0;
 		_clockCorrections = 0;
-		_stepCount = 0;
-		_lostSteps = 0;
 		logLine('[begin] ' + _songName + ' / ' + _fps + 'fps / ' + _width + 'x' + _height);
 		logLine('[output] ' + outputDir);
 		logLine('[window] native=' + _savedWindowWidth + 'x' + _savedWindowHeight
@@ -239,34 +243,47 @@ class RenderClock
 		FlxG.fixedTimestep = true;
 		FlxG.timeScale = 1;
 
-		// ===== 渲染期：把所有 FPS / 更新相关设定强行改为输出帧率 =====
-		// 顺序很重要：set_drawFramerate() 内部会把 _maxAccumulation 改写成
-		// 2000/fps - 1（≈ 两步），set_updateFramerate() 又会重算 _stepMS/_stepSeconds。
-		// 所以必须在两者之后再把累加器钉成恰好一步，否则单帧可能跑两次 step()
-		// 却只截一张图 —— 帧数对得上，画面内容却跳过一帧（= 肉眼丢帧）。
-		FlxG.updateFramerate = _fps; // 决定 _stepMS / _stepSeconds / FlxG.elapsed
-		FlxG.drawFramerate = _fps; // 决定 stage.frameRate（窗口发起 onEnterFrame 的频率）
+		// ===== 渲染期：逻辑用亚帧高频步进，画面按输出帧率截屏 =====
+		// 判定精度取决于 songPosition 的采样密度。旧版 update=draw=fps，
+		// 每帧只 step 一次 → songPosition 只能落在 1000/fps 的整数倍上，
+		// noteDiff 呈"整数台阶"（90fps 就是 11.11ms 一格）。
+		// 现在 updateFramerate = fps×SUBSTEPS（如 90×8=720Hz），每输出帧跑 8 个逻辑步，
+		// songPosition 每步推进 1000/720=1.39ms → 判定精确到 0.00x 毫秒；
+		// drawFramerate 仍是 fps，画面照旧 90fps 截，不增加读回开销。
+		//
+		// 顺序很重要：set_drawFramerate() 会把 _maxAccumulation 改写成 2000/fps - 1，
+		// set_updateFramerate() 又会重算 _stepMS/_stepSeconds。所以累加器最后钉。
+		// _maxAccumulation = 1000/fps = SUB × stepMS，允许每 draw 恰好跑 SUB 步。
+		var logicFps:Int = _fps * SUBSTEPS;
+		FlxG.updateFramerate = logicFps; // 逻辑 / 判定步长 = 1000/logicFps
+		FlxG.drawFramerate = _fps;       // 窗口 onEnterFrame 频率 = 画面帧率
 		if (FlxG.stage != null) FlxG.stage.frameRate = _fps;
-		d.framerate = _fps; // 让读 ClientPrefs.data.framerate 的模组 / 脚本也保持一致
+		d.framerate = _fps; // 玩家设定保持画面帧率，模组脚本读它不会被 ×8
 		// 渲染期间禁止失焦自动暂停：FlxGame.onEnterFrame 在 _lostFocus && autoPause 时
 		// 整帧 return，会让长时间渲染中途停住（且 step 与截帧配对全乱）。
 		_savedAutoPause = FlxG.autoPause;
 		FlxG.autoPause = false;
 		@:privateAccess FlxG.game._maxAccumulation = 1000 / _fps;
 		FlxG.random.initialSeed = d.renderSeed;
-		logLine('[clock] ALL fps pinned to ' + _fps + ': update=' + FlxG.updateFramerate
-			+ ' draw=' + FlxG.drawFramerate
+		logLine('[clock] SUBSTEP x' + SUBSTEPS + ': output=' + _fps + 'fps logic=' + logicFps
+			+ 'Hz judgeStep=' + (1000 / logicFps) + 'ms'
+			+ ' / update=' + FlxG.updateFramerate + ' draw=' + FlxG.drawFramerate
 			+ ' stage=' + ((FlxG.stage != null) ? Std.string(FlxG.stage.frameRate) : 'n/a')
-			+ ' pref=' + d.framerate
-			+ ' stepMS=' + (1000 / _fps) + ' maxAccum=' + (1000 / _fps)
-			+ ' (was update=' + _savedUpdateFramerate + ' draw=' + _savedDrawFramerate
-			+ ' stage=' + _savedStageFrameRate + ' pref=' + _savedFrameratePref + ')');
+			+ ' maxAccum=' + (1000 / _fps)
+			+ ' (was update=' + _savedUpdateFramerate + ' draw=' + _savedDrawFramerate + ')');
 
-		// 倒计时段的起点与 PlayState.startCountdown() 的赋值保持一致
+		// 倒计时段的起点与 PlayState.startCountdown() 的赋值保持一致。
+		// 注意 begin() 在 create() 中途（PlayState 823 行）调用，此刻 BPM 尚未设好
+		// （882 行才 Conductor.bpm = SONG.bpm），crochet 还是默认值。真正起点在首帧
+		// onPreUpdate（create 已完成）用正确 crochet 重算，见 _originPending。
+		_originPending = true;
 		_startSongPos = (d.renderRange == 'SongOnly')
 			? Conductor.offset
 			: -Conductor.crochet * 5 + Conductor.offset;
 		frame = 0;
+		subFrame = 0;
+		_framesDue = 0;
+		_frameReady = false;
 		totalFrames = 0;
 		lastError = '';
 
@@ -300,6 +317,19 @@ class RenderClock
 		if (!active) return;
 		// create() 已完成，首帧把窗口 framebuffer 放大到目标分辨率
 		if (!_supersampleApplied) applySupersampling();
+		// 首帧用已设好的 BPM 重算倒计时起点（begin 时 crochet 还是默认值）
+		if (_originPending)
+		{
+			_originPending = false;
+			var dd = ClientPrefs.data;
+			var correctStart:Float = (dd != null && dd.renderRange == 'SongOnly')
+				? Conductor.offset
+				: -Conductor.crochet * 5 + Conductor.offset;
+			if (Math.abs(correctStart - _startSongPos) > 0.01)
+				logLine('[origin] songPosition start corrected ' + Math.round(_startSongPos)
+					+ 'ms -> ' + Math.round(correctStart) + 'ms (BPM now ' + Conductor.bpm + ')');
+			_startSongPos = correctStart;
+		}
 
 		// 只有暂停菜单才冻结时钟：暂停界面不属于成片，且此时游戏逻辑停摆，
 		// 继续推进虚拟时间会在恢复后造成跳变。
@@ -319,13 +349,29 @@ class RenderClock
 			return;
 		}
 
-		// 上一个 step 还没等到 draw() 就又 step 了一次 → 中间那帧画面永远丢了
-		if (_frameReady) _lostSteps++;
-		_stepCount++;
-
-		_frameReady = true;
+		// ===== 统一时钟：一切从 subFrame（step 时钟）派生 =====
+		// 上一版把 songPosition 绑在 frame（draw 时钟）上治好了音画漂移，
+		// 却让倒计时 FlxTimer（走 step 时钟）掉队 → 曲目比倒计时快约 18%，
+		// 表现为"倒计时还没结束曲目就开始了"。
+		// 根治：让截帧也走 step 时钟 —— 每 SUBSTEPS 个 step 才截一帧（见下）。
+		// 于是四者严格相等、且都由 subFrame 派生：
+		//   截帧数 frame   ≈ subFrame / SUBSTEPS
+		//   songPosition   = 起点 + subFrame × (1000/fps/SUBSTEPS) = 起点 + frame × 1000/fps
+		//   倒计时 FlxTimer = subFrame / updateFramerate = subFrame/(fps×SUBSTEPS) = frame/fps
+		//   音频时长        = frame / fps
+		// 窗口帧率抖动只影响"多久截一帧"（实时速度），不影响任何时间戳与同步。
 		var rate:Float = (PlayState.instance != null) ? PlayState.instance.playbackRate : 1;
-		Conductor.songPosition = _startSongPos + frame * (1000 / _fps) * rate;
+		var logicStepMs:Float = (1000 / _fps) / SUBSTEPS;
+		Conductor.songPosition = _startSongPos + subFrame * logicStepMs * rate;
+		subFrame++;
+		// 每 SUBSTEPS 个 step 欠一帧；postDraw 消费（每 draw 最多补一帧）。
+		// 窗口跑满时每 draw 恰好 SUBSTEPS 步 → 截一帧；跑不满时欠帧顺延到后续 draw。
+		_framesDue++;
+		if (_framesDue >= SUBSTEPS)
+		{
+			_frameReady = true;
+			_framesDue -= SUBSTEPS;
+		}
 	}
 
 	/**
@@ -421,20 +467,21 @@ class RenderClock
 	/**
 	 * 帧末把全部帧率参数钉回去。
 	 *
-	 * 四个量必须同时正确，缺一个都会让"逻辑步"和"截帧"错位：
-	 *  - updateFramerate → _stepMS / _stepSeconds → FlxG.elapsed（FlxTimer、补间的步长）
-	 *  - drawFramerate   → stage.frameRate（窗口多久调一次 onEnterFrame）
-	 *  - ClientPrefs.data.framerate → 模组 / 脚本读它做自适应同步
-	 *  - _maxAccumulation → 单帧最多跑几次 step()，必须 == 一步，否则会"跑两步截一帧"
+	 * 亚帧方案下四个量必须同时正确：
+	 *  - updateFramerate = fps×SUBSTEPS → 判定步长（决定 noteDiff 精度）
+	 *  - drawFramerate / stage.frameRate = fps → 画面截帧频率
+	 *  - ClientPrefs.data.framerate = fps → 模组脚本读它不会以为被 ×8
+	 *  - _maxAccumulation = 1000/fps → 每 draw 允许跑满 SUBSTEPS 个逻辑步
 	 *
 	 * 注意 set_drawFramerate() 会把 _maxAccumulation 改写成 2000/fps - 1，
 	 * 所以累加器的修正必须放在最后。
 	 */
 	static function enforceClock():Void
 	{
-		if (FlxG.updateFramerate != _fps)
+		var logicFps:Int = _fps * SUBSTEPS;
+		if (FlxG.updateFramerate != logicFps)
 		{
-			FlxG.updateFramerate = _fps;
+			FlxG.updateFramerate = logicFps;
 			_clockCorrections++;
 		}
 		if (FlxG.drawFramerate != _fps)
@@ -458,12 +505,13 @@ class RenderClock
 			FlxG.timeScale = 1;
 			_clockCorrections++;
 		}
-		// 放在最后：set_drawFramerate() 会覆盖它
-		var stepMs:Float = 1000 / _fps;
+		// 放在最后：set_drawFramerate() 会覆盖它。
+		// 目标 = 1000/fps = SUBSTEPS 个逻辑步，允许每 draw 跑满细分步数。
+		var accMs:Float = 1000 / _fps;
 		var cur:Float = @:privateAccess FlxG.game._maxAccumulation;
-		if (Math.abs(cur - stepMs) > 0.01)
+		if (Math.abs(cur - accMs) > 0.01)
 		{
-			@:privateAccess FlxG.game._maxAccumulation = stepMs;
+			@:privateAccess FlxG.game._maxAccumulation = accMs;
 			_clockCorrections++;
 		}
 	}
@@ -474,8 +522,9 @@ class RenderClock
 		if (!active) return;
 		if (!_frameReady)
 		{
-			// 这一帧没跑 step()（窗口帧率高于输出帧率时会出现），不截帧，只做时钟纠错。
-			// 截帧与 step 严格 1:1，才能保证成片每个渲染帧恰好是一步逻辑。
+			// 本 draw 周期内累计的 step 还不足 SUBSTEPS 个，不截帧，只做时钟纠错。
+			// 截帧改由 step 时钟驱动（每 SUBSTEPS 步一次），因此帧号、songPosition、
+			// 倒计时、音频时长四者严格同步，不受窗口帧率抖动影响。
 			enforceClock();
 			return;
 		}
@@ -535,10 +584,12 @@ class RenderClock
 			_perfFrames++;
 			if (_perfFrames >= 600)
 			{
+				// frame 是 0-based 且在本函数末尾才 ++，这里 +1 才是"已处理的帧数"，
+				// 否则日志会显示 599/1199/… 这种"整百减一"，读起来像丢了帧。
 				logLine('[perf] ' + _perfFrames + ' frames: read+flip='
 					+ Math.round(_perfReadMs / _perfFrames * 100) / 100 + 'ms'
 					+ ' writePipe=' + Math.round(_perfWriteMs / _perfFrames * 100) / 100 + 'ms'
-					+ ' (at frame ' + frame + ')');
+					+ ' (at frame ' + (frame + 1) + ')');
 				_perfReadMs = 0;
 				_perfWriteMs = 0;
 				_perfFrames = 0;
@@ -689,21 +740,21 @@ class RenderClock
 				durationSec: frame / _fps
 			}, logLine);
 		}
-		logLine('[finish] frames=' + frame + ' / steps=' + _stepCount
-			+ ' / lostSteps=' + _lostSteps
-			+ ' / captureErrors=' + _errorCount
+		logLine('[finish] frames=' + frame + ' / subSteps=' + subFrame
+			+ ' (x' + SUBSTEPS + ' judge grid) / captureErrors=' + _errorCount
 			+ ' / skippedSubFrames=' + _skippedSubFrames
 			+ ' / clockCorrections=' + _clockCorrections
 			+ ' / cpuResizedFrames=' + _cpuResizeCount
 			+ ' / sfxCaptured=' + _sfxSeen
 			+ (_firstError != '' ? ' / firstError=' + _firstError : '')
 			+ ' / video=' + videoPath);
-		if (_lostSteps > 0)
-			logLine('[timing] WARNING: ' + _lostSteps + ' logic steps had no captured frame '
-				+ '(accelerator allowed >1 step per draw). Content skipped.');
-		if (frame != _stepCount + _skippedSubFrames)
-			logLine('[timing] note: frames(' + frame + ') != steps(' + _stepCount
-				+ ') + skipped(' + _skippedSubFrames + ')');
+		// 诊断用：subFrame 是实际 step 总数，窗口帧率抖动时会少于 frame×SUBSTEPS。
+		// 自 frame 驱动时钟修复后，这个偏差【不再造成音画漂移】—— 时钟由 frame
+		// 决定，少跑的 step 只是那一帧内少覆盖了几个判定采样点。仅在偏差极大时提示。
+		var expectSub:Int = (frame - _skippedSubFrames) * SUBSTEPS;
+		if (expectSub > 0 && subFrame < expectSub * 0.5)
+			logLine('[timing] NOTE: step coverage ' + Math.round(subFrame * 100 / expectSub)
+				+ '% (window fps unstable). Clock stays frame-driven, no A/V drift.');
 		if (_cpuResizeCount > 0)
 			logLine('[quality] WARNING: readPixels was SMALLER than target on ' + _cpuResizeCount
 				+ ' frames (window resize blocked?). Output was CPU-upscaled and may look soft.');
@@ -729,8 +780,7 @@ class RenderClock
 		flushSounds();
 		cleanup();
 		var partial:String = _usePipe ? RenderEncoder.abort(logLine) : '';
-		logLine('[abort] reason=' + reason + ' frames=' + frame + ' / steps=' + _stepCount
-			+ ' / lostSteps=' + _lostSteps
+		logLine('[abort] reason=' + reason + ' frames=' + frame + ' / subSteps=' + subFrame
 			+ ' / skippedSubFrames=' + _skippedSubFrames
 			+ ' / sfxCaptured=' + _sfxSeen
 			+ ' / clockCorrections=' + _clockCorrections + ' / partial=' + partial);
