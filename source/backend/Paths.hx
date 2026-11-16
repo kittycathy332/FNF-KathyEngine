@@ -87,6 +87,15 @@ class Paths
 		// 关闭 GC 时只做资源解引用，贴图/音频仍按上面的逻辑正常释放。
 		if (ClientPrefs.data == null || ClientPrefs.data.garbageCollectorEnabled)
 		{
+			#if debug
+			var st = flixel.FlxG.state;
+			var stateName = st != null ? Type.getClassName(Type.getClass(st)) : "null";
+			var assetCount = 0;
+			for (_ in currentTrackedAssets.keys()) assetCount++;
+			var soundCount = 0;
+			for (_ in currentTrackedSounds.keys()) soundCount++;
+			trace('[GC] 主动完整回收 @ ${Math.round(haxe.Timer.stamp() * 1000)}ms state=$stateName trackedAssets=$assetCount trackedSounds=$soundCount');
+			#end
 			System.gc();
 			#if cpp
 			cpp.NativeGc.run(true);
@@ -143,6 +152,63 @@ class Paths
 		// flags everything to be cleared out next unused memory clear
 		localTrackedAssets = [];
 		// Sparrow/Packer atlas 缓存也一并释放（下次 getSparrowAtlas 会重建，代价只是再 parse XML）
+		_atlasCache = new Map();
+		#if !html5 openfl.Assets.cache.clear("songs"); #end
+	}
+
+	/**
+	 * 核弹选项（Shift+F9）：解除所有资源保护并销毁全部缓存资源，包括 freakyMenu 等默认保护项。
+	 * 与 clearStoredMemory 的区别：那个保留 dumpExclusions/localTrackedAssets 里的资源，
+	 * 这个连保护项一起清。调用方随后必须重载 state 重建所需资源，否则画面/音乐会缺资源。
+	 * 不在这里调 GC，由调用方统一在解引用后跑一次完整回收。
+	 */
+	@:access(flixel.system.frontEnds.BitmapFrontEnd._cache)
+	public static function clearAllMemory(?protect:Array<flixel.graphics.FlxGraphic>)
+	{
+		// 兼容旧的单个 graphic 传参
+		if (protect == null) protect = [];
+
+		// 解除所有保护：默认项 + 按 tag 登记的项 + 本地在用标记
+		dumpExclusions = [];
+		_excludedByTag = new Map();
+		localTrackedAssets = [];
+
+		function isProtected(g:FlxGraphic):Bool
+		{
+			if (g == null) return false;
+			for (p in protect) if (p == g) return true;
+			return false;
+		}
+
+		// 销毁所有被跟踪的贴图（跳过需要保护的，例如正在显示的转场图/遮罩）
+		for (key in currentTrackedAssets.keys())
+		{
+			var g = currentTrackedAssets.get(key);
+			if (!isProtected(g)) destroyGraphic(g);
+		}
+		// 保护图仍保留在当前追踪表里（否则下次 image() 命中已 remove 的条目会异常），其余清空
+		var keep:Map<String, FlxGraphic> = [];
+		for (key in currentTrackedAssets.keys())
+		{
+			var g = currentTrackedAssets.get(key);
+			if (isProtected(g)) keep.set(key, g);
+		}
+		currentTrackedAssets = keep;
+
+		// 清掉所有被跟踪的音频
+		for (key in currentTrackedSounds.keys())
+		{
+			if (currentTrackedSounds.get(key) != null)
+				Assets.cache.clear(key);
+		}
+		currentTrackedSounds = [];
+
+		// FlxG.bitmap 里的其它图形、atlas 缓存、资源缓存全清（同样跳过保护图）
+		for (key in FlxG.bitmap._cache.keys())
+		{
+			var g = FlxG.bitmap.get(key);
+			if (!isProtected(g)) destroyGraphic(g);
+		}
 		_atlasCache = new Map();
 		#if !html5 openfl.Assets.cache.clear("songs"); #end
 	}

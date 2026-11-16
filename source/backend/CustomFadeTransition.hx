@@ -33,6 +33,24 @@ class CustomFadeTransition extends FlxSubState {
 	static var lastRandomIndex:Int = -1;
 	static var baGlowImages:Array<String> = [];
 	static var currentImageIndex:Int = 0;
+
+	// 强制 BA 转场显示指定图片（key 相对 images/，不含扩展名），一次性用完即清。
+	// 供 Shift+F5 全清重载时显示固定的 37 号贴图。
+	public static var forceBAImage:String = null;
+
+	// 强制本次转场使用的风格（如 'Blue Archive'），一次性用完即清。
+	// 供 Shift+F5 无视玩家设置、强制走 BA 转场。
+	public static var forceStyle:String = null;
+
+	// 强制 reload 文案与偏红字体色（Shift+F5 全清场景）。
+	public static var forceReloadText:String = null;
+	public static var forceReloadColor:Int = -1; // <0 表示不覆盖
+
+	// 当前 BA 转场正在使用的 graphic（转场图 + 黑色遮罩），供 Shift+F5 全清时保护，避免定格画面绿屏。
+	public static var protectedGraphics:Array<flixel.graphics.FlxGraphic> = [];
+
+	// 本次转场实际使用的风格（create 时定下，update 复用）
+	var currentStyle:String = null;
 	
 	public static function resetBlueArchiveImages() {
 		kathyImages = [];
@@ -63,12 +81,19 @@ class CustomFadeTransition extends FlxSubState {
 		var savedReloadingStateType = reloadingStateType;
 		isReloading = false;
 		reloadingStateType = null;
-		
-		// 兼容性检查：确保 customFadeStyle 是有效的值
+
+		// forceStyle 一次性读取后立刻清空，避免影响后续正常转场
+		var forced:String = forceStyle;
+		forceStyle = null;
+
+		// 兼容性检查：确保风格是有效的值（含强制风格）
 		var validStyles:Array<String> = ['None', 'V-Slice', 'NovaFlare Move', 'NovaFlare Alpha', 'Blue Archive', 'BA_Schale_Glow'];
-		if (!validStyles.contains(ClientPrefs.data.customFadeStyle)) {
-			ClientPrefs.data.customFadeStyle = 'V-Slice';
+		var styleToUse:String = forced != null ? forced : ClientPrefs.data.customFadeStyle;
+		if (!validStyles.contains(styleToUse)) {
+			styleToUse = 'V-Slice';
 		}
+		// 保存本次实际使用的风格，供 update() 复用（不再依赖可能已变化的玩家设置）
+		currentStyle = styleToUse;
 		
 		// 兼容性检查：确保 blueArchiveLanguage 是有效的值
 		var validLanguages:Array<String> = ['CN', 'JP', 'KR', 'EN'];
@@ -100,7 +125,7 @@ class CustomFadeTransition extends FlxSubState {
             }
         }
 
-        if (ClientPrefs.data.customFadeStyle == 'BA_Schale_Glow') {
+        if (currentStyle == 'BA_Schale_Glow') {
             baGlowPics = new FlxSprite(0, 0);
             baGlowPics.scrollFactor.set();
             baGlowPics.antialiasing = ClientPrefs.data.antialiasing;
@@ -129,7 +154,7 @@ class CustomFadeTransition extends FlxSubState {
             } else {
                 FlxG.sound.play(Paths.sound('BA/UI_Login'));            
             }
-        } else if (ClientPrefs.data.customFadeStyle == 'NovaFlare Move') {
+        } else if (currentStyle == 'NovaFlare Move') {
             loadRight = new FlxSprite(isTransIn ? 0 : 1280, 0).loadGraphic(Paths.image('menuExtend/CustomFadeTransition/NF/loadingR'));
             loadRight.scrollFactor.set();
             loadRight.antialiasing = ClientPrefs.data.antialiasing;        
@@ -222,7 +247,7 @@ class CustomFadeTransition extends FlxSubState {
                     ease: FlxEase.expoInOut
                 });
             }
-        } else if (ClientPrefs.data.customFadeStyle == 'NovaFlare Alpha') {
+        } else if (currentStyle == 'NovaFlare Alpha') {
             loadAlpha = new FlxSprite( 0, 0).loadGraphic(Paths.image('menuExtend/CustomFadeTransition/NF/loadingAlpha'));
             loadAlpha.scrollFactor.set();
             loadAlpha.antialiasing = ClientPrefs.data.antialiasing;		
@@ -298,7 +323,7 @@ class CustomFadeTransition extends FlxSubState {
                 
                 
                 }
-            } else if (ClientPrefs.data.customFadeStyle == 'Blue Archive') {
+            } else if (currentStyle == 'Blue Archive') {
             // 初始化图片列表（只在第一次加载时）
             
             if (kathyImages.length == 0) {
@@ -344,6 +369,8 @@ class CustomFadeTransition extends FlxSubState {
             transBlack.scrollFactor.set();
             transBlack.screenCenter();
             add(transBlack);
+            // 黑色遮罩也在 bitmap 缓存里，Shift+F5 全清时须保护，否则定格画面露出绿色占位色
+            protectedGraphics.push(transBlack.graphic);
 
             // transBG 没有被 add 到显示列表，却每次转场都要同步解码一张整屏 PNG，
             // 是纯粹的主线程开销，这里不再加载。若之后要用回来，把下面几行取消注释即可。
@@ -354,7 +381,12 @@ class CustomFadeTransition extends FlxSubState {
             // add(transBG);
 
             // 图片加载（完全按照NovaFlare的方式）
-            baLoadingPics = new FlxSprite(0, 0).loadGraphic(Paths.image(kathyImages[ClientPrefs.data.randomIndex]));
+            // Shift+F5 全清时强制显示指定图片（如 37 号贴图），一次性消费
+            var imgKey:String = (forceBAImage != null) ? forceBAImage : kathyImages[ClientPrefs.data.randomIndex];
+            forceBAImage = null;
+            var loadingGraphic = Paths.image(imgKey); // 记录当前转场图，供全清时保护
+            protectedGraphics.push(loadingGraphic);
+            baLoadingPics = new FlxSprite(0, 0).loadGraphic(loadingGraphic);
             baLoadingPics.scrollFactor.set();
             baLoadingPics.antialiasing = ClientPrefs.data.antialiasing;
             
@@ -390,10 +422,18 @@ class CustomFadeTransition extends FlxSubState {
             // 渐隐：从当前位置开始，飞出到下方
 
             // 简易Loading文本（右下角）
+            // Shift+F5 全清时可覆盖 reload 文案与偏红字体色
             var loadingText:String = isTransIn ? 'Done!' : (isReloadingTransition ? 'Reloading...' : 'Loading...');
-            EventText = new FlxText(FlxG.width - 280, FlxG.height - 150, 250, loadingText, 36);
+            var eventColor:Int = FlxColor.WHITE;
+            if (forceReloadText != null && !isTransIn) { loadingText = forceReloadText; }
+            if (forceReloadColor >= 0) { eventColor = forceReloadColor; }
+            // 一次性消费，避免影响后续正常转场
+            forceReloadText = null;
+            forceReloadColor = -1;
+            // 宽度足够容纳单行文案（原 250 会让较长文案折成多行）
+            EventText = new FlxText(FlxG.width - 520, FlxG.height - 150, 440, loadingText, 36);
             EventText.scrollFactor.set();
-            EventText.setFormat(Assets.getFont("assets/fonts/arturito-slab.ttf").fontName, 36, FlxColor.WHITE, LEFT, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
+            EventText.setFormat(Assets.getFont("assets/fonts/arturito-slab.ttf").fontName, 36, eventColor, RIGHT, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
             EventText.antialiasing = ClientPrefs.data.antialiasing;
             EventText.alpha = isTransIn ? 1 : 0;
             add(EventText);
@@ -445,7 +485,7 @@ class CustomFadeTransition extends FlxSubState {
                     ease: FlxEase.quartIn
                 });
             }
-        } else if (ClientPrefs.data.customFadeStyle == 'None') {
+        } else if (currentStyle == 'None') {
             // 无转场效果：不渲染任何视觉元素
         } else {
             //原版
@@ -480,7 +520,7 @@ class CustomFadeTransition extends FlxSubState {
     }
 
     override function update(elapsed: Float) {
-        if (ClientPrefs.data.customFadeStyle == 'BA_Schale_Glow') {
+        if (currentStyle == 'BA_Schale_Glow') {
             imageTimer += elapsed;
             
             // Update frame if enough time has passed
@@ -509,7 +549,7 @@ class CustomFadeTransition extends FlxSubState {
                     }
                 }
             }
-        } else if (ClientPrefs.data.customFadeStyle == 'V-Slice') {
+        } else if (currentStyle == 'V-Slice') {
             super.update(elapsed);
             final height: Float = FlxG.height * Math.max(camera.zoom, 0.001);
             final targetPos: Float = transGradient.height + 50 * Math.max(camera.zoom, 0.001);
@@ -526,7 +566,7 @@ class CustomFadeTransition extends FlxSubState {
                 if (finishCallback != null) finishCallback();
                 finishCallback = null;
             }
-        } else if (ClientPrefs.data.customFadeStyle == 'Blue Archive') {
+        } else if (currentStyle == 'Blue Archive') {
 		transBlack.alpha = baLoadingPics.alpha;
            // transBG.alpha = baLoadingPics.alpha;
            /* if (baLoadingPics.alpha <= 0) {
@@ -552,7 +592,7 @@ class CustomFadeTransition extends FlxSubState {
                 if (finishCallback != null) finishCallback();
                 finishCallback = null;
             }*/
-        } else if (ClientPrefs.data.customFadeStyle == 'None') {
+        } else if (currentStyle == 'None') {
             // 无转场效果：立即触发回调（切换状态）并关闭，不渲染任何视觉元素
             if (finishCallback != null) finishCallback();
             finishCallback = null;

@@ -21,6 +21,7 @@ import psychlua.HScript.HScriptInfos;
 import mobile.backend.MobileScaleMode;
 import openfl.events.KeyboardEvent;
 import lime.system.System as LimeSystem;
+import openfl.system.System;
 import Sys;
 import backend.Paths;
 #if (linux || mac)
@@ -104,6 +105,119 @@ class Main extends Sprite
 		hl.Gc.enable(enabled);
 		#end
 	}
+
+	// 桌面端 GC 软上限：HXCPP_GC_BIG_BLOCKS 已解除 hxcpp 约 2GiB 的 block heap 硬顶，
+	// 这里再加一道 6GiB 预留内存（对应任务管理器/调试面板的 TASK MEM）监控，
+	// 超过时完整回收一次并提示，避免内存无限膨胀。
+	#if (debug && cpp && desktop && !mobile)
+	// 注意：必须用浮点字面量。6*1024*1024*1024 会按 Int32 计算溢出成负数，
+	// 导致任何内存值都被误判为“超过上限”。
+	private static inline var GC_SOFT_LIMIT_BYTES:Float = 6.0 * 1024 * 1024 * 1024;
+	private static var gcGuardLastCheck:Float = 0;
+	private static var gcGuardWarned:Bool = false;
+	#end
+
+	#if (debug && cpp && desktop && !mobile)
+	/** 每 2 秒检查一次 GC 预留内存。软上限不是硬截断：hxcpp 没有运行时 max-heap 参数。 */
+	private static function checkGcMemorySoftLimit():Void
+	{
+		var now = haxe.Timer.stamp();
+		if (now - gcGuardLastCheck < 2.0) return;
+		gcGuardLastCheck = now;
+
+		var reserved = cpp.vm.Gc.memInfo64(cpp.vm.Gc.MEM_INFO_RESERVED);
+		if (reserved < GC_SOFT_LIMIT_BYTES)
+		{
+			if (gcGuardWarned)
+			{
+				gcGuardWarned = false;
+				trace('[GC] 预留内存已回落到 ${Math.round(reserved / 1048576)} MB，软上限告警解除。');
+			}
+			return;
+		}
+
+		// 只在跨过阈值的那一次回收并打印，避免每 2 秒刷屏。
+		if (gcGuardWarned) return;
+		gcGuardWarned = true;
+
+		cpp.vm.Gc.run(true);
+		var msg = '[GC] 预留内存 ${Math.round(reserved / 1048576)} MB 超过 6 GiB 软上限，已触发完整回收。';
+		trace(msg);
+		if (gameLogVar != null) gameLogVar.addLogDebug(msg);
+	}
+	#end
+
+	#if (debug && cpp && desktop && !mobile)
+	@:native("__hxcpp_gc_census")
+	private static extern function gcCensusNative():Array<Dynamic>;
+
+	/** F9 触发：打印占内存最多的对象类型（内部会先做一次 full GC）。 */
+	private static function dumpGcCensus():Void
+	{
+		trace('[CENSUS] 正在普查堆对象（会触发一次完整 GC，卡顿属正常）...');
+		var rows:Array<Dynamic> = gcCensusNative();
+		if (rows == null)
+		{
+			trace('[CENSUS] 返回 null');
+			return;
+		}
+		var total:Float = 0;
+		for (r in rows) total += r.bytes;
+		trace('[CENSUS] 类型数=${rows.length} 合计=${Math.round(total / 1048576)}MB');
+		var n:Int = rows.length < 25 ? rows.length : 25;
+		for (i in 0...n)
+		{
+			var r = rows[i];
+			trace('[CENSUS] ${i + 1}. ${r.name} : count=${r.count} bytes=${Math.round(r.bytes / 1048576)}MB');
+		}
+	}
+	#end
+
+	// 卡顿探针：判定长帧是否由 GC 造成。
+	// MEM_INFO_USAGE 只在 GC 结束时被重写（Immix.cpp:5826 mTotalAfterLastCollect = MemUsage()），
+	// 所以它跨过一次 GC 后必然突变；MEM_INFO_RESERVED 在 GC 前后保持不变（只回收不释放 block）。
+	// 若长帧伴随 usage 下降 → GC 主导；若 usage 纹丝不动 → 与 GC 无关，去查渲染/IO/线程。
+	#if (debug && cpp && desktop && !mobile)
+	private static var stutterPrevTime:Float = 0;
+	private static var stutterPrevUsage:Float = -1;
+	private static inline var STUTTER_MS:Float = 25.0;
+	private static var stutterLogCount:Int = 0;
+	private static inline var STUTTER_LOG_CAP:Int = 2000; // 只防无限刷屏，不再早早截断
+
+	private static function probeStutter():Void
+	{
+		var now = haxe.Timer.stamp();
+		var usage = cpp.vm.Gc.memInfo64(cpp.vm.Gc.MEM_INFO_USAGE);
+		if (stutterPrevUsage < 0)
+		{
+			stutterPrevTime = now;
+			stutterPrevUsage = usage;
+			return;
+		}
+
+		var frameMs = (now - stutterPrevTime) * 1000;
+		stutterPrevTime = now;
+		var usageDeltaMB = (usage - stutterPrevUsage) / 1048576;
+		stutterPrevUsage = usage;
+
+		if (frameMs < STUTTER_MS) return;
+		if (stutterLogCount >= STUTTER_LOG_CAP)
+		{
+			if (stutterLogCount == STUTTER_LOG_CAP)
+			{
+				stutterLogCount++;
+				trace('[STUTTER] 已达 $STUTTER_LOG_CAP 条上限，后续不再打印（卡顿仍在继续）');
+			}
+			return;
+		}
+		stutterLogCount++;
+
+		var verdict = usageDeltaMB < -0.5 ? "GC-RELATED" : "NOT-GC";
+		var st = flixel.FlxG.state;
+		var stateName = st != null ? Type.getClassName(Type.getClass(st)) : "null";
+		trace('[STUTTER] ${Math.round(frameMs)}ms $verdict usageDelta=${Math.round(usageDeltaMB * 10) / 10}MB state=$stateName');
+	}
+	#end
 
 	public static var originalHaxeTrace:Dynamic->?haxe.PosInfos->Void = null;
 
@@ -505,7 +619,11 @@ class Main extends Sprite
 		DiscordClient.prepare();
 		#end
 
-		#if desktop FlxG.stage.addEventListener(KeyboardEvent.KEY_UP, onKeyPress); #end
+		#if desktop
+		FlxG.stage.addEventListener(KeyboardEvent.KEY_UP, onKeyPress);
+		// F5 / Shift+F5 长按 1.5 秒确认的清理热键
+		FlxG.stage.addEventListener(KeyboardEvent.KEY_DOWN, onKeyDown);
+		#end
 
 		#if mobile
 		#if android FlxG.android.preventDefaultKeys = [BACK]; #end
@@ -861,6 +979,13 @@ class Main extends Sprite
 	private static var _lastAppliedWindowTitle:String = null;
 	private static function onWindowTitleFrame(_):Void
 	{
+		#if (debug && cpp && desktop && !mobile)
+		checkGcMemorySoftLimit();
+		probeStutter();
+		#end
+		#if desktop
+		onF5HoldFrame(); // F5 长按 1.5 秒确认进度
+		#end
 		var cur = FlxG.state;
 		if (cur != _lastWindowTitleState)
 		{
@@ -975,6 +1100,104 @@ class Main extends Sprite
 		}
 	}
 
+	#if desktop
+	// F5 / Shift+F5 长按确认清理：按住 2 秒后触发（含 0.5 秒飞入），右上角显示进度。
+	private static inline var F5_HOLD_SECONDS:Float = 2.0;
+	private static var f5HoldStart:Float = -1;   // <0 表示当前未在按住
+	private static var f5HoldAll:Bool = false;    // 按下瞬间锁定的 Shift 状态
+	private static var f5ConfirmHud:debug.HoldConfirmHud = null;
+
+	/** 每帧推进确认进度；满 2 秒时执行一次清理 + 刷新。 */
+	private static function onF5HoldFrame():Void
+	{
+		if (f5HoldStart < 0) return;
+		var elapsed = haxe.Timer.stamp() - f5HoldStart;
+		var progress = elapsed / F5_HOLD_SECONDS;
+		if (f5ConfirmHud != null) f5ConfirmHud.update(progress);
+		if (progress < 1) return;
+
+		// 触发前先复位，避免清理/GC 期间 KEY_UP 丢失导致重复触发
+		var all = f5HoldAll;
+		f5HoldStart = -1;
+		if (f5ConfirmHud != null) f5ConfirmHud.hide();
+		executeF5Cleanup(all);
+	}
+
+	/** 真正执行：清资源 + GC + 重载 state。 */
+	private static function executeF5Cleanup(all:Bool):Void
+	{
+		trace(all
+			? backend.Language.getWithFallback('f5_trace_clean_all', '[F5] BA transition + clear all assets + GC + reload state...')
+			: backend.Language.getWithFallback('f5_trace_clean', '[F5] Clear unused assets + GC + reload state with transition...'));
+
+		var current = FlxG.state;
+		if (current == null) return;
+		var stateType:Class<flixel.FlxState> = Type.getClass(current);
+		if (stateType == null) return;
+		var newState:flixel.FlxState = null;
+		try { newState = Type.createInstance(stateType, []); }
+		catch (e:Dynamic) { trace(backend.Language.getWithFallback('f5_trace_fail', '[F5] Failed to rebuild state: {0}', [Std.string(e)])); return; }
+
+		if (all)
+		{
+			// Shift+F5：强制 BA 转场显示 37 号贴图，图片飞入完成后再执行全清 + GC + 重载。
+			// 同步的全清/GC 会阻塞主线程，画面就定格在转场图片上，之后立刻重载（无额外转场）。
+			backend.CustomFadeTransition.forceStyle = 'Blue Archive';
+			backend.CustomFadeTransition.forceBAImage = 'menuExtend/CustomFadeTransition/Blue_Archive/CN/LoadingImage_37_kr';
+			backend.CustomFadeTransition.forceReloadText = 'Cleaning up...'; // 短文案，避免换行
+			backend.CustomFadeTransition.forceReloadColor = 0xFF6B6B; // 偏红色
+
+			backend.CustomFadeTransition.isReloading = true;
+			backend.CustomFadeTransition.reloadingStateType = stateType;
+			backend.CustomFadeTransition.finishCallback = function()
+			{
+				backend.CustomFadeTransition.finishCallback = null; // 只执行一次
+				// 保护正在显示的转场图 + 黑色遮罩：否则全清会销毁它们，GC 定格时露出绿屏（丢失贴图占位色）
+				Paths.clearAllMemory(backend.CustomFadeTransition.protectedGraphics);
+				System.gc();
+				#if cpp
+				cpp.NativeGc.run(true);
+				#end
+				Paths.clearAtlasCache();
+				backend.CustomFadeTransition.protectedGraphics = []; // 转场即将关闭，解除记录
+				FlxG.switchState(newState); // 无转场：立刻重载，画面在 GC 期间定格于转场图
+			};
+
+			// 直接 openSubState：不能用 MusicBeatState.startTransition，它会覆盖 finishCallback。
+			current.openSubState(new backend.CustomFadeTransition(0.6, false));
+			return;
+		}
+
+		// 普通 F5：清未保护资源 + GC + 带转场刷新
+		Paths.clearUnusedMemory(); // 内部已含 System.gc()/NativeGc.run(true)
+		Paths.clearAtlasCache();
+
+		// 带转场：保留 isReloading 标记，让转场页显示 "Reloading..."
+		backend.CustomFadeTransition.isReloading = true;
+		backend.CustomFadeTransition.reloadingStateType = stateType;
+		if (Std.isOfType(current, backend.MusicBeatState))
+			backend.MusicBeatState.startTransition(newState);
+		else
+			FlxG.switchState(newState);
+	}
+
+	/** KEY_DOWN：开始按住计时（keydown 连发时忽略）。 */
+	private function onKeyDown(event:KeyboardEvent):Void
+	{
+		if (event.keyCode != Keyboard.F5) return;
+		if (f5HoldStart >= 0) return;
+		event.preventDefault();
+		f5HoldStart = haxe.Timer.stamp();
+		f5HoldAll = event.shiftKey; // 锁定按下瞬间的状态，中途松开 Shift 不切换模式
+		if (f5ConfirmHud == null)
+		{
+			f5ConfirmHud = new debug.HoldConfirmHud();
+			Lib.current.stage.addChild(f5ConfirmHud);
+		}
+		f5ConfirmHud.show(f5HoldAll);
+	}
+	#end
+
 	function onKeyPress(event:KeyboardEvent)
 	{
 		if (Controls.instance.justReleased('fullscreen'))
@@ -994,6 +1217,16 @@ class Main extends Sprite
 		{
 			gameLogVar.toggleVisibility();
 		}
+
+		// F5 松开：取消长按确认（未达 1.5 秒则不执行任何操作）
+		#if desktop
+		if (event.keyCode == Keyboard.F5)
+		{
+			f5HoldStart = -1;
+			if (f5ConfirmHud != null) f5ConfirmHud.hide();
+			return;
+		}
+		#end
 
 		// 原版 Debug 显示面板的独立开关+模式循环热键（Off/Simple/Advanced）
 		if (event.keyCode == ClientPrefs.data.fpsDebugHotkey && fpsVar != null)
@@ -1015,38 +1248,6 @@ class Main extends Sprite
 			}
 			#end */
 
-		// F5键刷新当前state（使用CustomFadeTransition无缝切换）
-		if (event.keyCode == Keyboard.F5 && FlxG.state != null)
-		{
-			// 获取当前state的类型
-			var currentStateType:Class<flixel.FlxState> = Type.getClass(FlxG.state);
-
-			// 创建新的state实例
-			if (currentStateType != null)
-			{
-				var newState:flixel.FlxState = Type.createInstance(currentStateType, []);
-
-				// 标记为刷新操作（CustomFadeTransition构造函数中会立即读取并重置）
-				backend.CustomFadeTransition.isReloading = true;
-				backend.CustomFadeTransition.reloadingStateType = currentStateType; // 保存要 reload 的 state 类型
-
-				// 检查是否是MusicBeatState，使用自定义转场
-				#if !macro
-				// 尝试使用MusicBeatState的startTransition方法
-				if (Std.isOfType(FlxG.state, backend.MusicBeatState))
-				{
-					backend.MusicBeatState.startTransition(newState);
-				}
-				else
-				{
-					// 非MusicBeatState，直接切换
-					FlxG.switchState(newState);
-				}
-				#else
-				FlxG.switchState(newState);
-				#end
-			}
-		}
 	}
 
 	function setCustomCursor():Void

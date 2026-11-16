@@ -207,10 +207,12 @@
 		<haxedef name="HXCPP_STACK_LINE" />
 		<haxedef name="HXCPP_STACK_TRACE" />
 		<haxedef name="HXCPP_CATCH_SEGV" />
-		<!-- 抬高 hxcpp GC 的 block 上限：默认 BlockIdType 为 16 位、块 32KB，
-		     整个 block heap 约 2GiB 就触顶，随后会走兜底回收（Gc.enable(false) 拦不住）。
-		     开启后块变 64KB、BlockIdType 变 32 位，上限基本消失。 -->
-		<!--<haxedef name="HXCPP_GC_BIG_BLOCKS" />-->
+		<!-- HXCPP_GC_BIG_BLOCKS 的 A/B 结论（2026-11-16）：
+		     开启后实测内存仍远低于 1GiB，卡顿/GC 现象没有消失，2GiB block heap 硬顶不是本次根因。
+		     而 64KB 块会让 mark 阶段 rowTotals 扫描量翻倍、回收粒度变粗，低内存下是纯负担，
+		     因此保持关闭。若日后进程内存真的逼近 2GiB 再重新打开。
+		     这是 C++ 编译期宏，切换后必须完整 clean rebuild，不能只重跑 haxe。 -->
+		<!--<haxedef name="HXCPP_GC_BIG_BLOCKS" if="desktop" />-->
 		<haxedef name="HXCPP_GC_SUMMARY" />
 	</section>
 	

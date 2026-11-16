@@ -183,6 +183,66 @@ class FreeplayState extends MusicBeatState
 		return Song.applyChart(songData, songLowercase, _songPathCache.get(cacheKey));
 	}
 
+	/**
+	 * 真正执行"选中曲目 → 进游戏"的加载流程。
+	 * 从 ACCEPT 分支抽出，是为了在需要转谱时先渲染一行提示、下一帧再调用本函数。
+	 * 转谱（Song.loadFromJson → parseJSON → convert）是同步阻塞的，调用期间主线程会停住。
+	 */
+	private function loadSelectedSongNow(songLowercase:String, poop:String):Void
+	{
+		try
+		{
+			var songData:SwagSong = getCachedSongData(songs[curSelected].folder, poop, songLowercase);
+
+			if (songData == null)
+			{
+				missingText.text = getChartMissingMessage(poop);
+				missingText.screenCenter(Y);
+				missingText.visible = true;
+				missingTextBG.visible = true;
+				FlxG.sound.play(Paths.sound('cancelMenu'));
+				return;
+			}
+
+			PlayState.isStoryMode = false;
+			PlayState.storyDifficulty = curDifficulty;
+			trace('CURRENT WEEK: ' + WeekData.getWeekFileName());
+		}
+		catch (e:haxe.Exception)
+		{
+			var errorStr:String = e.message;
+			if (errorStr.contains('There is no TEXT asset with an ID of'))
+				errorStr = 'Missing file: ' + errorStr.substring(errorStr.indexOf(songLowercase), errorStr.length - 1);
+			else
+				errorStr += '\n\n' + e.stack;
+
+			missingText.text = 'ERROR WHILE LOADING CHART:\n$errorStr';
+			missingText.screenCenter(Y);
+			missingText.visible = true;
+			missingTextBG.visible = true;
+			FlxG.sound.play(Paths.sound('cancelMenu'));
+			return;
+		}
+
+		@:privateAccess
+		if (PlayState._lastLoadedModDirectory != Mods.currentModDirectory)
+		{
+			Paths.freeGraphicsFromMemory();
+		}
+		#if desktop
+		FlxG.mouse.visible = false;
+		#end
+		LoadingState.prepareToSong();
+		LoadingState.loadAndSwitchState(new PlayState());
+		if (!ClientPrefs.data.loadingScreen) FlxG.sound.music.stop();
+		stopMusicPlay = true;
+
+		destroyFreeplayVocals();
+		#if (MODS_ALLOWED && DISCORD_ALLOWED)
+		DiscordClient.loadModRPC();
+		#end
+	}
+
 	// 谱面加载失败时的两行错误文案：第一行主错误，第二行列出实际尝试过的文件名
 	static function getChartMissingMessage(poop:String):String
 	{
@@ -221,8 +281,14 @@ class FreeplayState extends MusicBeatState
 	function updateChartPrefetch(elapsed:Float):Void
 	{
 		#if (sys && FEATURE_FILESYSTEM)
+		// 后台谱面预解析已停用（2026-11-16）：
+		// 快速滚动时工作线程持续 Song.parseJSON + convert()，每个 SwagSong 含海量 Note 对象，
+		// 把这些存活对象塞进与主线程共享的 GC 堆，导致 mark 阶段从几百 ms 恶化到秒级，
+		// 实测 Max Stall 达 26.8 秒。改为只在确定游玩（按回车）时才同步解析 + 转谱，
+		// 并由 convertingText 显示进度，避免玩家误以为卡死。
+		// 保留 drainPrefetched() 是为了消化停药前已入队的任务；之后不再投递新任务。
 		drainPrefetched();
-
+		#if false
 		if (player.playingMusic || songs.length == 0 || curDifficulty < 0 || curSelected < 0 || curSelected >= songs.length)
 			return;
 
@@ -270,6 +336,7 @@ class FreeplayState extends MusicBeatState
 		_prefetchQueue.push({key: cacheKey, path: path, poop: _prefetchPoop});
 		_prefetchQueueMutex.release();
 		startPrefetchWorker();
+		#end // #if false - 后台谱面预解析停用
 		#end
 	}
 
@@ -377,6 +444,13 @@ class FreeplayState extends MusicBeatState
 
 	var missingTextBG:FlxSprite;
 	var missingText:FlxText;
+
+	// 转谱进度提示：回车确定游玩后才同步转谱，转谱会阻塞主线程几百 ms 到数秒，
+	// 必须先渲染这行提示再开始转谱，避免玩家误以为游戏卡死。
+	var convertingText:FlxText;
+	private static var convertingPending:Bool = false; // 是否已显示提示、等待下一帧真正开始转谱
+	private var pendingSongLower:String = null; // 排队时锁定的曲目参数，避免等待期间滚动导致加载错歌
+	private var pendingPoop:String = null;
 
 	var bottomString:String;
 	var bottomText:FlxText;
@@ -552,6 +626,15 @@ class FreeplayState extends MusicBeatState
 		missingText.scrollFactor.set();
 		missingText.visible = false;
 
+		convertingText = new FlxText(0, FlxG.height / 2 - 30, FlxG.width, '', 32);
+		convertingText.setFormat(Paths.font(Language.get('uitab_font')), 32, 0xFFFFD54F, CENTER, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
+		convertingText.borderSize = 3;
+		convertingText.scrollFactor.set();
+		convertingText.alignment = CENTER;
+		convertingText.text = Language.getWithFallback('freeplay_converting_chart', '正在转谱，请稍候...');
+		convertingText.screenCenter(X);
+		convertingText.visible = false;
+
 		bottomBG = new FlxSprite(0, FlxG.height - 26).makeGraphic(FlxG.width, 26, 0xFF000000);
 		bottomBG.alpha = 0.6;
 
@@ -595,6 +678,7 @@ class FreeplayState extends MusicBeatState
 		add(modText);
 		add(missingTextBG);
 		add(missingText);
+		add(convertingText);
 		add(bottomBG);
 		add(bottomText);
 		add(player);
@@ -2107,76 +2191,50 @@ class FreeplayState extends MusicBeatState
 				player.pauseOrResume(!player.playing);
 			}
 		}
-		else if (controls.ACCEPT && !player.playingMusic && !typingSearch && songs.length > 0 && !Controls.instance.isInSubstate)
+		else if ((convertingPending || controls.ACCEPT) && !player.playingMusic && !typingSearch && songs.length > 0 && !Controls.instance.isInSubstate)
 		{
 			persistentUpdate = false;
-			
+
 			// 显式设置当前mod目录，确保谱面文件路径正确
 			Mods.currentModDirectory = songs[curSelected].folder;
-			
-			var songLowercase:String = Paths.formatToSongPath(songs[curSelected].songName);
-			var poop:String = Highscore.formatSong(songLowercase, curDifficulty);
 
-			try
+			var songLowercase:String;
+			var poop:String;
+
+			if (convertingPending)
 			{
-				var songData:SwagSong = getCachedSongData(songs[curSelected].folder, poop, songLowercase);
-
-				if (songData == null) {
-								// 显示错误信息（两行：主错误 + 实际尝试过的文件名）
-								missingText.text = getChartMissingMessage(poop);
-								missingText.screenCenter(Y);
-								missingText.visible = true;
-								missingTextBG.visible = true;
-								FlxG.sound.play(Paths.sound('cancelMenu'));
-
-								updateTexts(elapsed);
-								super.update(elapsed);
-								return;
-							}
-							
-							PlayState.isStoryMode = false;
-							PlayState.storyDifficulty = curDifficulty;
-
-							trace('CURRENT WEEK: ' + WeekData.getWeekFileName());
-						}
-						catch (e:haxe.Exception)
-						{
-							// Error handling
-
-							var errorStr:String = e.message;
-							if (errorStr.contains('There is no TEXT asset with an ID of'))
-								errorStr = 'Missing file: ' + errorStr.substring(errorStr.indexOf(songLowercase), errorStr.length - 1); // Missing chart
-							else
-								errorStr += '\n\n' + e.stack;
-
-							missingText.text = 'ERROR WHILE LOADING CHART:\n$errorStr';
-							missingText.screenCenter(Y);
-							missingText.visible = true;
-							missingTextBG.visible = true;
-							FlxG.sound.play(Paths.sound('cancelMenu'));
-
-							updateTexts(elapsed);
-							super.update(elapsed);
-							return;
-						}
-			@:privateAccess
-			if (PlayState._lastLoadedModDirectory != Mods.currentModDirectory)
-			{
-				Paths.freeGraphicsFromMemory();
+				// 上一帧已显示提示：用排队时锁定的参数，不让等待期间的滚动改变目标
+				songLowercase = pendingSongLower;
+				poop = pendingPoop;
+				convertingPending = false;
+				convertingText.visible = false;
+				loadSelectedSongNow(songLowercase, poop);
+				return;
 			}
-			// 桌面端：开始游玩时隐藏鼠标
-			#if desktop
-			FlxG.mouse.visible = false;
-			#end
-			LoadingState.prepareToSong();
-			LoadingState.loadAndSwitchState(new PlayState());
-			if (!ClientPrefs.data.loadingScreen) FlxG.sound.music.stop();
-			stopMusicPlay = true;
 
-			destroyFreeplayVocals();
-			#if (MODS_ALLOWED && DISCORD_ALLOWED)
-			DiscordClient.loadModRPC();
-			#end
+			songLowercase = Paths.formatToSongPath(songs[curSelected].songName);
+			poop = Highscore.formatSong(songLowercase, curDifficulty);
+			var cacheKey:String = songs[curSelected].folder + '_' + poop;
+
+			// 后台预解析已停用，转谱只在确定游玩时同步进行。
+			// 若该谱面尚未缓存（需要 parseJSON + convert，可能耗时数百 ms~数秒），
+			// 先显示"正在转谱"提示并排到下一帧执行，让提示至少渲染一帧，
+			// 避免玩家对着静止画面误以为卡死。已缓存则直接加载，无提示、无延迟。
+			if (!_songDataCache.exists(cacheKey))
+			{
+				convertingPending = true;
+				pendingSongLower = songLowercase;
+				pendingPoop = poop;
+				convertingText.visible = true;
+				convertingText.text = Language.getWithFallback('freeplay_converting_chart', 'Converting chart, please wait...');
+				convertingText.screenCenter(X);
+				FlxG.sound.play(Paths.sound('scrollMenu'));
+				// 本帧不再继续，下一帧 update 会带着 pending 标记再次进入此分支
+				super.update(elapsed);
+				return;
+			}
+
+			loadSelectedSongNow(songLowercase, poop);
 		}
 		else if ((controls.RESET || touchPad.buttonY.justPressed) && !player.playingMusic && !typingSearch && songs.length > 0 && !Controls.instance.isInSubstate)
 		{
@@ -3115,6 +3173,11 @@ class FreeplayState extends MusicBeatState
 
 	override function destroy():Void
 	{
+		// 清理转谱提示的排队状态，避免残留到下次进入 Freeplay
+		convertingPending = false;
+		pendingSongLower = null;
+		pendingPoop = null;
+
 		// 清理背景缩放状态
 		bgScaleLerp = 0;
 		bgBeatElapsed = 0;

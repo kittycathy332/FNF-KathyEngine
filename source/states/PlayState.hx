@@ -8815,6 +8815,11 @@ tempScore += '${lblScore}: ${songScore}';
 
 		NoteSplash.configs.clear();
 		instance = null;
+
+		// 退出歌曲时释放本局加载的贴图/音频缓存：否则这些资源被 localTrackedAssets
+		// 永久钉住，回到菜单后 GC 无法回收，内存从 ~100MB 累积到 ~500MB 不回落。
+		// clearStoredMemory() 会清缓存 + 重置保护列表，且不强制 GC（退出瞬间不卡顿）。
+		Paths.clearStoredMemory();
 		shutdownThread = true;
 		FlxG.signals.preUpdate.remove(checkForResync);
 		
