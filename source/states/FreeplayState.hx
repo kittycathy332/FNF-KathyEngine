@@ -213,7 +213,8 @@ class FreeplayState extends MusicBeatState
 	private static inline var PREFETCH_DELAY:Float = 1.0;
 	// 每帧预热图标数量上限：把“滚动时才加载纹理”的开销摊到空闲帧，
 	// 同时让可见窗口在被滚到后能较快填充满，减少图标缺帧。
-	private static inline var ICON_WARM_PER_FRAME:Int = 2;
+	// PNG 解码在移动端是重操作，快速滚动时保持 1 张/帧，避免连续掉帧。
+	private static inline var ICON_WARM_PER_FRAME:Int = 1;
 	// 选中曲目上下各显示/预热多少个小图标（共 ±ICON_RADIUS）
 	private static inline var ICON_RADIUS:Int = 8;
 
@@ -347,12 +348,26 @@ class FreeplayState extends MusicBeatState
 	// songTextArray[i] = songs[i] 的菜单条目：按需创建，未创建的为 null。
 	// 进入 Freeplay 时不再一次性把整张列表（1000+ 首）建出来。
 	private var songTextArray:Array<Alphabet> = [];
-	// 单帧最多创建的文本行数：滚动/跳转时按需创建，把开销摊到多帧，避免整页跳转一次性卡顿
-	private static inline var TEXT_CREATE_PER_FRAME:Int = 8;
+	// 单帧最多创建的文本行数：滚动/跳转时按需创建，把开销摊到多帧，避免整页跳转一次性卡顿。
+	// 每行 Alphabet 都要为每个字母做一次图集前缀扫描，快速滚动时这一项是主要的单帧耗时来源，
+	// 因此压到 4：一屏（±_drawDistance）仍能在两帧内填满，但单帧尖峰减半。
+	private static inline var TEXT_CREATE_PER_FRAME:Int = 4;
 	// 远距离回收：离选中项超过该行数的条目会被移除并置空，内存不随浏览时长/曲库规模增长
 	private static inline var RECYCLE_DISTANCE:Int = 40;
 	private static inline var RECYCLE_PER_FRAME:Int = 24;
 	private var _recycleCursor:Int = 0;
+
+	// 图标纹理回收：key = FlxGraphic key，value = 当前仍引用该纹理的存活图标数量（多首曲子可能共用同一角色图标）。
+	// 只保留最近 ICON_TEXTURE_CAP 张图标纹理，超出的在无人引用时立即销毁。
+	// 原实现里图标纹理被 'freeplay' tag 钉在 dumpExclusions 中直到退出状态，
+	// 快速滚动浏览几百首就会让纹理只增不减，最终触发一次长时间 GC 停顿。
+	private var _iconTexRefs:Map<String, Int> = new Map();
+	private var _iconTexLRU:Array<String> = [];
+	private static inline var ICON_TEXTURE_CAP:Int = 48;
+	// 图标对象本身的回收距离（比文本更近）：只保留选中项附近这么多行的小图标
+	private static inline var ICON_RECYCLE_DISTANCE:Int = 14;
+	// 单次回收最多释放的纹理数量，避免一帧内连续 dispose 大量 GPU 纹理造成新的卡顿
+	private static inline var ICON_RELEASE_PER_TRIM:Int = 4;
 
 	var bg:FlxSprite;
 	var intendedColor:Int;
@@ -380,6 +395,8 @@ class FreeplayState extends MusicBeatState
 	private var cachedReplayText:String = "";
 	private var cachedReplayIndex:Map<String, Array<String>> = new Map(); // 缓存回放文件索引：歌曲名 -> 难度列表
 	private var _replayIndexMod:String = null; // 上次建立索引所用的模组目录，相同则跳过重扫
+	// 回放索引按模组目录缓存（静态，会话级）：跨模组滚动时避免反复 readDirectory + Json.parse
+	private static var _replayIndexByMod:Map<String, Map<String, Array<String>>> = new Map();
 	#if FEATURE_FILESYSTEM
 	private var replayButton:FlxButton = null; // 右上角 E 键回放按钮
 	#end
@@ -677,6 +694,12 @@ class FreeplayState extends MusicBeatState
 	 */
 	private function reloadSongList():Void
 	{
+		// 重建列表前解除旧图标对纹理的引用，让超出上限的纹理能被回收
+		if (iconArray != null)
+		{
+			for (icon in iconArray)
+				untrackIconTexture(icon);
+		}
 		grpSongs.clear();
 		grpIcons.clear();
 		iconArray = new Array<HealthIcon>();
@@ -761,7 +784,52 @@ class FreeplayState extends MusicBeatState
 		ic.visible = ic.active = false;
 		iconArray[i] = ic;
 		grpIcons.add(ic);
+		trackIconTexture(ic);
 		return ic;
+	}
+
+	// 登记一个图标对纹理的引用：同一张图标（同一角色）被多首曲子共用时只记录次数。
+	private function trackIconTexture(icon:HealthIcon):Void
+	{
+		if (icon == null || icon.graphic == null || icon.graphic.key == null) return;
+		var key:String = icon.graphic.key;
+		_iconTexRefs.set(key, (_iconTexRefs.exists(key) ? _iconTexRefs.get(key) : 0) + 1);
+
+		var idx:Int = _iconTexLRU.indexOf(key);
+		if (idx >= 0) _iconTexLRU.splice(idx, 1);
+		_iconTexLRU.push(key);
+		trimIconTextures();
+	}
+
+	// 图标被回收/重建时解除引用，引用归零后纹理才允许被释放。
+	private function untrackIconTexture(icon:HealthIcon):Void
+	{
+		if (icon == null || icon.graphic == null || icon.graphic.key == null) return;
+		var key:String = icon.graphic.key;
+		var n:Int = _iconTexRefs.exists(key) ? _iconTexRefs.get(key) : 0;
+		if (n <= 1) _iconTexRefs.remove(key);
+		else _iconTexRefs.set(key, n - 1);
+		trimIconTextures();
+	}
+
+	// 超出上限时从最久未使用的纹理开始销毁；仍被其它图标引用的跳过，不阻断后面可回收的条目。
+	private function trimIconTextures():Void
+	{
+		var i:Int = 0;
+		var released:Int = 0;
+		while (_iconTexLRU.length > ICON_TEXTURE_CAP && i < _iconTexLRU.length && released < ICON_RELEASE_PER_TRIM)
+		{
+			var key:String = _iconTexLRU[i];
+			if (_iconTexRefs.exists(key) && _iconTexRefs.get(key) > 0)
+			{
+				i++;
+				continue;
+			}
+			_iconTexLRU.splice(i, 1);
+			_iconTexRefs.remove(key);
+			Paths.releaseGraphic(key);
+			released++;
+		}
 	}
 
 	/**
@@ -779,22 +847,24 @@ class FreeplayState extends MusicBeatState
 			if (_recycleCursor >= n)
 				_recycleCursor = 0;
 			var i:Int = _recycleCursor++;
-			if (Math.abs(i - curSelected) <= RECYCLE_DISTANCE)
-				continue;
+			var distance:Int = (i > curSelected) ? (i - curSelected) : (curSelected - i);
 
 			var item:Alphabet = songTextArray[i];
-			if (item != null && !item.visible)
+			if (distance > RECYCLE_DISTANCE && item != null && !item.visible)
 			{
 				grpSongs.remove(item, true);
 				songTextArray[i] = null;
 			}
 
+			// 图标比文本更早回收：图标纹理是常驻显存/内存的大头，
+			// 只保留窗口附近的一小段（±ICON_RECYCLE_DISTANCE），让纹理总量有上限。
 			var icon:HealthIcon = iconArray[i];
-			if (icon != null && !icon.visible)
+			if (distance > ICON_RECYCLE_DISTANCE && icon != null && !icon.visible)
 			{
 				grpIcons.remove(icon, true);
 				iconArray[i] = null;
 				iconLoadStatus[i] = false; // 滚回来时允许重新创建
+				untrackIconTexture(icon); // 解除纹理引用，超出上限的部分会被真正释放
 			}
 		}
 	}
@@ -2571,8 +2641,17 @@ class FreeplayState extends MusicBeatState
 			return;
 		_replayIndexMod = moddirCheck;
 
+		// 跨模组来回滚动时，同一模组的索引只建立一次，之后直接复用（会话级缓存，退出 Freeplay 时清空）
+		var cachedIndex:Map<String, Array<String>> = _replayIndexByMod.get(moddirCheck);
+		if (cachedIndex != null)
+		{
+			cachedReplayIndex = cachedIndex;
+			return;
+		}
+
 		// 清空之前的缓存
 		cachedReplayIndex = new Map();
+		_replayIndexByMod.set(moddirCheck, cachedReplayIndex);
 
 		var replayFolderCheck:String = Paths.mods(moddirCheck + '/replay');
 		if (ClientPrefs.data.modPathCompat)
@@ -2688,7 +2767,11 @@ class FreeplayState extends MusicBeatState
 		// Adjust position based on text height to prevent overflow
 		bottomText.y = FlxG.height - bottomText.height - 2;
 		bottomBG.y = bottomText.y - 4;
-		bottomBG.makeGraphic(FlxG.width, Std.int(bottomText.height) + 8, 0x99000000);
+		// 只有尺寸真的变了才重建位图：原实现每切一首歌都新建一张全屏宽纹理，
+		// 快速滚动时会产生大量瞬时 GPU/内存分配（也是滚动卡顿的来源之一）。
+		var bottomBGHeight:Int = Std.int(bottomText.height) + 8;
+		if (bottomBG.frameWidth != FlxG.width || bottomBG.frameHeight != bottomBGHeight)
+			bottomBG.makeGraphic(FlxG.width, bottomBGHeight, 0x99000000);
 		#end
 	}
 
@@ -3056,6 +3139,9 @@ class FreeplayState extends MusicBeatState
 		_songPathCache.clear();
 		_audioModCache.clear();
 		_songCacheLRU = [];
+		_replayIndexByMod.clear();
+		_iconTexRefs = new Map();
+		_iconTexLRU = [];
 		#if (sys && FEATURE_FILESYSTEM)
 		// 停止后台预解析工作线程并清空队列，避免线程泄漏
 		_prefetchWorkerRunning = false;

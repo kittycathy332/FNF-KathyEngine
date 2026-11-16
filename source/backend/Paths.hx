@@ -579,6 +579,44 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 		return raw;
 	}
 
+	// 主动释放单张图片纹理（供 Freeplay 图标这类"浏览数量无上限"的小图使用）。
+	// 与 clearStoredMemory 的全量清理不同，这里只针对指定 key：
+	// 解除 localTrackedAssets / dumpExclusions / _excludedByTag 的引用保护，
+	// 清掉引用该纹理的 Sparrow 图集缓存（否则下次 getSparrowAtlas 会拿到已销毁的 graphic），
+	// 再销毁 GPU 纹理与 FlxGraphic，使内存不随"浏览过多少首曲子"单调增长。
+	// 调用方必须保证该 key 已无存活的 Sprite 在使用。
+	public static function releaseGraphic(key:String):Void
+	{
+		if (key == null || key.length == 0) return;
+
+		var idx:Int = dumpExclusions.indexOf(key);
+		if (idx >= 0) dumpExclusions.splice(idx, 1);
+		for (bucket in _excludedByTag)
+		{
+			var i:Int = bucket.indexOf(key);
+			if (i >= 0) bucket.splice(i, 1);
+		}
+
+		var localIdx:Int = localTrackedAssets.indexOf(key);
+		if (localIdx >= 0) localTrackedAssets.splice(localIdx, 1);
+
+		// 图集缓存持有 parent FlxGraphic 引用，必须一起清掉
+		var staleAtlas:Array<String> = [];
+		for (cacheKey in _atlasCache.keys())
+		{
+			var frames:FlxAtlasFrames = _atlasCache.get(cacheKey);
+			if (frames != null && frames.parent != null && frames.parent.key == key)
+				staleAtlas.push(cacheKey);
+		}
+		for (cacheKey in staleAtlas)
+			_atlasCache.remove(cacheKey);
+
+		var graph:FlxGraphic = currentTrackedAssets.get(key);
+		currentTrackedAssets.remove(key);
+		if (graph == null) graph = FlxG.bitmap.get(key);
+		if (graph != null) destroyGraphic(graph);
+	}
+
 	// 从 currentTrackedSounds 中移除指定音频缓存，并尽力释放其底层 asset 与解码数据，
 	// 让该 Sound 变为孤儿后能被 GC 回收。仅在确认不再播放该音频时调用。
 	public static function releaseSoundCache(file:String):Void
