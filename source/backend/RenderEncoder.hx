@@ -339,6 +339,152 @@ class RenderEncoder
 	}
 
 	/**
+	 * 把所有即时音效（倒计时 + 自动捕获）预混成一条独立的音效床 WAV。
+	 *
+	 * 为什么需要：旧实现把每条音效都作为独立 `-i` 输入喂给 ffmpeg，
+	 * 而 Windows 命令行上限 ~32767 字符，约 500 条就撑爆 → ffmpeg 启动失败 → 成片无声。
+	 * spamchart（NPS 上千 + 打击音）轻易数千条，必然触发。
+	 *
+	 * 新实现：按文件路径分组（同一音效文件只开一个输入），每路径用 asplit 复制多路、
+	 * 各自 adelay 到发生时刻再 amix；filter 写进脚本文件（无长度限制）。
+	 * 每组超过 SFX_BATCH 条时分批混入中间 WAV，再递归合并，保证 O(N) 可扩展。
+	 *
+	 * @return 音效床 WAV 路径；无有效音效返回 null（调用方跳过音效床）
+	 */
+	static function buildSfxBed(out:String, sfxFiles:Array<String>, delays:Array<Float>,
+		volumes:Array<Float>, durs:Array<Float>, loops:Array<Bool>,
+		durationSec:Float, log:String->Void):String
+	{
+		if (sfxFiles.length == 0) return null;
+
+		// 按路径分组：key=文件路径，value=该文件的所有事件索引
+		var groups:Map<String, Array<Int>> = new Map();
+		var groupCount:Int = 0;
+		for (i in 0...sfxFiles.length)
+		{
+			var g = groups.get(sfxFiles[i]);
+			if (g == null) { g = []; groups.set(sfxFiles[i], g); groupCount++; }
+			g.push(i);
+		}
+		log('[encoder] sfx bed: ' + sfxFiles.length + ' events / ' + groupCount
+			+ ' unique files');
+
+		var tmpDir:String = out + '_sfxparts/';
+		try { if (!FileSystem.exists(tmpDir)) FileSystem.createDirectory(tmpDir); }
+		catch (e:Dynamic) { log('[encoder] sfx tmp dir failed: ' + Std.string(e)); return null; }
+
+		var partFiles:Array<String> = [];
+		var groupIdx:Int = 0;
+		for (path => idxs in groups)
+		{
+			// 每组按 SFX_BATCH 分批，避免单批 asplit/amix 路数过大
+			var batch:Int = 0;
+			while (batch < idxs.length)
+			{
+				var end:Int = Std.int(Math.min(batch + SFX_BATCH, idxs.length));
+				var partPath:String = tmpDir + 'g' + groupIdx + '_b' + batch + '.wav';
+				if (mixSfxBatch(path, idxs, batch, end, sfxFiles, delays, volumes, durs,
+					loops, durationSec, partPath, log))
+					partFiles.push(partPath);
+				batch = end;
+			}
+			groupIdx++;
+		}
+		if (partFiles.length == 0) return null;
+
+		// 各分组批次混成一条音效床；批次少时一次 amix，多时递归分批
+		var bedPath:String = out;
+		if (partFiles.length <= SFX_BATCH)
+		{
+			var args:Array<String> = ['-y', '-hide_banner', '-loglevel', 'error'];
+			// 用 amix 合并（partFiles 数量已被分组压到很小）
+			var fc:String = '';
+			for (i in 0...partFiles.length) fc += '[' + i + ':a]';
+			fc += 'amix=inputs=' + partFiles.length + ':duration=longest:normalize=0[a]';
+			for (f in partFiles) args = args.concat(['-i', f]);
+			args = args.concat(['-filter_complex', fc, '-map', '[a]',
+				'-c:a', 'pcm_s16le', '-t', fmtTime(durationSec), bedPath]);
+			if (!run(args, log, 'sfx bed merge')) return null;
+		}
+		else
+		{
+			// 极端情况：批次仍多，递归两两合并
+			var cur:Array<String> = partFiles;
+			var round:Int = 0;
+			while (cur.length > 1)
+			{
+				var next:Array<String> = [];
+				var i:Int = 0;
+				while (i < cur.length)
+				{
+					var chunk:Array<String> = cur.slice(i, Std.int(Math.min(i + SFX_BATCH, cur.length)));
+					var merged:String = tmpDir + 'merge' + round + '_' + i + '.wav';
+					var args:Array<String> = ['-y', '-hide_banner', '-loglevel', 'error'];
+					var fc:String = '';
+					for (k in 0...chunk.length) fc += '[' + k + ':a]';
+					fc += 'amix=inputs=' + chunk.length + ':duration=longest:normalize=0[a]';
+					for (f in chunk) args = args.concat(['-i', f]);
+					args = args.concat(['-filter_complex', fc, '-map', '[a]',
+						'-c:a', 'pcm_s16le', '-t', fmtTime(durationSec), merged]);
+					if (run(args, log, 'sfx merge r' + round)) next.push(merged);
+					i += SFX_BATCH;
+				}
+				cur = next;
+				round++;
+			}
+			if (cur.length == 0) return null;
+			if (cur[0] != bedPath)
+			{
+				try { File.copy(cur[0], bedPath); } catch (e:Dynamic) { return null; }
+			}
+		}
+		// 清理中间文件
+		try { for (f in FileSystem.readDirectory(tmpDir)) FileSystem.deleteFile(tmpDir + f); FileSystem.deleteDirectory(tmpDir); }
+		catch (e:Dynamic) {}
+		log('[encoder] sfx bed ready: ' + bedPath);
+		return bedPath;
+	}
+
+	/** 单文件单批次：一个 -i + asplit 多路 adelay + amix，filter 写脚本文件 */
+	static function mixSfxBatch(path:String, idxs:Array<Int>, from:Int, to:Int,
+		sfxFiles:Array<String>, delays:Array<Float>, volumes:Array<Float>, durs:Array<Float>,
+		loops:Array<Bool>, durationSec:Float, outPath:String, log:String->Void):Bool
+	{
+		var n:Int = to - from;
+		if (n <= 0) return false;
+		var scriptPath:String = outPath + '.filter.txt';
+		var sb:StringBuf = new StringBuf();
+		sb.add('[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asplit=' + n);
+		for (i in 0...n) sb.add('[s' + i + ']');
+		sb.add(';\n');
+		for (i in 0...n)
+		{
+			var src:Int = idxs[from + i];
+			var dur:Float = durs[src];
+			if (dur <= 0) dur = Math.max(0, durationSec - delays[src] / 1000);
+			sb.add('[s' + i + ']atrim=0:' + fmtTime(dur) + ',asetpts=PTS-STARTPTS');
+			if (volumes[src] != 1) sb.add(',volume=' + volumes[src]);
+			if (delays[src] > 0) sb.add(',adelay=' + Std.int(delays[src]) + ':all=1');
+			sb.add('[b' + i + '];\n');
+		}
+		for (i in 0...n) sb.add('[b' + i + ']');
+		sb.add('amix=inputs=' + n + ':duration=longest:normalize=0,alimiter=limit=0.89:level=false[a]');
+		try { File.saveContent(scriptPath, sb.toString()); }
+		catch (e:Dynamic) { log('[encoder] sfx filter write failed: ' + Std.string(e)); return false; }
+
+		var args:Array<String> = ['-y', '-hide_banner', '-loglevel', 'error'];
+		if (loops[idxs[from]]) args = args.concat(['-stream_loop', '-1']);
+		args = args.concat(['-i', path, '-filter_complex_script', scriptPath, '-map', '[a]',
+			'-c:a', 'pcm_s16le', '-t', fmtTime(durationSec), outPath]);
+		var ok:Bool = run(args, log, 'sfx batch n=' + n);
+		try { FileSystem.deleteFile(scriptPath); } catch (e:Dynamic) {}
+		return ok;
+	}
+
+	/** 单批 asplit 路数上限：超过则分批，兼顾性能与可扩展 */
+	static inline var SFX_BATCH:Int = 400;
+
+	/**
 	 * 重建音轨：主音轨整体延后 leadMs+offsetMs（倒计时段），
 	 * 倒计时等即时音效按各自记录的视频时间点叠加，最后裁剪到视频时长。
 	 * 分两步产出 wav 再与视频封装，避免 -shortest 把视频尾部裁掉。
@@ -404,20 +550,25 @@ class RenderEncoder
 			+ ' (auto=' + autoCount + ') songDelay=' + Math.round(songDelay)
 			+ 'ms duration=' + fmtTime(info.durationSec) + 's');
 
-		var all:Array<String> = tracks.concat(sfxFiles);
-		var args:Array<String> = ['-y', '-hide_banner', '-loglevel', 'error'];
-		for (i in 0...all.length)
+		// 先把所有即时音效预混成一条音效床 WAV —— 避免每条音效一个 -i 撑爆命令行。
+		// 音效床失败（极端情况）时静默降级为只有主音轨，绝不让整条音频合成失败。
+		var sfxBed:String = null;
+		if (sfxFiles.length > 0)
 		{
-			// 循环音效（环境音 / 持续 BGM）必须让 ffmpeg 自己续播，再用 atrim 截到实际时长
-			if (i >= mainCount && loops[i - mainCount])
-				args = args.concat(['-stream_loop', '-1', '-i', all[i]]);
-			else
-				args = args.concat(['-i', all[i]]);
+			sfxBed = buildSfxBed(out + '.sfxbed.wav', sfxFiles, delays, volumes, durs,
+				loops, info.durationSec, log);
+			if (sfxBed == null) log('[encoder] sfx bed failed, mixing song tracks only');
 		}
+
+		// 主输入 = 主音轨（Inst / Voices）+ 可选的一条音效床。输入数恒定很小。
+		var all:Array<String> = tracks.copy();
+		if (sfxBed != null) all.push(sfxBed);
+		var args:Array<String> = ['-y', '-hide_banner', '-loglevel', 'error'];
+		for (f in all) args = args.concat(['-i', f]);
 
 		var fc:String = '';
 		var labels:Array<String> = [];
-		for (i in 0...mainCount)
+		for (i in 0...tracks.length)
 		{
 			fc += '[' + i + ':a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo';
 			if (info.rate != 1 && info.rate > 0.5 && info.rate < 2.0) fc += ',atempo=' + info.rate;
@@ -425,28 +576,17 @@ class RenderEncoder
 			fc += '[a' + i + '];';
 			labels.push('[a' + i + ']');
 		}
-		for (j in 0...sfxFiles.length)
+		if (sfxBed != null)
 		{
-			var i:Int = mainCount + j;
-			// durMs <= 0 表示"一直播到视频结束"：用剩余时长兜底，避免无限循环输入拖住编码
-			var dur:Float = durs[j];
-			if (dur <= 0) dur = Math.max(0, info.durationSec - delays[j] / 1000);
-			var f:String = '[' + i + ':a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo';
-			if (volumes[j] != 1) f += ',volume=' + volumes[j];
-			if (dur > 0) f += ',atrim=0:' + fmtTime(dur);
-			// atrim 之后 PTS 不会归零，adelay 会算错起点，必须先重置时间戳
-			f += ',asetpts=PTS-STARTPTS';
-			if (delays[j] > 0) f += ',adelay=' + Std.int(delays[j]) + ':all=1';
-			f += '[a' + i + '];';
-			fc += f;
-			labels.push('[a' + i + ']');
+			var bi:Int = tracks.length;
+			fc += '[' + bi + ':a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a' + bi + '];';
+			labels.push('[a' + bi + ']');
 		}
 		// 限幅防爆音：模组素材本身常是 0dB 满幅（无 headroom），
 		// amix normalize=0 把多条满幅音轨原样相加后必然超过 0dB，
 		// 写 16-bit PCM 时硬截断 → 削波爆音。
 		// alimiter 做真峰值限制：limit=0.89 ≈ -1dB，留 1dB headroom；
 		// level=false 关键——否则 limiter 会把信号重新放大回 limit，等于没限幅。
-		// 实测：满幅双轨叠加的 0dB 顶格采样从 ~7.3万降到 0。
 		fc += labels.join('') + 'amix=inputs=' + all.length
 			+ ':duration=longest:normalize=0,alimiter=limit=0.89:level=false'
 			+ ',apad,atrim=0:' + fmtTime(info.durationSec) + '[a]';
@@ -456,7 +596,10 @@ class RenderEncoder
 			'-c:a', 'pcm_s16le', '-t', fmtTime(info.durationSec), out
 		]);
 		log('[encoder] audio args: ' + args.join(' '));
-		return run(args, log, 'audio track');
+		var ok:Bool = run(args, log, 'audio track');
+		// 清理音效床临时文件
+		if (sfxBed != null) try { FileSystem.deleteFile(sfxBed); } catch (e:Dynamic) {}
+		return ok;
 	}
 
 	/** 兜底：没有渲染期记录时，只选一条 Inst，绝不把多个 Inst 变体叠加 */
