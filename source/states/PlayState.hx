@@ -1517,22 +1517,22 @@ isReplaying = false;
 		if (ClientPrefs.data.noteTimerEnabled)
 		{
 			noteTimer = new ui.NoteTimer(this);
-			// 根据 noteTimerLayer 设置决定图层：压在箭头之上 还是 在箭头之下
-			var aboveNotes:Bool = (ClientPrefs.data.noteTimerLayer == 'Above Notes');
+			// 图层由 noteTimerLayer 直接指定渲染组：
+			//   'uiGroup'   = uiGroup 比 noteGroup 早 add → 绘制在箭头之下（箭头盖住圆）
+			//   'noteGroup' = noteGroup 晚于 uiGroup add → 绘制在箭头之上（圆盖住箭头）
 			if (ClientPrefs.data.legacyHUD)
 			{
-				if (aboveNotes)
-					add(noteTimer); // 加入 members 末尾 → 最顶层
-				else
-					insert(members.indexOf(strumLineNotes), noteTimer); // 插入 strumLineNotes 之前 → 箭头之下
+				// legacyHUD 下三个 group 都不加入 state，跟随其它 HUD 元素惯例：
+				// 直接 add 进 state + camHUD，保证倒计时仍显示（此模式下图层设置不生效）。
+				add(noteTimer);
 				noteTimer.cameras = [camHUD];
 			}
 			else
 			{
-				if (aboveNotes)
-					add(noteTimer); // 直接加入 state，比 noteGroup 晚 add → 箭头之上
+				if (ClientPrefs.data.noteTimerLayer == 'noteGroup')
+					noteGroup.add(noteTimer);
 				else
-					uiGroup.add(noteTimer); // uiGroup 在 noteGroup 之前 add → 箭头之下
+					uiGroup.add(noteTimer);
 				noteTimer.cameras = [camHUD];
 			}
 		}

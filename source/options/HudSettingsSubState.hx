@@ -400,10 +400,10 @@ class HudSettingsSubState extends BaseOptionsMenu
 			Language.get("note_timer_layer_desc"),
 			'noteTimerLayer',
 			STRING,
-			['Above Notes', 'Below Notes']);
+			['uiGroup', 'noteGroup']);
 		option.valueLocalizations = [
-			'Above Notes' => Language.get('note_timer_layer_above'),
-			'Below Notes' => Language.get('note_timer_layer_below')
+			'uiGroup' => Language.get('note_timer_layer_uigroup'),
+			'noteGroup' => Language.get('note_timer_layer_notegroup')
 		];
 		addOption(option);
 		option = new Option(Language.get('note_timer_display'),

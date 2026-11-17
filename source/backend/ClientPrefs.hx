@@ -435,7 +435,7 @@ import haxe.io.BytesInput;
 	public var holdCovers:Bool = true; // 长条按住期间在箭头上显示 Hold Cover 光效（类似原版 FNF），末尾播放爆发动画
 	public var opponentHoldCovers:Bool = false; // 对手侧也显示 Hold Cover（需 CPU Strums 可见）
 	public var noteTimerEnabled:Bool = true; // 箭头倒计时：两箭头间隔 ≥ 3秒 时显示圆形进度圈 + 整数秒
-	public var noteTimerLayer:String = 'Above Notes'; // 箭头倒计时图层：'Above Notes' 压在箭头之上（默认），'Below Notes' 在箭头之下
+	public var noteTimerLayer:String = 'noteGroup'; // 箭头倒计时渲染组：'noteGroup' 箭头之上（默认），'uiGroup' 箭头之下
 	public var noteTimerDisplay:String = 'Seconds'; // 箭头倒计时数字显示：'Seconds' 按秒取整（默认），'Beats' 按 Beat 取整
 	public var noteTimerStepped:Bool = false; // 圆环裁剪动效：true = 按 beat/秒 离散跳变（脉冲感），false = 丝滑连续裁剪（默认）
 	public var multiKeyLayoutStyle:String = 'PsychEK'; // 多键（>4K）箭头布局风格：'PsychEK' 自适应收缩贴合屏幕（默认），'Leather' 照搬 Leather 引擎表驱动尺寸/间距（无自适应）
@@ -908,6 +908,20 @@ class ClientPrefs {
 		// hitboxMode 合法性兜底
 		if (data.hitboxMode == null || !['Four Lanes', 'Arrows'].contains(data.hitboxMode))
 			data.hitboxMode = 'Four Lanes';
+
+		// 箭头倒计时图层：旧值 Above/Below Notes 迁移到渲染组名
+		// 旧 'Above Notes'（圆盖箭头）→ 'noteGroup'，'Below Notes'（箭头盖圆）→ 'uiGroup'
+		// 非法/缺失值兜底为默认 'noteGroup'
+		if (Reflect.hasField(FlxG.save.data, 'noteTimerLayer'))
+		{
+			switch (data.noteTimerLayer)
+			{
+				case 'Above Notes': data.noteTimerLayer = 'noteGroup';
+				case 'Below Notes': data.noteTimerLayer = 'uiGroup';
+			}
+		}
+		if (data.noteTimerLayer == null || !['uiGroup', 'noteGroup'].contains(data.noteTimerLayer))
+			data.noteTimerLayer = 'noteGroup';
 
 		// 存储位置：标记文件为准（设置页切换后立即生效，下次启动也保持一致）
 		#if android
