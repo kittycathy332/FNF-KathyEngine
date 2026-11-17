@@ -6,6 +6,8 @@ import flixel.text.FlxText;
 import flixel.tweens.FlxTween;
 import flixel.util.FlxColor;
 import flixel.FlxSprite;
+import flixel.graphics.FlxGraphic;
+import openfl.display.BitmapData;
 import openfl.utils.Assets;
 import flixel.FlxObject;
 import states.MainMenuState;
@@ -325,11 +327,17 @@ class CustomFadeTransition extends FlxSubState {
                 }
             } else if (currentStyle == 'Blue Archive') {
             // 初始化图片列表（只在第一次加载时）
-            
+            //
+            // 图片列表以前只从「本地文件系统」枚举，一旦 CopyState 复制失败，本地目录缺图，
+            // 列表就会变空/残缺，转场随即看不到图。这里改为优先用资源清单(OpenFLAssets.list)
+            // 枚举 —— Paths.image() 在本地文件缺失时会自动回退到 APK 内的 IMAGE 资源，
+            // 因此只要 key 正确就能取到图，不再受复制结果影响。
             if (kathyImages.length == 0) {
                 var language:String = ClientPrefs.data.blueArchiveLanguage;
                 var basePath:String = 'menuExtend/CustomFadeTransition/Blue_Archive/' + language + '/';
                 var imagePath = Paths.getPath('images/menuExtend/CustomFadeTransition/Blue_Archive/' + language + '/', IMAGE);
+
+                // 1) 本地文件系统（若已复制）
                 if (FileSystem.exists(imagePath)) {
                     for (file in FileSystem.readDirectory(imagePath)) {
                         if (Path.extension(file).toLowerCase() != 'txt') {
@@ -337,10 +345,21 @@ class CustomFadeTransition extends FlxSubState {
                         }
                     }
                 }
-                // 如果没有找到图片则使用默认
+
+                // 2) 资源清单兜底：从 APK 打包资源里枚举，避免本地缺图导致列表为空
                 if (kathyImages.length == 0) {
-                    kathyImages.push(basePath + 'LoadingImage_44_Kr');
+                    var prefix:String = 'assets/shared/images/' + basePath;
+                    for (asset in Assets.list()) {
+                        if (asset.startsWith(prefix) && Path.extension(asset).toLowerCase() != 'txt') {
+                            var rel:String = asset.substr(prefix.length);
+                            kathyImages.push(basePath + Path.withoutExtension(rel));
+                        }
+                    }
                 }
+
+                // 3) 仍然没有就用一个确定存在的 key（大小写按实际文件名）
+                if (kathyImages.length == 0)
+                    kathyImages.push(basePath + 'LoadingImage_44_Kr');
             }
 
             // 随机选择新图片（确保不重复）
@@ -385,6 +404,23 @@ class CustomFadeTransition extends FlxSubState {
             var imgKey:String = (forceBAImage != null) ? forceBAImage : kathyImages[ClientPrefs.data.randomIndex];
             forceBAImage = null;
             var loadingGraphic = Paths.image(imgKey); // 记录当前转场图，供全清时保护
+
+            // 缺图兜底：资源复制失败时 Paths.image() 会返回 null，loadGraphic(null)
+            // 会让 frameWidth=0 → setGraphicSize 算出 Infinity → updateHitbox 得 NaN，
+            // 下一帧 tween 读起始值时就抛 "not numeric"。这里必须保证拿到有效 graphic。
+            if (loadingGraphic == null)
+            {
+                var language:String = ClientPrefs.data.blueArchiveLanguage;
+                var fallbackKey:String = 'menuExtend/CustomFadeTransition/Blue_Archive/' + language + '/LoadingImage_44_Kr';
+                loadingGraphic = Paths.image(fallbackKey);
+            }
+            if (loadingGraphic == null)
+            {
+                // 连兜底图都没有：造一张纯色图，保证尺寸有限、流程不中断
+                var solid:BitmapData = new BitmapData(Std.int(FlxG.width), Std.int(FlxG.height), true, FlxColor.BLACK);
+                solid.fillRect(solid.rect, FlxColor.BLACK);
+                loadingGraphic = FlxGraphic.fromBitmapData(solid);
+            }
             protectedGraphics.push(loadingGraphic);
             baLoadingPics = new FlxSprite(0, 0).loadGraphic(loadingGraphic);
             baLoadingPics.scrollFactor.set();
@@ -401,17 +437,34 @@ class CustomFadeTransition extends FlxSubState {
                 targetWidth = targetHeight * targetAspectRatio;
             }
             
-            baLoadingPics.setGraphicSize(Std.int(targetWidth), Std.int(targetHeight));
-            baLoadingPics.updateHitbox();
-            
-            // 正确居中
-            baLoadingPics.x = (FlxG.width - baLoadingPics.width) / 2;
-            baLoadingPics.y = (FlxG.height - baLoadingPics.height) / 2;
-            
+            // NaN 拦截：即使上面兜底失效，也不能让无效尺寸进入 tween。
+            // setGraphicSize 在 frameWidth=0 时会算出 Infinity，updateHitbox 再变 NaN，
+            // 最终 FlxTween.tween({y: NaN}) 在 setStartValues 抛 "not numeric"。
+            var frameOk:Bool = baLoadingPics.frameWidth > 0 && baLoadingPics.frameHeight > 0
+                && Math.isFinite(baLoadingPics.frameWidth) && Math.isFinite(baLoadingPics.frameHeight);
+            if (frameOk) {
+                baLoadingPics.setGraphicSize(Std.int(targetWidth), Std.int(targetHeight));
+                baLoadingPics.updateHitbox();
+            }
+
+            // 正确居中；若尺寸异常则用屏幕中心，保证坐标有限
+            if (frameOk && Math.isFinite(baLoadingPics.width) && Math.isFinite(baLoadingPics.height)) {
+                baLoadingPics.x = (FlxG.width - baLoadingPics.width) / 2;
+                baLoadingPics.y = (FlxG.height - baLoadingPics.height) / 2;
+            } else {
+                baLoadingPics.x = FlxG.width / 2;
+                baLoadingPics.y = FlxG.height / 2;
+            }
+
             add(baLoadingPics);
 
-            // 保存图片的最终位置
+            // 保存图片的最终位置，并做最后一道有限值钳制
             var finalY:Float = baLoadingPics.y;
+            if (!Math.isFinite(finalY))
+                finalY = (FlxG.height - targetHeight) / 2;
+            if (!Math.isFinite(finalY))
+                finalY = FlxG.height / 2;
+            baLoadingPics.y = finalY;
 
             // 透明通道设置和初始位置
             baLoadingPics.alpha = isTransIn ? 1 : 0;

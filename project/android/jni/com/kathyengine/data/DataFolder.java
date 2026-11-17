@@ -34,17 +34,23 @@ public class DataFolder
 		final File baseDir = readBaseDir(context);
 
 		// 方案 1（Android 8.0+）：buildExploreRootUri 让系统「文件」应用直接浏览该 provider 根。
-		// 这是官方推荐的「在文件管理器打开 provider 根」方式，兼容性远好于旧的
-		// ACTION_VIEW + buildRootUri（旧法多数文件管理器不响应，只会弹 Toast）。
+		// 注意：该方法是系统 @hide API —— 运行时存在，但 SDK 的 android.jar 里没有声明，
+		// 直接调用会在编译期报「找不到符号」。因此用反射调用，避免编译期依赖。
+		// 反射失败（设备无此方法）时静默回退到下面的方案 2/3。
 		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
 		{
 			try
 			{
-				Uri exploreUri = DocumentsContract.buildExploreRootUri(authority, ROOT_ID);
-				Intent view = new Intent(Intent.ACTION_VIEW);
-				view.setDataAndType(exploreUri, "vnd.android.document/root");
-				addGrantFlags(view);
-				if (startSafely(context, view)) return true;
+				java.lang.reflect.Method m = DocumentsContract.class.getMethod(
+					"buildExploreRootUri", String.class, String.class);
+				Uri exploreUri = (Uri) m.invoke(null, authority, ROOT_ID);
+				if (exploreUri != null)
+				{
+					Intent view = new Intent(Intent.ACTION_VIEW);
+					view.setDataAndType(exploreUri, "vnd.android.document/root");
+					addGrantFlags(view);
+					if (startSafely(context, view)) return true;
+				}
 			}
 			catch (Throwable ignored)
 			{

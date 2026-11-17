@@ -210,7 +210,61 @@ class CopyState extends MusicBeatState
 			case 'otf' | 'ttf':
 				return ByteArray.fromFile(file);
 			default:
-				return OpenFLAssets.getBytes(file);
+				// OpenFLAssets.getBytes() 只按 BINARY 类型取值，而 png/ogg/jpg 等
+				// 在资源清单里注册为 IMAGE/SOUND，取不到时会返回 null —— 这正是
+				// 「Failed To Copy ... (Null Object Reference)」的来源。
+				// 先用 getPath() 拿到真实路径直接读；读不到再退回 getBytes()。
+				// 注意 getFile() 可能返回 "library:assets/..." 形式，getPath 对前缀
+				// 解析失败时，去掉前缀用裸路径再试一次。
+				var realPath:String = null;
+				try
+				{
+					realPath = OpenFLAssets.getPath(file);
+				}
+				catch (e:Dynamic) {}
+
+				if ((realPath == null || realPath.length == 0) && file.indexOf(':') >= 0)
+				{
+					var barePath:String = file.substr(file.indexOf(':') + 1);
+					try
+					{
+						realPath = OpenFLAssets.getPath(barePath);
+					}
+					catch (e:Dynamic) {}
+				}
+
+				if (realPath != null && realPath.length > 0)
+				{
+					try
+					{
+						if (FileSystem.exists(realPath))
+							return ByteArray.fromBytes(File.getBytes(realPath));
+					}
+					catch (e:Dynamic) {}
+				}
+
+				// 最后才尝试 getBytes()，带前缀失败则用裸 id 再试，并显式判空，
+				// 避免把 null 交给 File.saveBytes
+				var bytes:ByteArray = null;
+				try
+				{
+					bytes = OpenFLAssets.getBytes(file);
+				}
+				catch (e:Dynamic) {}
+
+				if (bytes == null && file.indexOf(':') >= 0)
+				{
+					try
+					{
+						bytes = OpenFLAssets.getBytes(file.substr(file.indexOf(':') + 1));
+					}
+					catch (e:Dynamic) {}
+				}
+
+				if (bytes == null)
+					throw 'No bytes available for "$file" (path: $realPath)';
+
+				return bytes;
 		}
 	}
 
