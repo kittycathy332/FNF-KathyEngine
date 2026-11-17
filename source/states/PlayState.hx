@@ -6677,16 +6677,13 @@ tempScore += '${lblScore}: ${songScore}';
 
 		// Kade 样式 ShowCase：Botplay（cpuControlled，非回放）下只显示 numScore 数字，隐藏 rating/exRating 贴图。
 		// 对齐 Kade Engine 原版行为：if(!PlayStateChangeables.botPlay || loadRep) add(rating);
-		if (ClientPrefs.data.showcaseStyle == 'Kade' && cpuControlled && !isReplaying)
-		{
-			showRating = false;
-			showEXRating = false;
-		}
-		else
-		{
-			showRating = true;
-			showEXRating = ClientPrefs.data.exratingDisplay;
-		}
+		//
+		// 重要：绝不在这里改写 showRating / showEXRating 本身。
+		// 这两个是模组脚本通过 setProperty('showRating', false) 控制的持久标志，原版 Psych 在 popUpScore
+		// 全程只读取、从不重设。旧实现每次命中都把 showRating 强行写回 true，导致脚本的隐藏在下一击
+		// 立刻失效（表现为「combo 数字隐藏了，但 rating 贴图还在冒」）。
+		// 改成局部屏蔽位，只在计算 visible 时叠加，既保留 Kade botplay 隐藏意图，又不污染脚本标志。
+		var kadeBotHideRating:Bool = (ClientPrefs.data.showcaseStyle == 'Kade' && cpuControlled && !isReplaying);
 
 		var noteDiff:Float = note.strumTime - Conductor.songPosition + (cpuControlled ? 0 : ClientPrefs.data.ratingOffset);
 
@@ -6988,7 +6985,7 @@ tempScore += '${lblScore}: ${songScore}';
 			rating.screenCenter();
 			rating.x = placement - 40;
 			rating.y -= 60;
-			rating.visible = (!ClientPrefs.data.hideHud && showRating);
+			rating.visible = (!ClientPrefs.data.hideHud && showRating && !kadeBotHideRating);
 			rating.x += ClientPrefs.data.comboOffset[0];
 			rating.y -= ClientPrefs.data.comboOffset[1];
 			rating.antialiasing = antialias;
@@ -6997,7 +6994,10 @@ tempScore += '${lblScore}: ${songScore}';
 			theEXrating.screenCenter();
 			theEXrating.x = placement - 40;
 			theEXrating.y -= 60;
-			theEXrating.visible = (!ClientPrefs.data.hideHud && showEXRating);
+			// exRating 是 Kathy 扩展的配套评级贴图，原版脚本不认识 showEXRating 这个独立标志，
+			// 只知道 showRating。因此这里也 AND 上 showRating，确保脚本 setProperty('showRating', false)
+			// 时 rating 与 exRating 一起隐藏（否则会出现「数字/rating 藏了，exRating 还在飘」）。
+			theEXrating.visible = (!ClientPrefs.data.hideHud && showRating && showEXRating && !kadeBotHideRating);
 			theEXrating.x += ClientPrefs.data.comboOffset[4] - 140;
 			theEXrating.y -= ClientPrefs.data.comboOffset[5]; // y 基础已在上方 -=60，与 rating 对齐
 			theEXrating.antialiasing = antialias;
