@@ -162,8 +162,7 @@ class RenderClock
 			trace('[RenderClock] backend "' + d.renderBackend + '" not implemented yet, using Offline.');
 		if (d.renderInputSource == 'Replay')
 			trace('[RenderClock] Replay input not wired yet, using BotPlay.');
-		if (d.renderCutscene != 'Skip')
-			trace('[RenderClock] cutscene join/freeze not implemented yet; cutscenes will play in realtime.');
+		trace('[RenderClock] cutscene mode: ' + d.renderCutscene);
 
 		_fps = Std.int(Math.max(24, d.renderFPS));
 		_width = Std.int(Math.max(320, d.renderWidth));
@@ -769,7 +768,8 @@ class RenderClock
 				rate: rate,
 				offsetMs: Conductor.offset,
 				mixAudio: (d != null && d.renderAudio),
-				cutscenes: _cutscenes,
+				// 过场已在渲染时按虚拟时钟逐帧画进游戏画面，不再在片头 concat。
+				cutscenes: [],
 				songAudio: songAudio,
 				soundEvents: soundEvents,
 				sfx: sfxTimeline,
@@ -802,6 +802,7 @@ class RenderClock
 			+ (videoPath != '' ? '\nvideo: ' + videoPath : '')
 			+ (_errorCount > 0 ? '\nERRORS: ' + _errorCount + '\n' + _firstError : '');
 		logLine('[summary] ' + StringTools.replace(summary, '\n', ' | '));
+		cleanupVideoCache();
 		trace('[RenderClock] done: ' + frame + ' frames -> ' + outputDir);
 		showSummary(summary);
 	}
@@ -822,6 +823,7 @@ class RenderClock
 			+ ' / sfxCaptured=' + _sfxSeen
 			+ ' / clockCorrections=' + _clockCorrections + ' / partial=' + partial);
 		writeManifest(partial, reason);
+		cleanupVideoCache();
 		if (!silent)
 		{
 			var summary:String = Language.get('render_abort_popup') + '\n' + reason
@@ -865,8 +867,58 @@ class RenderClock
 	}
 
 	/** 当前虚拟时间在视频时间轴上的毫秒（帧号 × 帧间隔，不受 timeScale 影响） */
-	static function videoMs():Float
+	public static function videoMs():Float
 		return frame * (1000 / _fps);
+
+	/** 过场逐帧显示用的输出帧率 */
+	public static function videoFps():Int
+		return _fps;
+
+	/** 给 RenderVideoFrames 写诊断日志用的回调 */
+	public static function videoLog(s:String):Void
+		logLine(s);
+
+	/**
+	 * 登记视频自带音轨：在 atMs 这个视频时间点播放，持续 durMs。
+	 * 走已有的 sfxTimeline 通道，因此会和游戏音频一起混入成片。
+	 */
+	public static function registerVideoAudio(path:String, atMs:Float, durMs:Float, volume:Float):Void
+	{
+		if (!active || path == null || !FileSystem.exists(path)) return;
+		sfxTimeline.push({
+			path: path,
+			atMs: Math.max(0, atMs),
+			volume: volume <= 0 ? 1 : volume,
+			looped: false,
+			durMs: durMs
+		});
+		logLine('[video] audio registered at ' + Math.round(atMs) + 'ms dur='
+			+ Math.round(durMs) + 'ms ' + path);
+	}
+
+	/** 渲染结束（混音完成）后删除预解码缓存（PNG 帧在子目录里，需递归） */
+	public static function cleanupVideoCache():Void
+	{
+		if (outputDir == '') return;
+		deleteTree(outputDir + 'video_cache/');
+	}
+
+	static function deleteTree(path:String):Void
+	{
+		try
+		{
+			if (!FileSystem.exists(path)) return;
+			if (FileSystem.isDirectory(path))
+			{
+				for (f in FileSystem.readDirectory(path))
+					deleteTree(path + f + (FileSystem.isDirectory(path + f) ? '/' : ''));
+				FileSystem.deleteDirectory(path);
+			}
+			else
+				FileSystem.deleteFile(path);
+		}
+		catch (e:Dynamic) { logLine('[video] cache cleanup failed: ' + path + ' ' + Std.string(e)); }
+	}
 
 	/**
 	 * HUD 统计数据（NPS 等）专用的单调时间源，单位毫秒。
@@ -1056,14 +1108,13 @@ class RenderClock
 		return false;
 	}
 
-	/** 由 PlayState.startVideo() 调用：记录过场文件路径，合成阶段用 concat 拼接 */
+	/**
+	 * 兼容旧调用点：过场现在由 VideoSprite 在渲染时逐帧画进游戏画面，
+	 * 不再需要片头 concat。保留空实现避免第三方脚本调用报错。
+	 */
 	public static function registerCutscene(path:String):Void
 	{
-		if (active && path != null && _cutscenes.indexOf(path) < 0)
-		{
-			_cutscenes.push(path);
-			logLine('[cutscene] registered ' + path);
-		}
+		if (active && path != null) logLine('[cutscene] in-frame mode, ignored concat: ' + path);
 	}
 
 	static function writeManifest(videoPath:String, interrupted:String):Void

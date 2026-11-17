@@ -1954,16 +1954,8 @@ isReplaying = false;
 		var foundFile:Bool = false;
 		var fileName:String = Paths.video(name);
 
-		// 离线渲染：hxvlc 过场按实时播放，会与帧号驱动的虚拟时间轴脱节。
-		// 这里只记录文件路径，由合成阶段用 ffmpeg concat 拼接，游戏继续走正常流程。
-		if (backend.RenderClock.active)
-		{
-			backend.RenderClock.registerCutscene(fileName);
-			inCutscene = false;
-			canPause = true;
-			startAndEnd();
-			return null;
-		}
+		// 离线渲染：VideoSprite 内部会改用预解码帧 + 虚拟时钟，而不是 hxvlc 实时播放。
+		// 这里照常创建并 add，图层/相机/回调都由游戏原本的逻辑决定。
 
 		#if sys
 		if (FileSystem.exists(fileName))
