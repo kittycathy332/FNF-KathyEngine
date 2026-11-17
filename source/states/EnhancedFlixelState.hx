@@ -56,6 +56,17 @@ class EnhancedFlixelState extends FlxState
 	var textRevealed:Bool = false;
 	var _colorIdx:Int = 0;
 
+	// 预创建的五色格式实例，循环变色时只做 remove/add，不再每次 new 一个 FlxTextFormat
+	var colorFormats:Array<flixel.text.FlxText.FlxTextFormat> = [];
+	// 本 state 创建的所有 timer：切走时统一 cancel，避免无限循环变色 timer 等问题残留后台
+	var timers:Array<FlxTimer> = [];
+
+	function trackTimer(timer:FlxTimer):FlxTimer
+	{
+		timers.push(timer);
+		return timer;
+	}
+
 	override public function create():Void
 	{
 		_cachedBgColor = FlxG.camera.bgColor;
@@ -75,7 +86,8 @@ class EnhancedFlixelState extends FlxState
 		label.x = startLabelX();
 		// 用 FlxTextFormat 给不同字符区间套不同格式（参考官方 addFormat 用法）
 		whiteFmt = new flixel.text.FlxText.FlxTextFormat(FlxColor.WHITE); // 上一行：纯白
-		colorFmt = new flixel.text.FlxText.FlxTextFormat(COLORS[0]); // 下一行：可变色
+		for (c in COLORS) colorFormats.push(new flixel.text.FlxText.FlxTextFormat(c));
+		colorFmt = colorFormats[0]; // 下一行：可变色
 		label.addFormat(whiteFmt, 0, 10);   // "Powered by"（10 字符）
 		label.addFormat(colorFmt, 11, 21);  // "HaxeFlixel"（其后含换行，11..21）
 		add(label);
@@ -100,7 +112,7 @@ class EnhancedFlixelState extends FlxState
 		// —— 四瓣按原版时间点立刻出现并砸向绿块 ——
 		for (i in 0...4)
 		{
-			new FlxTimer().start(HIT_TIMES[i], (_) -> spawnOuter(i));
+			trackTimer(new FlxTimer()).start(HIT_TIMES[i], (_) -> spawnOuter(i));
 		}
 
 		// 粒子发射器（成型时中心再补一发）
@@ -115,7 +127,7 @@ class EnhancedFlixelState extends FlxState
 		add(emitter);
 
 		// 安全兜底：最长 4.5 秒后强制收尾
-		new FlxTimer().start(4.5, (_) -> outro());
+		trackTimer(new FlxTimer()).start(4.5, (_) -> outro());
 	}
 
 	// 四瓣立刻以完整形态出现，并快速砸向绿色中心块
@@ -150,7 +162,9 @@ class EnhancedFlixelState extends FlxState
 	// 撞击绿块：绿块轻微脉冲 + 接触点白色闪光 + 该色粒子迸发
 	function hitGreen(dir:Array<Float>, color:Int):Void
 	{
-		// 每瓣落定的即时反馈（轻微），整体回弹由 bounceAll 统一表现
+		// 每瓣落定的即时反馈（轻微），整体回弹由 bounceAll 统一表现。
+		// 先取消上一次脉冲，避免 4 次撞击的 scale tween 叠加、互相拉扯导致绿块抖动。
+		FlxTween.cancelTweensOf(greenBlock);
 		FlxTween.tween(greenBlock, {'scale.x': 1.12, 'scale.y': 1.12}, 0.06, {
 			ease: FlxEase.quadOut,
 			onComplete: (_) -> FlxTween.tween(greenBlock, {'scale.x': 1, 'scale.y': 1}, 0.14, {ease: FlxEase.quadOut})
@@ -180,7 +194,7 @@ class EnhancedFlixelState extends FlxState
 		burst.lifespan.set(0.3, 0.6);
 		add(burst);
 		burst.start(true, 0, 18);
-		new FlxTimer().start(0.8, (_) -> burst.destroy());
+		trackTimer(new FlxTimer()).start(0.8, (_) -> burst.destroy());
 	}
 
 	// 整组（含绿色方块）轻微回弹：先压扁再弹性回正
@@ -213,17 +227,18 @@ class EnhancedFlixelState extends FlxState
 		FlxTween.tween(label, {x: endLabelX()}, 0.9, {ease: FlxEase.quadOut});
 
 		// 仅 "HaxeFlixel" 颜色循环；"Powered by" 为纯白，不受影响
-		new FlxTimer().start(0.4, (_) ->
+		trackTimer(new FlxTimer()).start(0.4, (_) ->
 		{
-			_colorIdx = (_colorIdx + 1) % COLORS.length;
-			// FlxTextFormat 无 color 字段，需重建实例再替换
+			// FlxTextFormat 无 color 字段，需移除旧实例再套用新实例触发重绘。
+			// 格式实例在 create 时已预建，这里只做切换，避免每次新建对象产生 GC 压力。
 			label.removeFormat(colorFmt);
-			colorFmt = new flixel.text.FlxText.FlxTextFormat(COLORS[_colorIdx]);
+			_colorIdx = (_colorIdx + 1) % colorFormats.length;
+			colorFmt = colorFormats[_colorIdx];
 			label.addFormat(colorFmt, 11, 21); // 重新套用触发重绘
 		}, 0); // loops = 0 => 无限循环
 
 		// 对齐原版节奏：成型后停留约 2.0 秒再淡出
-		new FlxTimer().start(2.0, (_) -> outro());
+		trackTimer(new FlxTimer()).start(2.0, (_) -> outro());
 	}
 
 	// 文字起点（LEFT 对齐，左缘在此；需足够靠左才能整体藏到 logo 后方）/ 终点（向右飞出，贴近 logo 右侧）
@@ -326,8 +341,21 @@ class EnhancedFlixelState extends FlxState
 
 		// 任意按键 / 鼠标 / 触屏 可跳过
 		// 注意：不再直接调用 outro()（那会操底层花瓣 tween，导致其与原「砸入」/回弹 tween 打架、动效被打乱），
-		// 而是用相机级淡黑让画面整体变暗，底层 tween 照常运行，达到「跳过」效果
-		if (!skipping && (FlxG.keys.firstJustPressed() != -1 || FlxG.mouse.justPressed))
+		// 而是用相机级淡黑让画面整体变暗，底层 tween 照常运行，达到「跳过」效果。
+		// 移动端补上 touches 检测：部分 ROM 上触摸不会映射成 FlxG.mouse.justPressed。
+		var touchSkip:Bool = false;
+		if (FlxG.touches != null)
+		{
+			for (touch in FlxG.touches.list)
+			{
+				if (touch.justPressed)
+				{
+					touchSkip = true;
+					break;
+				}
+			}
+		}
+		if (!skipping && (FlxG.keys.firstJustPressed() != -1 || FlxG.mouse.justPressed || touchSkip))
 			skipToDark();
 	}
 
@@ -355,7 +383,10 @@ class EnhancedFlixelState extends FlxState
 		if (maskBar != null)
 		{
 			maskBar.setPosition(0, center.y - 50);
-			maskBar.makeGraphic(Math.floor(revealLine()), 100, FlxColor.BLACK);
+			var barW:Int = Math.floor(revealLine());
+			// makeGraphic 会重建底层 BitmapData，尺寸没变时跳过，避免 resize 抖动时反复分配贴图
+			if (maskBar.width != barW || maskBar.height != 100)
+				maskBar.makeGraphic(barW, 100, FlxColor.BLACK);
 		}
 		if (emitter != null)
 			emitter.setPosition(center.x, center.y);
@@ -363,6 +394,11 @@ class EnhancedFlixelState extends FlxState
 
 	override function destroy():Void
 	{
+		// 统一取消本 state 创建的 timer：尤其那个无限循环的文字变色 timer，
+		// 不取消会随切状态继续在后台跑，反复触发已销毁 label 的 remove/addFormat。
+		for (timer in timers)
+			timer.cancel();
+		timers.resize(0);
 		FlxG.camera.bgColor = _cachedBgColor;
 		super.destroy();
 	}

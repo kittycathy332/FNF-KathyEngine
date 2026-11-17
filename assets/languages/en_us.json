@@ -568,5 +568,8 @@
   "game_log_status_debug_off": "DEBUG logs hidden",
   "game_log_status_exported": "Exported to {0}",
   "game_log_status_export_failed": "Export failed: {0}",
-  "game_log_status_export_unsupported": "Export unavailable on this build"
+  "game_log_status_export_unsupported": "Export unavailable on this build",
+  "logo_skip_hint": "Press CONFIRM / Touch to skip",
+  "logo_skip_hint_key": "Press CONFIRM to skip",
+  "logo_skip_hint_touch": "Touch to skip"
 }

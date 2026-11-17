@@ -658,7 +658,7 @@ class OptionsIOState extends MusicBeatState
 		if (result.success)
 	{
 		hintText.text = Language.get('io_import_ok');
-		var noticeSound = Paths.sound('notice');
+		var noticeSound = Paths.sound('KYE/notice');
 		FlxG.sound.play(noticeSound);
 		// 等音频播完再退出（Sound.length 是毫秒，FlxTimer 用秒）
 		var waitSec:Float = noticeSound.length / 1000.0;

@@ -573,5 +573,8 @@
   "game_log_status_debug_off": "已隐藏 DEBUG 日志",
   "game_log_status_exported": "已导出至 {0}",
   "game_log_status_export_failed": "导出失败：{0}",
-  "game_log_status_export_unsupported": "导出仅支持桌面/手机编译版本"
+  "game_log_status_export_unsupported": "导出仅支持桌面/手机编译版本",
+  "logo_skip_hint": "按确认键 / 触屏跳过",
+  "logo_skip_hint_key": "按确认键跳过",
+  "logo_skip_hint_touch": "触屏跳过"
 }

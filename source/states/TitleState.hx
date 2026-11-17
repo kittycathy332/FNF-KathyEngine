@@ -46,6 +46,7 @@ class TitleState extends MusicBeatState
 	public static var volumeUpKeys:Array<FlxKey> = [FlxKey.NUMPADPLUS, FlxKey.PLUS];
 
 	public static var initialized:Bool = false;
+	static var gifPreloaded:Bool = false;
 
 	var credGroup:FlxGroup = new FlxGroup();
 	var textGroup:FlxGroup = new FlxGroup();
@@ -83,6 +84,18 @@ class TitleState extends MusicBeatState
 			return;
 		}
 		#end
+
+		// 设置界面左上角 GIF（minispeaki，73 帧 / 2.2MB，低端机 LZW 解码需数秒）的预解码：
+		// 从 LogoState 挪到这里并延迟 1 秒，避开开屏/标题首帧的 CPU 与 IO 高峰；
+		// 用户首次进入设置界面前缓存已就绪，不会在打开设置那一刻卡住。
+		if (!gifPreloaded)
+		{
+			gifPreloaded = true;
+			new FlxTimer().start(1.0, function(_)
+			{
+				backend.GifAssets.load('assets/shared/images/gifs/minispeaki.gif', function(_) {});
+			});
+		}
 
 		if(!initialized)
 		{
