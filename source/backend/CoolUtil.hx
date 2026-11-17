@@ -452,15 +452,23 @@ class CoolUtil
 
 	inline public static function openFolder(folder:String, absolute:Bool = false) {
 		#if sys
-			if(!absolute) folder =  Sys.getCwd() + '$folder';
+			if(!absolute) folder = Sys.getCwd() + '$folder';
 
-			folder = folder.replace('/', '\\');
-			if(folder.endsWith('/')) folder.substr(0, folder.length - 1);
+			// 关键：去掉结尾的斜杠/反斜杠。Sys.getCwd() 在 Windows 上常以 '\' 结尾，
+			// 若保留，Haxe 的 quoteWinArg 会把结尾 '\' 转义成 '\\'，导致 explorer 认为
+			// 路径无效而打开空白「此电脑」窗口——这正是「打开的是纯 explorer」的根因。
+			// 旧代码两处 bug：只判断 '/'（但上面已把 '/' 全换成 '\'）、substr 结果未赋值。
+			while (folder.length > 1 && (folder.endsWith('/') || folder.endsWith('\\')))
+				folder = folder.substr(0, folder.length - 1);
 
-			#if linux
-			var command:String = '/usr/bin/xdg-open';
-			#else
+			#if windows
+			// Windows：Sys.command 会用 quoteWinArg 自动给含空格路径加引号，
+			// 因此这里传原始路径即可，绝不要手动加引号（会造成双重引号）。
 			var command:String = 'explorer.exe';
+			#elseif mac
+			var command:String = '/usr/bin/open';
+			#else
+			var command:String = '/usr/bin/xdg-open';
 			#end
 			Sys.command(command, [folder]);
 			trace('$command $folder');
