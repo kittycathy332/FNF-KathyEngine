@@ -645,6 +645,26 @@ class PlayState extends MusicBeatState
 		}
 		nextReloadAll = false;
 
+		// 离线渲染 + Replay 输入源：回放在 Freeplay 里自主选择（shouldStartReplay
+		// 为 true 表示这次进 PlayState 是带着回放数据来的）。这里只要确认是回放局，
+		// 就自动置位渲染请求，让本局直接进入渲染，不需要在设置页选文件。
+		if (ClientPrefs.data.renderInputSource == 'Replay')
+		{
+			if (shouldStartReplay && pendingReplayData != null)
+			{
+				backend.RenderClock.requested = true;
+			}
+			else if (backend.RenderClock.requested)
+			{
+				// 请求了渲染 + 选了 Replay 来源，但这次不是回放局 → 中断并提示，
+				// 不悄悄退回 BotPlay（避免产出与预期不符的成片）。
+				backend.RenderClock.requested = false;
+				backend.CoolUtil.showPopUp(Language.get('render_replay_needed'),
+					Language.get('render_menu'));
+				trace('[RenderClock] Replay source selected but no replay was chosen in Freeplay.');
+			}
+		}
+
 		// 检查是否有待加载的回放数据
 		if(shouldStartReplay && pendingReplayData != null)
 		{
@@ -825,8 +845,12 @@ isReplaying = false;
 		{
 			if (backend.RenderClock.begin())
 			{
-				// 当前仅接入 BotPlay（按 strumTime 自动命中）；Replay 载入尚未接线
-				cpuControlled = true;
+				// Replay 模式由 isReplaying + 虚拟按键驱动，必须关掉 BotPlay，
+				// 否则 botplay 也会自动打 note，和回放输入打架。
+				if (ClientPrefs.data.renderInputSource == 'Replay')
+					cpuControlled = false;
+				else
+					cpuControlled = true;
 				if (ClientPrefs.data.renderRange == 'SongOnly') skipCountdown = true;
 			}
 		}

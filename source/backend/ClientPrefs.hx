@@ -298,6 +298,7 @@ import haxe.io.BytesInput;
 	// renderBackend: 'Offline' 帧号虚拟时钟 | 'SlowMotion' 慢速实时 | 'Realtime' 时间戳重定时
 	public var renderBackend:String = 'Offline';
 	public var renderInputSource:String = 'BotPlay'; // 'BotPlay' | 'Replay'
+	public var renderReplayPath:String = ''; // Replay 渲染用的 .replay.json 路径（设置页选择）
 	public var renderFPS:Int = 60;
 	public var renderWidth:Int = 1280;
 	public var renderHeight:Int = 720;
@@ -775,6 +776,7 @@ class ClientPrefs {
 		defaultData.modPathCompat = true;
 		defaultData.renderBackend = 'Offline';
 		defaultData.renderInputSource = 'BotPlay';
+		defaultData.renderReplayPath = '';
 		defaultData.renderFPS = 60;
 		defaultData.renderWidth = 1280;
 		defaultData.renderHeight = 720;
@@ -855,6 +857,7 @@ class ClientPrefs {
 		final renderDefaults:Map<String, Dynamic> = [
 			'renderBackend' => 'Offline',
 			'renderInputSource' => 'BotPlay',
+			'renderReplayPath' => '',
 			'renderFPS' => 60,
 			'renderWidth' => 1280,
 			'renderHeight' => 720,

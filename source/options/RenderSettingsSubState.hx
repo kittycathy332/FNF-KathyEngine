@@ -20,18 +20,10 @@ class RenderSettingsSubState extends BaseOptionsMenu
 
 		var option:Option;
 
-		// 渲染后端：决定了时间轴由谁驱动，是整套方案里唯一影响架构的选项
-		option = new Option(Language.get('render_backend'),
-			Language.get('render_backend_desc'),
-			'renderBackend',
-			STRING,
-			['Offline', 'SlowMotion', 'Realtime']);
-		option.valueLocalizations = [
-			'Offline' => Language.get('render_backend_offline'),
-			'SlowMotion' => Language.get('render_backend_slowmotion'),
-			'Realtime' => Language.get('render_backend_realtime')
-		];
-		addOption(option);
+		// 渲染后端目前只实现了 Offline（逐帧离线 + 虚拟时钟）。
+		// SlowMotion / Realtime 两套后端尚未接入，renderBackend / renderSlowFactor
+		// 字段与规划注释保留在 ClientPrefs 里，等实现后再放回设置页，
+		// 现在不展示，避免用户选了却没反应。
 
 		option = new Option(Language.get('render_input_source'),
 			Language.get('render_input_source_desc'),
@@ -43,6 +35,9 @@ class RenderSettingsSubState extends BaseOptionsMenu
 			'Replay' => Language.get('render_input_replay')
 		];
 		addOption(option);
+
+		// Replay 来源时，回放在 Freeplay 里自主选择；渲染会跟随那局回放，
+		// 不需要在这里选文件（见 render_input_source_desc）。
 
 		option = new Option(Language.get('render_fps'),
 			Language.get('render_fps_desc'),
@@ -100,16 +95,7 @@ class RenderSettingsSubState extends BaseOptionsMenu
 		];
 		addOption(option);
 
-		option = new Option(Language.get('render_slow_factor'),
-			Language.get('render_slow_factor_desc'),
-			'renderSlowFactor',
-			FLOAT);
-		option.minValue = 0.1;
-		option.maxValue = 1.0;
-		option.changeValue = 0.05;
-		option.decimals = 2;
-		option.displayFormat = '%vx';
-		addOption(option);
+		// renderSlowFactor 仅服务于尚未实现的 SlowMotion 后端，暂不展示。
 
 		option = new Option(Language.get('render_range'),
 			Language.get('render_range_desc'),

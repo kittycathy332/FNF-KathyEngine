@@ -160,8 +160,7 @@ class RenderClock
 		// 明确告知哪些配置尚未接入，避免"选了却没反应"
 		if (d.renderBackend != 'Offline')
 			trace('[RenderClock] backend "' + d.renderBackend + '" not implemented yet, using Offline.');
-		if (d.renderInputSource == 'Replay')
-			trace('[RenderClock] Replay input not wired yet, using BotPlay.');
+		trace('[RenderClock] input source: ' + d.renderInputSource);
 		trace('[RenderClock] cutscene mode: ' + d.renderCutscene);
 
 		_fps = Std.int(Math.max(24, d.renderFPS));
