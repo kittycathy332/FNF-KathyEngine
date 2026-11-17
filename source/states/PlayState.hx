@@ -433,6 +433,23 @@ class PlayState extends MusicBeatState
 	public var botplaySine:Float = 0;
 	public var botplayTxt:FlxText;
 	public var replayTxt:FlxText;
+
+	// 回放 + BotPlay 同时生效时的红色高亮冲突提示。
+	// "干预"= 本局内 cpuControlled 被任何方式改动过（F6 / 暂停菜单 / 模组脚本 / 回放录制的 F6），
+	// 一旦干预就永久恢复默认白色文本。用每帧比对 cpuControlled 实现，覆盖所有来源。
+	var botConflict:Bool = false;          // 当前是否处于冲突高亮态（回放中、cpuControlled=true、且未被干预）
+	var botConflictToggled:Bool = false;   // 本局内 cpuControlled 是否被改动过（粘性，一旦 true 不再复位）
+	var botConflictInit:Bool = false;      // 是否已在 update 里建立 cpuControlled 基线
+	var lastCpuControlled:Bool = false;    // 上一帧的 cpuControlled，用于检测变化
+	var botConflictLabelApplied:Bool = false; // 当前 botplayTxt 是否已套用冲突双色文本，避免每帧 applyMarkup
+	static final BOT_CONFLICT_RED:FlxColor = 0xFFFF5045;
+	static final BOT_CONFLICT_MARKER:String = '§';
+
+	/** 标记本局 botplay 被手动/脚本干预过，解除冲突红色高亮。供 F6 / 暂停菜单 / 脚本调用。 */
+	public function markBotplayToggled():Void
+	{
+		botConflictToggled = true;
+	}
 	public var watermarkTxt:FlxText;
 	public var ratingCounter:FlxText;
 	public var ratingCounterModule:objects.RatingCounter;
@@ -645,19 +662,14 @@ class PlayState extends MusicBeatState
 		}
 		nextReloadAll = false;
 
-		// 离线渲染 + Replay 输入源：回放在 Freeplay 里自主选择（shouldStartReplay
-		// 为 true 表示这次进 PlayState 是带着回放数据来的）。这里只要确认是回放局，
-		// 就自动置位渲染请求，让本局直接进入渲染，不需要在设置页选文件。
-		if (ClientPrefs.data.renderInputSource == 'Replay')
+		// 离线渲染 + Replay 输入源：渲染请求只由设置页「渲染下一首曲目」置位，
+		// 这里【不自动置位】——普通回放局应该照常游玩，不进渲染。
+		// 仅在已经请求渲染 + 选了 Replay 来源时，校验这次是否 Freeplay 选的回放局；
+		// 不是则中断并提示，不悄悄退回 BotPlay（避免产出与预期不符的成片）。
+		if (ClientPrefs.data.renderInputSource == 'Replay' && backend.RenderClock.requested)
 		{
-			if (shouldStartReplay && pendingReplayData != null)
+			if (!shouldStartReplay || pendingReplayData == null)
 			{
-				backend.RenderClock.requested = true;
-			}
-			else if (backend.RenderClock.requested)
-			{
-				// 请求了渲染 + 选了 Replay 来源，但这次不是回放局 → 中断并提示，
-				// 不悄悄退回 BotPlay（避免产出与预期不符的成片）。
 				backend.RenderClock.requested = false;
 				backend.CoolUtil.showPopUp(Language.get('render_replay_needed'),
 					Language.get('render_menu'));
@@ -1462,12 +1474,16 @@ isReplaying = false;
 
 		addToHUD(scoreTxt);
 
-		botplayTxt = new FlxText(400, ClientPrefs.data.botplayStyle == 'Kade' ? healthBar.y - 120 : healthBar.y - 90, FlxG.width - 800, "BOTPLAY", 32);
+		// 回放复用 botplay 样式时显示 REPLAY，真 BotPlay 仍显示 BOTPLAY
+		var botLabel:String = (isReplaying && ClientPrefs.data.replayTextStyle == 'BotPlay') ? 'REPLAY' : 'BOTPLAY';
+		botplayTxt = new FlxText(400, ClientPrefs.data.botplayStyle == 'Kade' ? healthBar.y - 120 : healthBar.y - 90, FlxG.width - 800, botLabel, 32);
 		//botplayTxt = new FlxText(400, healthBar.y - 90, FlxG.width - 800, LanguageBasic.getPhrase("Botplay").toUpperCase(), 32);
 		botplayTxt.setFormat(Paths.font("vcr.ttf"), ClientPrefs.data.botplayStyle == 'Kade' ? 37 : 32, FlxColor.WHITE, CENTER, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
 		botplayTxt.scrollFactor.set();
 		botplayTxt.borderSize = ClientPrefs.data.botplayStyle == 'Kade' ? 2 : 1.25;
-		botplayTxt.visible = cpuControlled;
+		// Replay 文本样式：BotPlay（默认）复用 BOTPLAY；None 时回放不显示任何文本。
+		botplayTxt.visible = cpuControlled
+			|| (isReplaying && ClientPrefs.data.replayTextStyle == 'BotPlay');
 		addToHUD(botplayTxt);
 
 		// 创建回放模式指示文本
@@ -1478,7 +1494,8 @@ isReplaying = false;
 		replayTxt.y -= 100;
 		replayTxt.borderSize = 2;
 		replayTxt.color = FlxColor.fromRGB(boyfriend.healthColorArray[0], boyfriend.healthColorArray[1], boyfriend.healthColorArray[2]);
-		replayTxt.visible = isReplaying;
+		// 仅当选择独立回放文本时显示 REPLAY
+		replayTxt.visible = isReplaying && ClientPrefs.data.replayTextStyle == 'Replay';
 		addToHUD(replayTxt);
 
 		if(ClientPrefs.data.downScroll)
@@ -4978,15 +4995,49 @@ tempScore += '${lblScore}: ${songScore}';
 		setOnScripts('curDecStep', curDecStep);
 		setOnScripts('curDecBeat', curDecBeat);
 
-		if(botplayTxt != null && botplayTxt.visible && ClientPrefs.data.botplayStyle != 'Kade') {
+		// ===== BotPlay 文本颜色：回放 + BotPlay 同时生效且未被干预时，BOTPLAY 染红 + REPLAY 白 =====
+		// 干预 = 本局内 cpuControlled 被任何方式改动（F6 / 暂停菜单 / 模组脚本 / 回放录制的 F6）。
+		// 用每帧比对捕获所有来源；首次 update 只建立基线，不算干预。
+		if (!botConflictInit)
+		{
+			botConflictInit = true;
+			lastCpuControlled = cpuControlled;
+		}
+		else if (cpuControlled != lastCpuControlled)
+		{
+			botConflictToggled = true;
+			lastCpuControlled = cpuControlled;
+		}
+		botConflict = isReplaying && cpuControlled && !botConflictToggled;
+
+		var replayUsesBotplay:Bool = isReplaying && ClientPrefs.data.replayTextStyle == 'BotPlay';
+		if(botplayTxt != null)
+		{
+			// 只有冲突态切换时才重建 markup，避免每帧 applyMarkup 的开销
+			if (botConflict != botConflictLabelApplied)
+			{
+				botConflictLabelApplied = botConflict;
+				if (botConflict)
+					botplayTxt.applyMarkup(BOT_CONFLICT_MARKER + 'BOTPLAY' + BOT_CONFLICT_MARKER + ' REPLAY',
+						[new FlxTextFormatMarkerPair(new FlxTextFormat(BOT_CONFLICT_RED), BOT_CONFLICT_MARKER)]);
+				else
+				{
+					botplayTxt.clearFormats();
+					botplayTxt.text = (isReplaying && ClientPrefs.data.replayTextStyle == 'BotPlay') ? 'REPLAY' : 'BOTPLAY';
+				}
+			}
+			botplayTxt.visible = cpuControlled || replayUsesBotplay || botConflict;
+		}
+
+		if(botplayTxt != null && (cpuControlled || replayUsesBotplay || botConflict)
+			&& ClientPrefs.data.botplayStyle != 'Kade') {
 			botplaySine += 180 * elapsed;
 			botplayTxt.alpha = 1 - Math.sin((Math.PI * botplaySine) / 180);
-		} else botplayTxt.alpha = 1;
+		} else if(botplayTxt != null) botplayTxt.alpha = 1;
 
-		// 更新回放文本可见性
-		if(replayTxt != null) {
-			replayTxt.visible = isReplaying;
-		}
+		// 更新回放文本可见性；冲突态下 REPLAY 已并入 botplayTxt 双色行，独立文本隐藏避免重复
+		if(replayTxt != null)
+			replayTxt.visible = isReplaying && ClientPrefs.data.replayTextStyle == 'Replay' && !botConflict;
 
 		if (controls.PAUSE #if android || FlxG.android.justReleased.BACK #end && startedCountdown && canPause)
 		{
@@ -5008,7 +5059,7 @@ tempScore += '${lblScore}: ${songScore}';
 			else if (controls.justPressed('debug_4'))
 			{
 				cpuControlled = !cpuControlled;
-				botplayTxt.visible = cpuControlled;
+				markBotplayToggled(); // 解除冲突红色高亮；visible/颜色由 update 统一逻辑管理
 			}
 
 		}

@@ -492,6 +492,18 @@ class HudSettingsSubState extends BaseOptionsMenu
 			STRING,
 			['Kade', 'Psych']);
 		addOption(option);
+		// Replay 文本样式：默认复用 BOTPLAY；也可显示独立 REPLAY 文本或完全隐藏。
+		option = new Option(Language.get('replay_text_style'),
+			Language.get('replay_text_style_desc'),
+			'replayTextStyle',
+			STRING,
+			['BotPlay', 'Replay', 'None']);
+		option.valueLocalizations = [
+			'BotPlay' => Language.get('replay_text_botplay'),
+			'Replay' => Language.get('replay_text_replay'),
+			'None' => Language.get('replay_text_none')
+		];
+		addOption(option);
 		option = new Option(Language.get('showcase_style'),
 			Language.get("showcase_style_desc"),
 			'showcaseStyle',

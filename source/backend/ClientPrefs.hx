@@ -284,6 +284,8 @@ import haxe.io.BytesInput;
 	public var cpuStrums: Bool = true;
 	public var extrahp: Bool = true;
 	public var botplayStyle:String = "Psych(New)";
+	// Replay 文本样式：BotPlay（默认，复用 BOTPLAY 文本）| Replay（独立 REPLAY 文本）| None（不显示）
+	public var replayTextStyle:String = 'BotPlay';
 	public var showcaseStyle:String = "Psych";
 	public var fpsFont:String = "Psych";
 	public var timebarStyle:String = "Psych";
