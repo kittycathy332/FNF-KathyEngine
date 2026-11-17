@@ -120,19 +120,24 @@ class MusicBeatSubstate extends FlxSubState
 
 	override function destroy()
 	{
-		// 关键：MusicBeatSubstate.instance 是 Controls.requestedInstance 选 touchPad 的唯一依据。
-		// 如果 instance 还指向已销毁的内层 subState，或者在它 destroy 期间被置 null，
-		// Controls 就会要么查到 null.touchPad（崩溃/无效输入），要么 fallback 到顶层 MusicBeatState
-		// （其 touchPad 在进入 subState 时已被 removeTouchPad 清掉）。
-		// 这里先把 instance 置 null，让父级 closeSubState 重建自己的 instance 引用。
-		if (instance == this) instance = null;
+		// instance 是 Controls.requestedInstance 选 touchPad 的唯一依据。
+		//
+		// 关键时序：Flixel 的 closeSubState() 只打标记 _requestSubStateReset，
+		// 真正的 destroy() 延迟到下一帧 resetSubState() 才执行。也就是说
+		// 「关闭子子界面返回父级」时，父级的 closeSubState() 已经先把 instance
+		// 和 isInSubstate 指向/设回父级自己了，然后才轮到这里的 destroy()。
+		//
+		// 因此必须只在 instance 仍指向自己时（说明没有父级 substate 接管，
+		// 通常是整个 state 被 switchState 销毁）才清 instance 和 isInSubstate。
+		// 否则会把父级刚恢复的 isInSubstate=true 覆盖成 false，导致
+		// Controls.get_requestedInstance() fallback 到 touchPad 已被清空的顶层
+		// OptionsState —— 表现为「从子子界面返回后，父界面的虚拟键全部失效」。
+		if (instance == this)
+		{
+			instance = null;
+			controls.isInSubstate = false;
+		}
 
-		// 构造函数里置了 controls.isInSubstate = true，必须对称清 false。
-		// 之前分散在各子类（OptionsState、NotesColorSubStateLegacy、OutdatedSubState 等）
-		// 手动重置，容易漏（BasePrompt 就没重置导致取消后父界面卡死）。
-		// 统一在基类 destroy 里处理，子类手动重置的幂等无冲突。
-		controls.isInSubstate = false;
-		
 		removeTouchPad();
 		removeMobileControls();
 		
