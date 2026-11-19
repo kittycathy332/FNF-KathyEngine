@@ -306,7 +306,7 @@
     "note_timer_desc": "當兩首兩箭頭之間有 ≥3秒 空白時，在螢幕中間顯示圓形倒計時進度圈和秒數\n基於 Leather Engine 特性移植。",
     "note_timer_layer_desc": "設置箭頭倒計時圓和秒數所在的渲染組。\nUI 組 = 繪製在箭頭下方（箭頭蓋住圓）\n音符組 = 繪製在箭頭上方（圓蓋住箭頭）。",
     "note_timer_display_desc": "倒計時圓內的數字按什麼顯示。\nSeconds = 剩餘秒數（向上取整）\nBeats = 剩餘拍數（向上取整，會隨 BPM 變化）。",
-    "note_timer_stepped_desc": "啓用後圓環裁剪不再絲滑連續，而是按當前顯示模式（Beat 或 秒）離散跳變。\n配合 Beats 模式會讓圓環每拍跳一下，跟節拍同步。",
+    "note_timer_stepped_desc": "啓用後圓環裁剪不再絲滑連續，而是按當前顯示模式（Beat 或 秒）離散跳變，數字每次變化時也會放大再回落。\n關閉後圓環保持絲滑，數字保持預設大小正常倒數（數字仍會更新）。\n配合 Beats 模式會讓圓環每拍跳一下，跟節拍同步。",
     "fps_counter_style_desc": "在 Psych（原版）、Kathy（詳細）、Simple（Leather）與 V-Slice（原版 FNF）風格之間選擇。",
     "fps_counter_layer_name": "FPS 計數器圖層",
     "fps_counter_layer_desc": "Stage（螢幕空間）或 Game（1280x720）。",

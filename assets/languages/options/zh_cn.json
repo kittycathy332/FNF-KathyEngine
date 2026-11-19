@@ -318,7 +318,7 @@
     "note_timer_desc": "当两首两箭头之间有 ≥3秒 空白时，在屏幕中间显示圆形倒计时进度圈和秒数\n基于 Leather Engine 特性移植。",
     "note_timer_layer_desc": "设置箭头倒计时圆和秒数所在的渲染组。\nUI 组 = 绘制在箭头下方（箭头盖住圆）\n音符组 = 绘制在箭头上方（圆盖住箭头）。",
     "note_timer_display_desc": "倒计时圆内的数字按什么显示。\nSeconds = 剩余秒数（向上取整）\nBeats = 剩余拍数（向上取整，会随 BPM 变化）。",
-    "note_timer_stepped_desc": "启用后圆环裁剪不再丝滑连续，而是按当前显示模式（Beat 或 秒）离散跳变。\n配合 Beats 模式会让圆环每拍跳一下，跟节拍同步。",
+    "note_timer_stepped_desc": "启用后圆环裁剪不再丝滑连续，而是按当前显示模式（Beat 或 秒）离散跳变，数字每次变化时也会放大再回落。\n关闭后圆环保持丝滑，数字保持默认大小正常倒数（数字仍会更新）。\n配合 Beats 模式会让圆环每拍跳一下，跟节拍同步。",
     "fps_counter_style_desc": "在 Kathy（详细）、Psych（原版 PsychEngine）、Simple（Leather）与 V-Slice（原版 FNF）风格之间选择。",
     "fps_settings_button_desc": "自定义当前样式 FPS 计数器的外观与内容。",
     "simple_info_settings_button_desc": "自定义 Simple（Leather）风格 FPS 计数器的外观与内容。",

@@ -313,7 +313,7 @@
     "note_timer_desc": "When there's ≥3 seconds between player arrows, shows a circular countdown ring and number in the middle of the screen\nPorted from Leather Engine.",
     "note_timer_layer_desc": "Choose which render group the countdown circle and number belong to.\nUI Group = drawn behind the arrows (arrows cover the circle)\nNote Group = drawn in front of the arrows (circle covers the arrows).",
     "note_timer_display_desc": "What the number inside the countdown circle represents.\nSeconds = remaining seconds (rounded up)\nBeats = remaining beats (rounded up, changes with BPM).",
-    "note_timer_stepped_desc": "When enabled, the circle no longer shrinks smoothly every frame — it jumps by whole beat/second steps.\nPairs with Beats mode for a circle that pulses on every beat.",
+    "note_timer_stepped_desc": "When enabled, the circle no longer shrinks smoothly every frame — it jumps by whole beat/second steps, and the number pulses (grows then settles) each time it changes.\nWhen disabled, the circle stays smooth and the number keeps its normal size while still counting down.\nPairs with Beats mode for a circle that pulses on every beat.",
     "fps_counter_style_desc": "Choose between Kathy (detailed), Psych (vanilla), Simple (Leather) or V-Slice (vanilla FNF) style.",
     "fps_settings_button_desc": "Customize the FPS counter style currently in use.",
     "simple_info_settings_button_desc": "Customize Simple (Leather) style FPS counter appearance and content.",

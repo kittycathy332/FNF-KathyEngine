@@ -184,11 +184,12 @@ class NoteTimer extends FlxSpriteGroup
 						circleShader.percent.value = [percent];
 						var curNum:Int = Std.int(numLeft);
 						timerText.text = curNum + "";
-						// 数字变化时触发放大跳动（Beats 模式每拍都变 → 很密集；Seconds 模式每秒变一次）
+						// 数字变化时触发放大跳动（仅在「跳剪」动效启用时；Beats 模式每拍都变 → 很密集）
 						if (curNum != prevShownNum)
 						{
 							prevShownNum = curNum;
-							textScale = 1.55; // 瞬时放大
+							if (backend.ClientPrefs.data.noteTimerStepped)
+								textScale = 1.55; // 瞬时放大
 						}
 					}
 					updatePosition();
@@ -198,8 +199,11 @@ class NoteTimer extends FlxSpriteGroup
 					targetAlpha = 1.0;
 			}
 
-			// 放大效果每帧 lerp 回 1.0，形成弹性衰减
-			textScale = FlxMath.lerp(textScale, 1.0, elapsed * 10);
+			// 放大效果每帧 lerp 回 1.0，形成弹性衰减；关闭「跳剪」时直接锁定默认大小
+			if (backend.ClientPrefs.data.noteTimerStepped)
+				textScale = FlxMath.lerp(textScale, 1.0, elapsed * 10);
+			else
+				textScale = 1.0;
 			timerText.scale.set(textScale, textScale);
 
 			timerText.alpha = FlxMath.lerp(timerText.alpha, targetAlpha, elapsed * 5);
