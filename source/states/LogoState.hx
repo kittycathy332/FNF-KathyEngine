@@ -111,7 +111,11 @@ class LogoState extends MusicBeatState
 		bg = new FlxSprite().loadGraphic(getBgGradient());
 		bg.setGraphicSize(FlxG.width, FlxG.height * 2);
 		bg.updateHitbox();
+		// updateHitbox() 会把 offset 设成 (-W/2, -(2H-512)/2)、origin 设成中心。
+		// 背景要左上角对齐铺满，两者都必须清零；只清 origin 会让 drawComplex 里
+		// getScreenPosition().subtractPoint(offset) 把背景往右下推半屏，露出黑边。
 		bg.origin.set(0, 0);
+		bg.offset.set(0, 0);
 		bg.x = 0;
 		bg.y = 0;
 		bgY = 0;
@@ -508,6 +512,11 @@ class LogoState extends MusicBeatState
 
 		bg.setGraphicSize(FlxG.width, FlxG.height * 2);
 		bg.updateHitbox();
+		// 和 create() 一致：updateHitbox() 重置了 origin 与 offset，
+		// 背景必须保持左上角锚点，否则整块往右下偏移半屏。
+		bg.origin.set(0, 0);
+		bg.offset.set(0, 0);
+		bg.x = 0;
 		var cx:Float = FlxG.width / 2;
 		var cy:Float = FlxG.height / 2;
 
