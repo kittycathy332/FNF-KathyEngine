@@ -215,7 +215,12 @@ class KathyFPSCounterSettingsState extends MusicBeatState
 		rightBg2.visible = true;
 		add(rightBg2);
 
-		previewBg = new FlxSprite(0, 0).makeGraphic(0, 0, ClientPrefs.data.fpsBgColor);
+		// 用固定 key 的 1x1 白图：之后靠 setGraphicSize 缩放 + color 染色实现任意底色。
+		// 原实现每次预览刷新都 makeGraphic(动态宽, 动态高, 动态色)，而 FlxGraphic.fromRectangle
+		// 以 "宽x高:颜色" 为缓存 key，每个新组合都永久驻留 FlxG.bitmap 缓存（GC 回收不了），
+		// 切字号/拖拾色器时涨几 MB 不回落。
+		previewBg = new FlxSprite(0, 0).makeGraphic(1, 1, FlxColor.WHITE, false, 'fpsPreviewBg');
+		previewBg.color = ClientPrefs.data.fpsBgColor;
 		previewBg.alpha = ClientPrefs.data.fpsBgOpacity;
 		add(previewBg);
 
@@ -404,11 +409,16 @@ class KathyFPSCounterSettingsState extends MusicBeatState
 
 		previewText.text = text;
 		previewText.color = ClientPrefs.data.fpsColor;
-		previewText.size = ClientPrefs.data.fpsFontSize;
+		// FlxText.size 的 setter 无相等守卫，赋值即强制重绘；加守卫避免每次刷新重建位图
+		if (previewText.size != ClientPrefs.data.fpsFontSize)
+			previewText.size = ClientPrefs.data.fpsFontSize;
 		previewText.alpha = ClientPrefs.data.fpsOpacity;
 
 		var padding = ClientPrefs.data.fpsBgPadding;
-		previewBg.makeGraphic(Std.int(previewText.width + padding * 2), Std.int(previewText.height + padding * 2), ClientPrefs.data.fpsBgColor);
+		// 缩放固定白图 + 染色，替代 makeGraphic(动态尺寸,动态颜色)——后者每次新组合都进全局位图缓存常驻
+		previewBg.setGraphicSize(Std.int(previewText.width + padding * 2), Std.int(previewText.height + padding * 2));
+		previewBg.updateHitbox();
+		previewBg.color = ClientPrefs.data.fpsBgColor;
 		previewBg.alpha = ClientPrefs.data.fpsBgEnabled ? ClientPrefs.data.fpsBgOpacity : 0.2;
 		previewBg.setPosition(800 - padding, 200 - padding);
 		previewText.setPosition(800, 200);

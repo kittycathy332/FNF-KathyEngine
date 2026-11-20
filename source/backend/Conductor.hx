@@ -213,6 +213,13 @@ class Conductor
 
 	public static function getStep(time:Float):Float
 	{
+		// 零分配快路径（2026-11-20）：所有界面每帧都会调用本函数（MusicBeatState.updateCurStep），
+		// 多数界面 bpmChangeMap 为空，此时 getRawSegmentByTime 会 new 一个匿名 struct。
+		// 空 map 时默认段为 {stepTime:0, songTime:0, stepCrochet:STEP_MS/bpm, rampSteps:0}，
+		// 下面结果与之完全等价，但不分配任何对象。
+		if (bpmChangeMap.length == 0)
+			return time / stepCrochet;
+
 		var seg = getRawSegmentByTime(time);
 		if (seg.rampSteps == null || seg.rampSteps <= 0)
 			return seg.stepTime + (time - seg.songTime) / seg.stepCrochet;

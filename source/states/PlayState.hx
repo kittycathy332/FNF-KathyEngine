@@ -567,6 +567,11 @@ class PlayState extends MusicBeatState
 	private var gameFroze:Bool = false;
 	private var requiresSyncing:Bool = false;
 	private var lastCorrectSongPos:Float = -1.0;
+	// 看门狗线程代次（2026-11-20）：runSongSyncThread 在 create/resume/onFocus 都会调用。
+	// cpp 的 sys.thread.Thread 无法 join/kill，只能靠共享标志让线程自行退出。
+	// 每次启动递增代次，闭包捕获创建时的值；旧线程发现代次过时立即退出，
+	// 把"焦点反复切换导致线程单调累积、每条钉住一个 PlayState"变成恒定少量。
+	private var _syncThreadGen:Int = 0;
 
 	public static var _lastLoadedModDirectory:String = '';
 	// 歌曲音频所在模组的探测结果缓存（song -> audioModDir，''=内置）。
@@ -587,6 +592,13 @@ class PlayState extends MusicBeatState
 	public var opponentAudioAnalyzer:SpectralAnalyzer;
 	public var playerAudioAnalyzer:SpectralAnalyzer;
 
+	// getLevels() 支持传入复用数组：不传时每次 new Array<Bar> + N 个匿名 Bar 对象。
+	// 这三个缓冲让 Lua 每帧调用 get*AudioLevels() 时省掉这些分配；返回的 Float 数组
+	// 仍每次新建，保持"每个返回值是独立引用"的原有语义，不影响 modchart。
+	var _audioBarBuf:Array<funkin.vis.dsp.Bar> = [];
+	var _opponentBarBuf:Array<funkin.vis.dsp.Bar> = [];
+	var _playerBarBuf:Array<funkin.vis.dsp.Bar> = [];
+
 	public function initAnalyzer(barCount:Int, maxDelta:Float = 0.01, peakHold:Int = 30) {
 		@:privateAccess
 		if (FlxG.sound.music == null || FlxG.sound.music._channel == null || FlxG.sound.music._channel.__audioSource == null) return;
@@ -600,7 +612,7 @@ class PlayState extends MusicBeatState
 	}
 
 	public function getAudioLevels() {
-		var levels = audioAnalyzer.getLevels();
+		var levels = audioAnalyzer.getLevels(_audioBarBuf);
 		return [for (i in levels) i.value];
 	}
 
@@ -618,7 +630,7 @@ class PlayState extends MusicBeatState
 
 	public function getOpponentAudioLevels() {
 		if (opponentAudioAnalyzer == null) return null;
-		var levels = opponentAudioAnalyzer.getLevels();
+		var levels = opponentAudioAnalyzer.getLevels(_opponentBarBuf);
 		return [for (i in levels) i.value];
 	}
 
@@ -636,7 +648,7 @@ class PlayState extends MusicBeatState
 
 	public function getPlayerAudioLevels() {
 		if (playerAudioAnalyzer == null) return null;
-		var levels = playerAudioAnalyzer.getLevels();
+		var levels = playerAudioAnalyzer.getLevels(_playerBarBuf);
 		return [for (i in levels) i.value];
 	}
 
@@ -8885,6 +8897,7 @@ tempScore += '${lblScore}: ${songScore}';
 		modchartSounds = null;
 
 		Note.globalRgbShaders = [];
+		Note.globalColorSwapShaders = []; // 与设置界面的清理保持对称，避免 legacy 配色 shader 跨局残留
 		backend.NoteTypesConfig.clearNoteTypesData();
 
 		NoteSplash.configs.clear();
@@ -8895,6 +8908,7 @@ tempScore += '${lblScore}: ${songScore}';
 		// clearStoredMemory() 会清缓存 + 重置保护列表，且不强制 GC（退出瞬间不卡顿）。
 		Paths.clearStoredMemory();
 		shutdownThread = true;
+		_syncThreadGen++; // 让所有代次的看门狗线程退出，释放对 this(整个state图)的引用
 		FlxG.signals.preUpdate.remove(checkForResync);
 		
 		// 恢复原始判定设置
@@ -9932,9 +9946,12 @@ tempScore += '${lblScore}: ${songScore}';
 	{
 		// 离线渲染单帧可能远超看门狗的 250ms 阈值，会被误判卡死并 setSongTime 倒带
 		if (backend.RenderClock.active) return;
+		// 递增代次使之前启动的旧线程失效（它们最多再活一个 250ms 睡眠周期即退出），
+		// 杜绝 resume/onFocus 反复调用造成的线程累积与整state图泄漏。
+		var myGen:Int = ++_syncThreadGen;
 		Thread.create(function()
 		{
-			while (!endingSong && !paused && !shutdownThread)
+			while (myGen == _syncThreadGen && !endingSong && !paused && !shutdownThread)
 			{
 				if (requiresSyncing)
 					continue;

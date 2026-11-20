@@ -56,27 +56,29 @@ class Highscore
 	/**
 	 * YOU SHOULD FORMAT SONG WITH formatSong() BEFORE TOSSING IN SONG VARIABLE
 	 */
-	static function setScore(song:String, score:Int):Void
+	// doFlush=false 用于"读时补零"：只更新内存中的存档 Map，不同步写盘。
+	// 2026-11-20：getScore/getRating/getWeekScore 在 key 缺失时会补 0，
+	// 原实现走 setScore→flush() 同步写整个存档文件。Freeplay 快速滚动经过未打过的歌时
+	// 每首触发 2 次 flush，是"时不时卡一下"的主因。补零条目本来就在 songScores 这个
+	// 与 FlxG.save.data 共享引用的 Map 里，退出时 OpenFL 会自动 flush，不会丢。
+	static function setScore(song:String, score:Int, ?doFlush:Bool = true):Void
 	{
-		// Reminder that I don't need to format this song, it should come formatted!
 		songScores.set(song, score);
 		FlxG.save.data.songScores = songScores;
-		FlxG.save.flush();
+		if (doFlush) FlxG.save.flush();
 	}
-	static function setWeekScore(week:String, score:Int):Void
+	static function setWeekScore(week:String, score:Int, ?doFlush:Bool = true):Void
 	{
-		// Reminder that I don't need to format this song, it should come formatted!
 		weekScores.set(week, score);
 		FlxG.save.data.weekScores = weekScores;
-		FlxG.save.flush();
+		if (doFlush) FlxG.save.flush();
 	}
 
-	static function setRating(song:String, rating:Float):Void
+	static function setRating(song:String, rating:Float, ?doFlush:Bool = true):Void
 	{
-		// Reminder that I don't need to format this song, it should come formatted!
 		songRating.set(song, rating);
 		FlxG.save.data.songRating = songRating;
-		FlxG.save.flush();
+		if (doFlush) FlxG.save.flush();
 	}
 
 	public static function formatSong(song:String, diff:Int):String
@@ -97,7 +99,7 @@ class Highscore
 	{
 		var daSong:String = namespacedKey(song, diff, folder);
 		if (!songScores.exists(daSong))
-			setScore(daSong, 0);
+			setScore(daSong, 0, false); // 补零不写盘，避免快速滚动卡顿
 
 		return songScores.get(daSong);
 	}
@@ -106,7 +108,7 @@ class Highscore
 	{
 		var daSong:String = namespacedKey(song, diff, folder);
 		if (!songRating.exists(daSong))
-			setRating(daSong, 0);
+			setRating(daSong, 0, false); // 补零不写盘
 
 		return songRating.get(daSong);
 	}
@@ -115,7 +117,7 @@ class Highscore
 	{
 		var daWeek:String = namespacedKey(week, diff, folder);
 		if (!weekScores.exists(daWeek))
-			setWeekScore(daWeek, 0);
+			setWeekScore(daWeek, 0, false); // 补零不写盘
 
 		return weekScores.get(daWeek);
 	}

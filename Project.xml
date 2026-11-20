@@ -204,7 +204,10 @@
 	<!--Used for crash handler-->
 	<section if="cpp">
 		<haxedef name="HXCPP_CHECK_POINTER" />
-		<haxedef name="HXCPP_STACK_LINE" />
+		<!-- HXCPP_STACK_LINE 会在每次函数调用都植入行号记录，是全界面恒定的性能开销。
+		     2026-11-20 性能诊断：仅 debug 构建启用；release 保留 STACK_TRACE+CATCH_SEGV
+		     仍能抓崩溃堆栈，只是没有精确到行号。要行号时用 debug 包。 -->
+		<haxedef name="HXCPP_STACK_LINE" if="debug" />
 		<haxedef name="HXCPP_STACK_TRACE" />
 		<haxedef name="HXCPP_CATCH_SEGV" />
 		<!-- HXCPP_GC_BIG_BLOCKS 的 A/B 结论（2026-11-16）：

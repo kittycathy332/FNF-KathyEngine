@@ -1063,9 +1063,12 @@ class LoadingState extends MusicBeatState
 			{
 				trace('ERROR! fail on preloading $traceData: $e');
 			}
-			// mutex.acquire();
+			// 2026-11-20 修复：loaded 由线程池多 worker 并发 ++（read-modify-write，非原子）。
+			// 之前锁被注释掉，丢失更新会让 loaded 永远追不上 loadMax，sparrow 图集队列
+			// 永不构建，进游戏后相关贴图缺失。与 preloadSound 等共用同一把 mutex。
+			mutex.acquire();
 			loaded++;
-			// mutex.release();
+			mutex.release();
 		});
 	}
 

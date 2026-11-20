@@ -84,6 +84,10 @@ class Alphabet extends FlxSpriteGroup
 	private function set_text(newText:String)
 	{
 		newText = newText.replace('\\n', '\n');
+		// 相等守卫：原实现每次赋值都 clearLetters()+createLetters()，拾色器拖拽时
+		// R/G/B/HEX 四个 Alphabet 每帧全量重建字母（每个字母还新建动画/Frame 数组）。
+		// 文本没变且已有字母时跳过，语义完全等价；letters 为空（构造期）仍照常构建。
+		if (newText == text && letters.length > 0) return newText;
 		clearLetters();
 		createLetters(newText);
 		updateAlignment();

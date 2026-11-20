@@ -147,6 +147,8 @@ class Paths
 			{
 				Assets.cache.clear(key);
 				currentTrackedSounds.remove(key);
+				var lruIdx:Int = _soundLru.indexOf(key);
+				if (lruIdx >= 0) _soundLru.splice(lruIdx, 1);
 			}
 		}
 		// flags everything to be cleared out next unused memory clear
@@ -202,6 +204,7 @@ class Paths
 				Assets.cache.clear(key);
 		}
 		currentTrackedSounds = [];
+		_soundLru = [];
 
 		// FlxG.bitmap 里的其它图形、atlas 缓存、资源缓存全清（同样跳过保护图）
 		for (key in FlxG.bitmap._cache.keys())
@@ -690,6 +693,8 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 		if (file == null || file.length == 0 || !currentTrackedSounds.exists(file))
 			return;
 		currentTrackedSounds.remove(file);
+		var lruIdx:Int = _soundLru.indexOf(file);
+		if (lruIdx >= 0) _soundLru.splice(lruIdx, 1);
 		#if !html5
 		try { Assets.cache.clear(file); } catch (e:Dynamic) {}
 		#end
@@ -698,7 +703,8 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 	// 与 returnSound 相同的加载/缓存逻辑，但仅按给定绝对路径判定，不触发模组与原生之间的回退链。
 	static function loadSoundAtPath(file:String):Sound
 	{
-		if (!currentTrackedSounds.exists(file))
+		var isNewLoad:Bool = !currentTrackedSounds.exists(file);
+		if (isNewLoad)
 		{
 			#if sys
 			if (FileSystem.exists(file))
@@ -719,6 +725,8 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 			else
 				currentTrackedSounds.set(file, null);
 		}
+		touchSoundLru(file);
+		if (isNewLoad) trimSoundCache(); // 同 returnSound：仅新解码时检查淘汰
 		return currentTrackedSounds.get(file);
 	}
 
@@ -981,6 +989,69 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 
 	public static var currentTrackedSounds:Map<String, Sound> = [];
 
+	// 音频解码 LRU（2026-11-20）：Sound.fromFile 会把整首 OGG 解码成 PCM 常驻，
+	// 一首 3min 立体声约 30MB。旧实现只增不减，长时间游玩/浏览后音频缓存单调膨胀，
+	// 表现为"播个音频涨一大截运存且不回落"。这里记录访问顺序，超限淘汰最久未用、
+	// 且【当前无任何 FlxSound 引用】的条目——只动缓存表，不碰调用方已持有的 Sound 引用，
+	// 因此对模组兼容性零影响（模组若仍持有引用，Sound 对象继续存活，只是不再被缓存命中）。
+	// 阈值保守取 24：足以覆盖同时播放的 Inst/Voices + 常用 UI/打击音效，正常游玩几乎不触发。
+	static var _soundLru:Array<String> = [];
+	static inline var SOUND_CACHE_LIMIT:Int = 24;
+
+	// 标记一次音频访问（命中或新加载）：把 key 提到 LRU 末尾。
+	static function touchSoundLru(file:String):Void
+	{
+		if (file == null || file.length == 0) return;
+		var idx:Int = _soundLru.indexOf(file);
+		if (idx >= 0) _soundLru.splice(idx, 1);
+		_soundLru.push(file);
+	}
+
+	// 判断某音频是否仍被任何存活 FlxSound 引用（含 music 与 list 中的实例）。
+	// 有引用就绝不淘汰，从根本上杜绝"正在播放/暂停待恢复的音乐被释放"导致中断或崩溃。
+	static function soundInUse(snd:Sound):Bool
+	{
+		if (snd == null) return false;
+		@:privateAccess
+		{
+			if (FlxG.sound.music != null && FlxG.sound.music._sound == snd) return true;
+			for (fs in FlxG.sound.list)
+				if (fs != null && fs._sound == snd) return true;
+		}
+		return false;
+	}
+
+	// 缓存条目超限时，单趟扫描 LRU，从最久未用的一端淘汰最多 over 个可安全释放的音频。
+	// 保护项（dumpExclusions）与仍被引用的音频跳过；不在缓存表的孤儿 key 顺手清掉。
+	static function trimSoundCache():Void
+	{
+		var total:Int = 0;
+		for (_ in currentTrackedSounds.keys()) total++;
+		var over:Int = total - SOUND_CACHE_LIMIT;
+		if (over <= 0) return;
+
+		var removed:Int = 0;
+		var i:Int = 0;
+		while (i < _soundLru.length && removed < over)
+		{
+			var file:String = _soundLru[i];
+			if (!currentTrackedSounds.exists(file))
+			{
+				_soundLru.splice(i, 1); // 孤儿，索引不前进
+				continue;
+			}
+			var snd:Sound = currentTrackedSounds.get(file);
+			if (snd != null && (dumpExclusions.contains(file) || soundInUse(snd)))
+			{
+				i++; // 受保护/在用，跳过
+				continue;
+			}
+			_soundLru.splice(i, 1);
+			releaseSoundCache(file);
+			removed++;
+		}
+	}
+
 	/// Atlas 缓存：getSparrowAtlas / getPackerAtlas / getAsepriteAtlas 结果缓存，
 	/// 避免每次都 File.getContent + XML 解析 + FlxAtlasFrames.fromSparrow 重建 Frames 对象。
 	/// mod 列表变化时需手动调 clearAtlasCache()（Mods.invalidateDirectoriesCache 后会被调）。
@@ -992,7 +1063,8 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 		var file:String = getPath(LanguageBasic.getFileTranslation(key) + '.$SOUND_EXT', SOUND, path, modsAllowed);
 
 		//trace('precaching sound: $file');
-		if(!currentTrackedSounds.exists(file))
+		var isNewLoad:Bool = !currentTrackedSounds.exists(file);
+		if(isNewLoad)
 		{
 			#if sys
 			if(FileSystem.exists(file))
@@ -1019,6 +1091,10 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 			}
 		}
 		trackLocalAsset(file);
+		touchSoundLru(file);
+		// 只在真正新解码音频后才检查淘汰；缓存命中（如快速滚动反复播放 scrollMenu）
+		// 不做全表枚举，避免在 Freeplay 切歌热路径引入额外开销。
+		if (isNewLoad) trimSoundCache();
 		return currentTrackedSounds.get(file);
 	}
 

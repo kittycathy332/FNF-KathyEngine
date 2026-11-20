@@ -80,6 +80,7 @@ class FunkinDebugDisplay extends Sprite
 
 	function set_mode(value:String):String
 	{
+		if (mode == value) return value; // 值没变不重建（原先每次赋值都整块重建 DisplayObject）
 		mode = value;
 		buildDebugDisplay();
 		return value;

@@ -193,7 +193,9 @@ class SimpleInfoDisplaySettingsState extends MusicBeatState
 		rightBg2.visible = true;
 		add(rightBg2);
 
-		previewBg = new FlxSprite(0, 0).makeGraphic(0, 0, FlxColor.BLACK);
+		// 固定 key 的 1x1 白图 + 染色，避免 updatePreview 里 makeGraphic(动态宽,高) 每次进全局位图缓存常驻
+		previewBg = new FlxSprite(0, 0).makeGraphic(1, 1, FlxColor.WHITE, false, 'simpleInfoPreviewBg');
+		previewBg.color = FlxColor.BLACK;
 		previewBg.alpha = 0.8;
 		add(previewBg);
 
@@ -342,10 +344,13 @@ class SimpleInfoDisplaySettingsState extends MusicBeatState
 
 		previewText.text = text;
 		previewText.color = ClientPrefs.data.simpleInfoColor;
-		previewText.size = ClientPrefs.data.simpleInfoFontSize;
+		if (previewText.size != ClientPrefs.data.simpleInfoFontSize)
+			previewText.size = ClientPrefs.data.simpleInfoFontSize;
 
 		var padding = 10;
-		previewBg.makeGraphic(Std.int(previewText.width + padding * 2), Std.int(previewText.height + padding * 2), FlxColor.BLACK);
+		// 缩放固定白图替代 makeGraphic(动态尺寸)，消除常驻位图缓存增长
+		previewBg.setGraphicSize(Std.int(previewText.width + padding * 2), Std.int(previewText.height + padding * 2));
+		previewBg.updateHitbox();
 		previewBg.setPosition(800 - padding, 200 - padding);
 		previewText.setPosition(800, 200);
 	}

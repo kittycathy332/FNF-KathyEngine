@@ -193,9 +193,11 @@ class MusicBeatState extends FlxState
 			_lastFullscreen = FlxG.fullscreen;
 		}
 		
-		stagesFunc(function(stage:BaseStage) {
-			stage.update(elapsed);
-		});
+		// 展开 stagesFunc(闭包) 为直接循环：闭包每帧 new 一个实例，42 个 state 继承此类，
+		// 是覆盖全界面的每帧堆分配来源。过滤条件与 stagesFunc 保持一致。
+		for (stage in stages)
+			if (stage != null && stage.exists && stage.active)
+				stage.update(elapsed);
 
 		super.update(elapsed);
 	}

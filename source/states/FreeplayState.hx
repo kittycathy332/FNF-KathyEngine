@@ -287,7 +287,8 @@ class FreeplayState extends MusicBeatState
 		// 实测 Max Stall 达 26.8 秒。改为只在确定游玩（按回车）时才同步解析 + 转谱，
 		// 并由 convertingText 显示进度，避免玩家误以为卡死。
 		// 保留 drainPrefetched() 是为了消化停药前已入队的任务；之后不再投递新任务。
-		drainPrefetched();
+		// worker 从未启动过时 _prefetchDone 恒空，跳过以免每帧白拿两把锁 + 空遍历。
+		if (_prefetchWorkerRunning) drainPrefetched();
 		#if false
 		if (player.playingMusic || songs.length == 0 || curDifficulty < 0 || curSelected < 0 || curSelected >= songs.length)
 			return;
@@ -419,6 +420,12 @@ class FreeplayState extends MusicBeatState
 	// 每行 Alphabet 都要为每个字母做一次图集前缀扫描，快速滚动时这一项是主要的单帧耗时来源，
 	// 因此压到 4：一屏（±_drawDistance）仍能在两帧内填满，但单帧尖峰减半。
 	private static inline var TEXT_CREATE_PER_FRAME:Int = 4;
+	// 帧级创建预算（2026-11-20）：updateVisibleItems 一帧内会被 changeSelection 和 updateTexts
+	// 各调用一次（快速滚动时 changeSelection 甚至一帧多次），原实现的 created/iconCreated 是
+	// 函数内局部变量，每次调用从 0 重置，预算被放大 2~3 倍。改为帧级共享计数器，在 update()
+	// 开头归零，保证无论一帧调用几次，单帧最多仍只创建 TEXT_CREATE_PER_FRAME 行。
+	private var _frameTextCreated:Int = 0;
+	private var _frameIconCreated:Int = 0;
 	// 远距离回收：离选中项超过该行数的条目会被移除并置空，内存不随浏览时长/曲库规模增长
 	private static inline var RECYCLE_DISTANCE:Int = 40;
 	private static inline var RECYCLE_PER_FRAME:Int = 24;
@@ -1729,6 +1736,10 @@ class FreeplayState extends MusicBeatState
 
 	override function update(elapsed:Float)
 	{
+		// 帧级创建预算归零：保证 updateVisibleItems 无论本帧被调用几次，总量受同一预算约束
+		_frameTextCreated = 0;
+		_frameIconCreated = 0;
+
 		if (WeekData.weeksList.length < 1)
 			return;
 
@@ -3041,9 +3052,8 @@ class FreeplayState extends MusicBeatState
 		var max:Int = Math.round(Math.max(0, Math.min(songs.length, lerpSelected + _drawDistance)));
 
 		// 选中行优先按需创建：整页跳转时保证焦点那一行一定是完整的
-		var created:Int = 0;
 		if (curSelected >= min && curSelected < max && songTextArray[curSelected] == null && ensureSongText(curSelected) != null)
-			created++;
+			_frameTextCreated++;
 
 		// 只显示可见范围内的文本对象；未创建的按需创建（每帧有上限，避免整页跳转时一次性建太多行卡顿）
 		for (i in min...max)
@@ -3051,10 +3061,10 @@ class FreeplayState extends MusicBeatState
 			var item:Alphabet = songTextArray[i];
 			if (item == null)
 			{
-				if (created >= TEXT_CREATE_PER_FRAME)
+				if (_frameTextCreated >= TEXT_CREATE_PER_FRAME)
 					continue;
 				item = ensureSongText(i);
-				created++;
+				_frameTextCreated++;
 				if (item == null)
 					continue;
 			}
@@ -3071,7 +3081,6 @@ class FreeplayState extends MusicBeatState
 		hideLastIcons();
 		var iconMin:Int = Math.round(Math.max(0, Math.min(songs.length, lerpSelected - ICON_RADIUS)));
 		var iconMax:Int = Math.round(Math.max(0, Math.min(songs.length, lerpSelected + ICON_RADIUS)));
-		var iconCreated:Int = 0;
 		for (i in iconMin...iconMax)
 		{
 			var songItem:Alphabet = songTextArray[i];
@@ -3082,10 +3091,10 @@ class FreeplayState extends MusicBeatState
 			if (icon == null)
 			{
 				// 按需创建（每帧有上限，把 PNG 解码/文件系统探测摊到多帧）
-				if (iconLoadStatus[i] || iconCreated >= ICON_WARM_PER_FRAME)
+				if (iconLoadStatus[i] || _frameIconCreated >= ICON_WARM_PER_FRAME)
 					continue;
 				icon = ensureIcon(i);
-				iconCreated++;
+				_frameIconCreated++;
 				if (icon == null)
 					continue;
 			}

@@ -264,8 +264,12 @@ class DebugDisplaySettingsState extends MusicBeatState
 	function refreshPreview():Void
 	{
 		if (previewDisplay == null) return;
-		previewDisplay.mode = ClientPrefs.data.fpsDebugMode;
-		previewDisplay.applySettings();
+		// 原实现无条件 mode= (setter 重建一次) + applySettings() (再重建一次)，每次切换整块重建两遍。
+		// 现在：mode 变了由 setter 重建；没变则只在需要时 applySettings 一次。
+		if (previewDisplay.mode != ClientPrefs.data.fpsDebugMode)
+			previewDisplay.mode = ClientPrefs.data.fpsDebugMode;
+		else
+			previewDisplay.applySettings();
 		// 取色器打开时临时隐藏预览，避免遮挡取色 UI
 		previewDisplay.visible = _previewRevealed && !onColorPicker && ClientPrefs.data.fpsStyle == "V-Slice" && ClientPrefs.data.fpsDebugMode != "Off";
 	}
