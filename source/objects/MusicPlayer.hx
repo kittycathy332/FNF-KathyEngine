@@ -76,6 +76,8 @@ class MusicPlayer extends FlxGroup
 	var transportHeight:Float = 0;
 	/** 面板实际高度：按内容自适应，避免中间出现一条空白带 */
 	var panelH:Float = PANEL_HEIGHT;
+	/** 进度条底边的屏幕 y 坐标（供 FreeplayState 贴靠 BPM 提示用，随 layout 更新） */
+	public var progressBarBottomY:Float = 0;
 
 	var wasPlaying:Bool;
 
@@ -532,6 +534,7 @@ class MusicPlayer extends FlxGroup
 		progressBarBG.y = barY;
 		progressBarFill.x = barX;
 		progressBarFill.y = barY;
+		progressBarBottomY = barY + barH; // 暴露给 BPM 提示贴靠
 
 		// 三颗控制按钮：文字在按钮格内居中，按下时下沉一点形成"按下去"的立体感
 		for (i in 0...3)

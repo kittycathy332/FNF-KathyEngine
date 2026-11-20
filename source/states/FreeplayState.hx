@@ -463,7 +463,92 @@ class FreeplayState extends MusicBeatState
 	private var bpmTextBG:FlxSprite;
 	private var _scorePrefix:String = null; // 缓存评分前缀文本，避免每帧 Language.get 分配字符串
 	private var lastBPM:Float = -1;
+	/** 上一次 BPM 段的目标值（null=非过渡段）。 */
+	private var lastBpmRampEnd:Null<Float> = null;
+	/** 上一帧是否处于线性过渡进行中。过渡结束靠它每帧检测 true→false，不能等 100ms 轮询（否则卡一下）。 */
+	private var lastInRamp:Bool = false;
+	/** 过渡结束黄闪的剩余时间（>=0 表示正在黄闪，到 0 后恢复白色）。 */
+	private var bpmRampFlashTime:Float = -1;
+	private static inline var BPM_FLASH_DURATION:Float = 0.8;
 	private var bpmDisplayTime:Float = 0;
+	// BPM 检测用累加器替代取模窗口：取模写法（songPosition%250<16）在掉帧/低帧率时
+	// 容易错过 16ms 窗口，导致 BPM 变化延迟最多 250ms 才显示。
+	private var bpmCheckAccum:Float = 0;
+
+	/** BPM 数值文本：整数不带小数，其余最多一位（四舍五入到 0.1）。普通段用。 */
+	private static function formatBpmValue(v:Float):String
+	{
+		var tenths:Int = Math.round(v * 10);
+		if (tenths % 10 == 0) return Std.string(Std.int(tenths / 10));
+		return '${Std.int(Math.floor(tenths / 10))}.${tenths % 10}';
+	}
+
+	/** 过渡期间的瞬时值：固定一位小数（如 145.0），与"最多一位"的普通显示区分。 */
+	private static function formatBpmFixed1(v:Float):String
+	{
+		var tenths:Int = Math.round(v * 10);
+		return '${Std.int(Math.floor(tenths / 10))}.${tenths % 10}';
+	}
+
+	/** 取 BPM 段的目标值（非过渡段返回 null）。 */
+	private static function getRampEnd(seg:Dynamic):Null<Float>
+	{
+		return (seg.rampSteps != null && seg.rampSteps > 0 && seg.endBPM != null) ? seg.endBPM : null;
+	}
+
+	/**
+	 * 刷新 BPM 文本并按需着色（项目已有 applyMarkup 单行多色原理）。
+	 * mode: 0=普通（白色）、1=过渡中（瞬时值按趋势上色）、2=过渡到位黄闪。
+	 * 用 ASCII "->" 而非 Unicode 箭头，保证 vcr.ttf 能显示。
+	 */
+	private function refreshBpmText(seg:Dynamic, mode:Int):Void
+	{
+		var cur:Float = seg.bpm;
+		var rampEnd:Null<Float> = getRampEnd(seg);
+		var text:String;
+		var color:Int = 0xFFFFFFFF;
+
+		if (mode == 1 && rampEnd != null)
+		{
+			// 过渡中：瞬时值 §标色§，目标值与箭头保持默认白色
+			var curStr:String = formatBpmFixed1(cur);
+			text = 'BPM: §$curStr§ -> ${formatBpmValue(rampEnd)}';
+			color = (rampEnd > cur) ? 0xFFFF5040 : 0xFF40D040; // 涨红跌绿（中国习惯）
+		}
+		else if (mode == 2)
+		{
+			// 过渡到位：立即显示最终整数值（不带小数点），颜色由黄渐变回白
+			text = 'BPM: §${formatBpmValue(cur)}§';
+			color = 0xFFFFD54F;
+		}
+		else text = 'BPM: ${formatBpmValue(cur)}';
+
+		bpmText.clearFormats();
+		bpmText.text = text;
+		if (color != 0xFFFFFFFF)
+			bpmText.applyMarkup(text, [new FlxTextFormatMarkerPair(new FlxTextFormat(color), '§')]);
+		bpmText.x = FlxG.width - bpmText.width - 6;
+		bpmText.y = player.progressBarBottomY + 4;
+		refreshBpmBackground();
+	}
+
+	/**
+	 * 黄闪期间每帧把 §标色§ 片段从黄色平滑插值到白色（避免黄→白瞬间硬切）。
+	 * 依赖 refreshBpmText(mode=2) 已写入的 §...§ 标记。
+	 */
+	private function updateBpmFlashColor():Void
+	{
+		var t:Float = 1 - (bpmRampFlashTime / BPM_FLASH_DURATION); // 0=刚到位(黄) 1=结束(白)
+		if (t < 0) t = 0;
+		if (t > 1) t = 1;
+		// 黄 0xFFFFD54F → 白 0xFFFFFFFF，逐通道线性插值
+		var r:Int = Std.int(0xFF + (0xFF - 0xFF) * t);
+		var g:Int = Std.int(0xD5 + (0xFF - 0xD5) * t);
+		var b:Int = Std.int(0x4F + (0xFF - 0x4F) * t);
+		var color:Int = (0xFF << 24) | (r << 16) | (g << 8) | b;
+		bpmText.clearFormats();
+		bpmText.applyMarkup(bpmText.text, [new FlxTextFormatMarkerPair(new FlxTextFormat(color), '§')]);
+	}
 
 	// 回放缓存相关
 	private var cachedReplayText:String = "";
@@ -693,14 +778,19 @@ class FreeplayState extends MusicBeatState
 
 		chartInfoBG = new FlxSprite(infoPanelX, infoPanelY).makeGraphic(Std.int(infoPanelW), Std.int(infoPanelH), 0xFF000000);
 		chartInfoBG.alpha = 0.3;
+		chartInfoBG.antialiasing = false;
 		chartInfoBG.visible = false;
 
-		chartInfoTitle = new FlxText(infoPanelX + 8, infoPanelY + 6, infoPanelW - 16, Language.get('chartinfo_title'), 18);
-		chartInfoTitle.setFormat(Paths.font(Language.get('uitab_font')), 18, FlxColor.YELLOW, LEFT);
+		// 像素字体（fusion-pixel 12px）：字号用 12 的整数倍并关闭抗锯齿，
+		// 否则 18/14 这类非整数倍缩放会让字形被插值，边缘发虚。
+		chartInfoTitle = new FlxText(infoPanelX + 8, infoPanelY + 6, infoPanelW - 16, Language.get('chartinfo_title'), 24);
+		chartInfoTitle.setFormat(Paths.font(Language.get('uitab_font')), 24, FlxColor.YELLOW, LEFT);
+		chartInfoTitle.antialiasing = false;
 		chartInfoTitle.visible = false;
 
-		chartInfoText = new FlxText(infoPanelX + 8, infoPanelY + 28, infoPanelW - 16, '', 14);
-		chartInfoText.setFormat(Paths.font(Language.get('uitab_font')), 14, FlxColor.WHITE, LEFT);
+		chartInfoText = new FlxText(infoPanelX + 8, infoPanelY + 32, infoPanelW - 16, '', 12);
+		chartInfoText.setFormat(Paths.font(Language.get('uitab_font')), 12, FlxColor.WHITE, LEFT);
+		chartInfoText.antialiasing = false;
 		chartInfoText.visible = false;
 
 		add(chartInfoBG);
@@ -1757,29 +1847,67 @@ class FreeplayState extends MusicBeatState
 		{
 			Conductor.songPosition = FlxG.sound.music.time + ClientPrefs.data.noteOffset;
 
-			// 检测BPM变化并显示提示 - 使用getBPMFromSeconds获取当前时间点的实际BPM
-			// 限制BPM检测频率，避免每帧都检测
-			if (Conductor.songPosition % 250 < 16) // 每250ms检测一次
+			// 每帧轻量检测是否处于线性过渡（不复制 struct、不算 exp）。
+			// 过渡结束的 true→false 翻转必须每帧捕捉——若塞进 100ms 轮询里会卡一下才显示到位值。
+			var inRamp:Bool = Conductor.isInBpmRamp(Conductor.songPosition);
+			var justFinished:Bool = (lastInRamp && !inRamp);
+			lastInRamp = inRamp;
+
+			if (justFinished)
 			{
-				var currentBPM = Conductor.getBPMFromSeconds(Conductor.songPosition).bpm;
-				if (currentBPM != lastBPM)
-				{
-					bpmText.text = 'BPM: ${Math.round(currentBPM)}';
-					bpmText.x = FlxG.width - bpmText.width - 6;
-					bpmText.y = diffText.y + diffText.height + 4;
-
-					// 复用底图仅缩放，避免每 250ms 新建 BitmapData 造成 GC 尖刺
-					refreshBpmBackground();
-
-					bpmDisplayTime = 0;
-				}
-				lastBPM = currentBPM;
+				// 过渡到位：立刻显示最终值 + 黄闪，并重置轮询状态
+				refreshBpmText(Conductor.getBPMFromSeconds(Conductor.songPosition), 2);
+				bpmDisplayTime = 0;
+				bpmRampFlashTime = BPM_FLASH_DURATION; // 黄闪期间颜色渐变回白
+				bpmCheckAccum = 0;
+				var endSeg = Conductor.getBPMFromSeconds(Conductor.songPosition);
+				lastBPM = endSeg.bpm;
+				lastBpmRampEnd = getRampEnd(endSeg);
 			}
+			else if (bpmRampFlashTime < 0)
+			{
+				// 非黄闪期间：过渡中每帧刷新（数字平滑滚动），非过渡 100ms 轮询
+				var checkInterval:Float = inRamp ? 16 : 100;
+				bpmCheckAccum += elapsed * 1000;
+				if (bpmCheckAccum >= checkInterval)
+				{
+					bpmCheckAccum %= checkInterval;
+					var seg = Conductor.getBPMFromSeconds(Conductor.songPosition);
+					var currentBPM = seg.bpm;
+					var rampEnd:Null<Float> = getRampEnd(seg);
+					if (inRamp || currentBPM != lastBPM || rampEnd != lastBpmRampEnd)
+					{
+						refreshBpmText(seg, inRamp ? 1 : 0);
+						bpmDisplayTime = 0;
+					}
+					lastBPM = currentBPM;
+					lastBpmRampEnd = rampEnd;
+				}
+			}
+		}
+
+		// 黄闪倒计时：颜色每帧由黄渐变到白；到点后切回普通白色文本并移除标记
+		if (bpmRampFlashTime >= 0)
+		{
+			bpmRampFlashTime -= elapsed;
+			if (bpmRampFlashTime < 0)
+			{
+				if (FlxG.sound.music != null)
+					refreshBpmText(Conductor.getBPMFromSeconds(Conductor.songPosition), 0);
+			}
+			else updateBpmFlashColor();
 		}
 
 		// 更新BPM提示显示/隐藏
 		if (bpmDisplayTime >= 0)
 		{
+			// 每帧同步位置到进度条底边：初始显示时播放器可能还没完成首次 layout，
+			// 靠这里兜底，保证 BPM 始终贴住进度条而非 diffText。
+			bpmText.x = FlxG.width - bpmText.width - 6;
+			bpmText.y = player.progressBarBottomY + 4;
+			bpmTextBG.x = bpmText.x - 10;
+			bpmTextBG.y = bpmText.y - 5;
+
 			bpmDisplayTime += elapsed;
 			if (bpmDisplayTime < 1.0) // 显示1秒
 			{
@@ -1939,6 +2067,9 @@ class FreeplayState extends MusicBeatState
 				bpmTextBG.alpha = 0;
 				bpmDisplayTime = -1;
 				lastBPM = -1;
+				lastBpmRampEnd = null;
+				lastInRamp = false;
+				bpmRampFlashTime = -1;
 
 				FlxG.sound.playMusic(Paths.menuMusicAudio(), 0);
 				FlxTween.tween(FlxG.sound.music, {volume: 1}, 1);
@@ -2025,15 +2156,15 @@ class FreeplayState extends MusicBeatState
 						Conductor.bpm = PlayState.SONG.bpm;
 						Conductor.mapBPMChanges(PlayState.SONG);
 
-				// 显示初始BPM
-				bpmText.text = 'BPM: ${Math.round(Conductor.bpm)}';
-				bpmText.x = FlxG.width - bpmText.width - 6;
-				bpmText.y = diffText.y + diffText.height + 4;
-
-				// 复用底图仅缩放，避免新建 BitmapData 造成 GC 尖刺
-				refreshBpmBackground();
-
+				// 显示初始BPM（用当前时间点的段，开播即在过渡中也能显示箭头+趋势色）
+				var initSeg = Conductor.getBPMFromSeconds(Conductor.songPosition);
+				refreshBpmText(initSeg, getRampEnd(initSeg) != null ? 1 : 0);
 				bpmDisplayTime = 0;
+				bpmCheckAccum = 0;
+				lastBPM = initSeg.bpm; // 避免开播瞬间重复刷新
+				lastBpmRampEnd = getRampEnd(initSeg);
+				lastInRamp = Conductor.isInBpmRamp(Conductor.songPosition);
+				bpmRampFlashTime = -1;
 				lastBeatHit = -1; // 重置beat检测
 
 			// 先确定这首歌所属音频目录：优先用当前歌曲登记的 folder，缺失再用 findModWithSong 兜底，
@@ -2178,6 +2309,9 @@ class FreeplayState extends MusicBeatState
 
 				// 重置BPM检测，并显示初始BPM
 				lastBPM = -1;
+				lastBpmRampEnd = null;
+				lastInRamp = false;
+				bpmRampFlashTime = -1;
 				bpmDisplayTime = -1;
 
 				// 设置音乐循环回调，循环时重置beat检测
@@ -3142,6 +3276,30 @@ class FreeplayState extends MusicBeatState
 		lines.push(Language.get('chartinfo_bpm', [Std.string(Math.round(bpm))]));
 		lines.push(Language.get('chartinfo_speed', [Std.string(speed)]));
 		lines.push(Language.get('chartinfo_format', [fmt]));
+
+		// 键数信息行：紧跟 format 行。统一用 Keys 标签（与值语义一致，不再把键数标成 Mania）；
+		// 有 mania 字段时括号附原始 0-based 档位，方便对照谱面 JSON。
+		// 若原始 mania 声明与实际音符布局明显不符，追加一行红色警告（applyMarkup 标记）。
+		var audit:KeyAuditSnapshot = songData.keyAudit;
+		var playerKeys:Int = Song.getPlayerKeys(songData);
+		var opponentKeys:Int = Song.getOpponentKeys(songData);
+		if (Song.isDualChart(songData))
+			lines.push(Language.get('chartinfo_keys_dual', [Std.string(playerKeys), Std.string(opponentKeys)]));
+		else if (audit != null && audit.hasManiaField)
+			lines.push(Language.get('chartinfo_keys_mania', [Std.string(playerKeys), Std.string(audit.rawMania)]));
+		else
+			lines.push(Language.get('chartinfo_keys', [Std.string(playerKeys)]));
+
+		if (audit != null && audit.declaredMismatch)
+		{
+			// §...§ 为红色标记，与暂停界面单行多色同理。
+			// 不列 noteMaxCol——psych_v1 是双轨编码，0-7 列其实是 4K，列号容易被误读成键数。
+			lines.push('§' + Language.get('chartinfo_keys_mismatch', [
+				Std.string(audit.rawMania),
+				Std.string(playerKeys)
+			]) + '§');
+		}
+
 		lines.push(Language.get('chartinfo_sections', [Std.string(secCount)]));
 		lines.push(Language.get('chartinfo_notes', [Std.string(totalNotes)]));
 		lines.push(Language.get('chartinfo_events', [Std.string(totalEvents)]));
@@ -3152,10 +3310,18 @@ class FreeplayState extends MusicBeatState
 		if (songData.generatedBy != null && songData.generatedBy.length > 0)
 			lines.push(Language.get('chartinfo_by', [songData.generatedBy]));
 
-		chartInfoText.text = lines.join('\n');
+		var infoText:String = lines.join('\n');
+		chartInfoText.clearFormats(); // 清掉上一次 applyMarkup 的残留格式
+		chartInfoText.text = infoText;
+		// 单行多色：§...§ 包裹的片段显示为红色（键数声明不一致警告）。
+		// 与 PauseSubState 的 applyMarkup 原理一致，marker 本身不会显示出来。
+		chartInfoText.applyMarkup(infoText, [
+			new FlxTextFormatMarkerPair(new FlxTextFormat(0xFFFF4040), '§')
+		]);
 
 		var textH:Float = chartInfoText.height;
-		var newH:Float = Std.int(textH + 44);
+		// 标题 24px + 间距 8 + 上下留白，动态撑高
+		var newH:Float = Std.int(textH + 48);
 		var infoPanelX:Float = FlxG.width - 280 - 12;
 		var infoPanelY:Float = (FlxG.height - newH) / 2;
 
@@ -3166,7 +3332,7 @@ class FreeplayState extends MusicBeatState
 		chartInfoTitle.x = infoPanelX + 8;
 		chartInfoTitle.y = infoPanelY + 6;
 		chartInfoText.x = infoPanelX + 8;
-		chartInfoText.y = infoPanelY + 28;
+		chartInfoText.y = infoPanelY + 32;
 
 		_chartInfoBuilt = true;
 	}

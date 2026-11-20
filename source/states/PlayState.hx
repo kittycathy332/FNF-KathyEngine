@@ -494,7 +494,7 @@ class PlayState extends MusicBeatState
 	// —— LE LTS 双侧轨道数（跟随 EK 配置化结构：每侧一个 EK 档位） ——
 	// 玩家侧沿用 curMania/totalColumns/colArray/singAnimations/keysArray（applyMania 填充）；
 	// 对手侧由下列镜像字段承载（applyOpponentMania 填充，与 applyMania 同构）。
-	// isLeDualChart=true 时（谱面含 playerKeyCount 且 != keyCount）两侧轨道数独立，
+	// isLeDualChart=true 时（谱面含 playerKeyCount 与 opponentKeyCount 且不等）两侧轨道数独立，
 	// 解析按 LE 规则（mustHit 段连续编号）、事件 "change keycount" 可实时切换；false 时对手侧恒等于玩家侧。
 	public var isLeDualChart:Bool = false;
 	public var oppMania:Int = 3;
@@ -2129,7 +2129,7 @@ isReplaying = false;
 			if (skipCountdown || startOnTime > 0) skipArrowStartTween = true;
 
 			canPause = true;
-			applyMania((SONG != null && SONG.mania != null) ? SONG.mania : 3);
+			applyMania(Song.getPlayerKeys(SONG) - 1);
 			generateStaticArrows(0);
 			generateStaticArrows(1);
 			refreshArrowsPad();
@@ -2772,22 +2772,29 @@ tempScore += '${lblScore}: ${songScore}';
 		// FlxG.log.add(ChartParser.parse());
 		songSpeed = PlayState.SONG.speed;
 
-		// Extra Keys：在解析谱面前先按歌曲 mania 档位配置好列数/颜色/键位，
+		// Extra Keys：在解析谱面前先按规范化后的键数配置好列数/颜色/键位，
 		// 否则下面 generateSongLegacy/Optimized 里的 sectCols 会按 4 键硬解析多键谱面。
-		// LE LTS 双侧模式（谱面含 playerKeyCount 且 != keyCount）：玩家侧/对手侧各按独立 EK 档位配置；
+		// 键数字段（mania/keyCount/playerKeyCount/opponentKeyCount）已由 Song.parseJSON 统一规范化，
+		// 这里只调用 Song 的统一 helper 取值，不再各自解读字段。
+		// LE LTS 双侧模式（playerKeyCount 与 opponentKeyCount 都在且不等）：两侧各按独立 EK 档位配置；
 		// 非双侧模式对手侧恒等于玩家侧（isLeDualChart=false）。
-		isLeDualChart = (SONG != null && SONG.playerKeyCount != null && SONG.keyCount != null && SONG.playerKeyCount != SONG.keyCount);
+		isLeDualChart = Song.isDualChart(SONG);
 		if (isLeDualChart)
 		{
-			applyMania((SONG.playerKeyCount - 1));
-			applyOpponentMania((SONG.keyCount - 1));
+			applyMania((Song.getPlayerKeys(SONG) - 1));
+			applyOpponentMania((Song.getOpponentKeys(SONG) - 1));
 			// 双侧模式：两侧 strum/音符按各自键数与中心独立缩放（computeMultiKeyStrumScale 内按侧计算）
 			if (totalColumns > 4 || opponentColumns > 4) computeMultiKeyStrumScale();
 		}
 		else
 		{
-			applyMania((SONG != null && SONG.mania != null) ? SONG.mania : 3);
+			applyMania(Song.getPlayerKeys(SONG) - 1);
 		}
+
+		// 诊断：把最终采用的键数口径一次打全，出问题时可直接看出是哪条字段在生效
+		trace('["${SONG.song.toUpperCase()}" CHART INFO]: keys mania=${SONG.mania} keyCount=${SONG.keyCount} '
+			+ 'pKC=${SONG.playerKeyCount} oKC=${SONG.opponentKeyCount} dual=$isLeDualChart '
+			+ '-> player=$totalColumns opp=' + (isLeDualChart ? opponentColumns : totalColumns));
 
 		// Arrows 模式：覆盖多键/双侧的常规收缩，两侧统一按底部单排均分缩放
 		if (arrowsModeActive())
@@ -3253,7 +3260,7 @@ tempScore += '${lblScore}: ${songScore}';
 	}
 
 	// —— LE LTS 双侧模式解析（跟随 EK 配置化结构：按侧独立键数；逻辑参考 LE：连续编号 noteData + change keycount 事件实时推进）——
-	// 仅 isLeDualChart（谱面含 playerKeyCount 且 != keyCount）时由 generateSong 分流调用。
+	// 仅 isLeDualChart（谱面含 playerKeyCount 与 opponentKeyCount 且不等）时由 generateSong 分流调用。
 	// 谱面 noteData 为 LE 连续编号：mustHit 小节 0..plr-1 = 玩家、plr..plr+opp-1 = 对手；
 	// 非 mustHit 小节 0..opp-1 = 对手、opp..opp+plr-1 = 玩家。
 	// change keycount 事件（value1=玩家键数、value2=对手键数）按时间点实时切换两侧键数；
@@ -3277,10 +3284,10 @@ tempScore += '${lblScore}: ${songScore}';
 		// 去重查找表（与 generateSongLegacy 同构）
 		var ghostNoteMap:Map<String, Note> = new Map();
 
-		var curPlr:Int = (SONG.playerKeyCount != null) ? SONG.playerKeyCount : 4; // 玩家侧当前键数
-		var curOpp:Int = (SONG.keyCount != null) ? SONG.keyCount : 4;             // 对手侧当前键数
+		var curPlr:Int = Song.getPlayerKeys(SONG);  // 玩家侧当前键数（1-based）
+		var curOpp:Int = Song.getOpponentKeys(SONG); // 对手侧当前键数（1-based）
 
-		trace('["${SONG.song.toUpperCase()}" CHART INFO]: LE LTS dual-keycount loading (player=${SONG.playerKeyCount}K opponent=${SONG.keyCount}K)');
+		trace('["${SONG.song.toUpperCase()}" CHART INFO]: LE LTS dual-keycount loading (player=${curPlr}K opponent=${curOpp}K)');
 
 		for (section in sectionsData)
 		{
@@ -4404,7 +4411,7 @@ tempScore += '${lblScore}: ${songScore}';
 		if (isReplaying)
 			savedHeldBefore = replayHeldKeys.copy();
 
-		// 注意：不写 SONG.playerKeyCount/keyCount——SONG 保持谱面原始键数，
+		// 注意：不写 SONG.playerKeyCount/opponentKeyCount——SONG 保持谱面原始键数，
 			// 供重玩（restartSong/重进）恢复初始配置；运行键数由 applyMania/applyOpponentMania 维护。
 			applyMania(playerKeyCount - 1);
 			applyOpponentMania(oppKeyCount - 1);

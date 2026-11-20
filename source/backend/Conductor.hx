@@ -112,6 +112,17 @@ class Conductor
 		return last;
 	}
 
+	/**
+	 * 轻量判断：指定时间是否正处于线性 BPM 过渡区间内。
+	 * 只查原始段、不复制 struct、不算 exp，供 UI 高频轮询决定是否细粒度刷新。
+	 */
+	public static function isInBpmRamp(time:Float):Bool
+	{
+		var seg = getRawSegmentByTime(time);
+		if (seg.rampSteps == null || seg.rampSteps <= 0 || seg.endBPM == null) return false;
+		return time < seg.songTime + rampTime(seg.bpm, seg.endBPM, seg.rampSteps);
+	}
+
 	// 给定时间，返回该时刻的瞬时 BPM / stepCrochet
 	public static function getBPMFromSeconds(time:Float):BPMChangeEvent
 	{

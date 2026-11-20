@@ -159,29 +159,22 @@ class ChartingState extends MusicBeatState implements PsychUIEventHandler.PsychU
 	// 对侧音符若超出当前编辑侧网格宽度则不显示（切换编辑侧后可编辑）。非双侧谱面恒为玩家侧语义。
 	public static var editorSide:Int = 0;
 
-	// LE LTS 双侧：谱面是否双侧模式（playerKeyCount 存在且 != keyCount）
+	// LE LTS 双侧：谱面是否双侧模式。统一走 Song 判定口径（两侧字段都在且不等）。
 	public static function isDualChart():Bool
 	{
-		return (PlayState.SONG != null && PlayState.SONG.playerKeyCount != null
-			&& PlayState.SONG.keyCount != null && PlayState.SONG.playerKeyCount != PlayState.SONG.keyCount);
+		return Song.isDualChart(PlayState.SONG);
 	}
 
-	// 玩家侧键数（双侧模式；非双侧 = keyCount/mania+1）
+	// 玩家侧键数（1-based；非双侧 = mania+1，与 Song 统一口径）
 	public static function dualPlayerKeyCount():Int
 	{
-		if (PlayState.SONG == null) return 4;
-		if (PlayState.SONG.playerKeyCount != null) return Std.int(PlayState.SONG.playerKeyCount);
-		if (PlayState.SONG.keyCount != null) return Std.int(PlayState.SONG.keyCount);
-		return 4;
+		return Song.getPlayerKeys(PlayState.SONG);
 	}
 
-	// 对手侧键数（双侧模式；非双侧 = keyCount/mania+1）
+	// 对手侧键数（1-based；非双侧恒等于玩家侧）
 	public static function dualOpponentKeyCount():Int
 	{
-		if (PlayState.SONG == null) return 4;
-		if (PlayState.SONG.keyCount != null) return Std.int(PlayState.SONG.keyCount);
-		if (PlayState.SONG.playerKeyCount != null) return Std.int(PlayState.SONG.playerKeyCount);
-		return 4;
+		return Song.getOpponentKeys(PlayState.SONG);
 	}
 
 	// —— LE LTS 双侧：不对称网格列数 ——
@@ -1495,7 +1488,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 			maniaStepper.value = (PlayState.SONG.playerKeyCount != null) ? Std.int(PlayState.SONG.playerKeyCount)
 				: ((PlayState.SONG.mania != null) ? Std.int(PlayState.SONG.mania) + 1 : 4);
 		if (opponentKeyStepper != null)
-			opponentKeyStepper.value = (PlayState.SONG.keyCount != null && PlayState.SONG.keyCount >= 1) ? Std.int(PlayState.SONG.keyCount) : 4;
+			opponentKeyStepper.value = Song.getOpponentKeys(PlayState.SONG);
 		// 两个键数设置项始终显示（Psych/EK 谱面两侧默认同值）；双侧模式显示编辑侧切换按钮
 		if (editPlayerBtn != null && editOpponentBtn != null)
 		{
@@ -3935,7 +3928,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 
 	// LE LTS 双侧：改键数后按"新键数"重编码全部音符的 LE 连续编号，保持音符的"侧 + 侧内列"不变。
 	// 双侧谱面音符编号按谱面当前键数编码（mustHit 小节 0..plr-1=玩家/plr..=对手；非 mustHit 小节 0..opp-1=对手/opp..=玩家）。
-	// 若只改 SONG.keyCount/playerKeyCount 而不重编码，改对手键数后对手边界（opp）变化，
+	// 若只改 SONG.opponentKeyCount/playerKeyCount 而不重编码，改对手键数后对手边界（opp）变化，
 	// 原玩家音符（如非 mustHit 下 LE 4..9）会被新边界重新判成对手——侧判定翻转、按对手档取动画/着色，
 	// 即"改对手键数后玩家箭头动画受影响"（改玩家键数不动 opp 边界，所以对手不受影响，现象不对称）。
 	// oldDual=false（改前是 Psych/EK 编码）：侧判定固定为 noteData < oldPlr（不随小节），转新 LE 编码。
@@ -7069,7 +7062,7 @@ for (i in 0...GRID_PLAYERS)
 	var scrollSpeedStepper:PsychUINumericStepper;
 	var audioOffsetStepper:PsychUINumericStepper;
 	var maniaStepper:PsychUINumericStepper; // Extra Keys：键数档位 stepper
-	var opponentKeyStepper:PsychUINumericStepper; // LE LTS 双侧：对手侧键数（keyCount）
+	var opponentKeyStepper:PsychUINumericStepper; // LE LTS 双侧：对手侧键数（opponentKeyCount）
 	var opponentKeyStepperText:FlxText; // 对手侧键数标签
 	var editPlayerBtn:PsychUIButton; // LE LTS 双侧：编辑侧切换（玩家）
 	var editOpponentBtn:PsychUIButton; // LE LTS 双侧：编辑侧切换（对手）
@@ -7165,7 +7158,7 @@ for (i in 0...GRID_PLAYERS)
 		// Extra Keys：键数档位（0=1键 ... 17=18键；4 键 = 3）。改键数会重建网格列数与轨道色块。
 		// 位置：BPM 所在行的下一行（objY+40）第一列（objX）；对手键数在第二列（objX+110）。
 		// LE LTS 双侧（分侧编辑，两个独立设置项）：此 stepper = 玩家侧键数（playerKeyCount，1..18），始终显示；
-		// 对手侧键数（keyCount）由 opponentKeyStepper 独立控制。两者相等时保存为 EK/Psych 格式（mania），不等时保存为 LE 格式。
+		// 对手侧键数（opponentKeyCount）由 opponentKeyStepper 独立控制。两侧相等时保存为 EK/Psych 格式（mania），不等时保存为 LE 格式。
 		// 注意：此处 value 为"键数"（1..18），与对手 stepper 同单位；内部换算档位 = 键数-1。
 		// 两个 stepper 完全独立：改玩家只改玩家侧（playerKeyCount + mania），改对手只改对手侧（keyCount），
 		// 互不同步——相等/不等由实际值决定，保存时自动切换 EK mania / LE keyCount+playerKeyCount 格式。
@@ -7177,10 +7170,10 @@ for (i in 0...GRID_PLAYERS)
 			var oldDualM:Bool = isDualChart();
 			var oldPlrM:Int = oldDualM ? dualPlayerKeyCount() : ((PlayState.SONG.mania != null) ? Std.int(PlayState.SONG.mania) + 1 : 4);
 			var oldOppM:Int = oldDualM ? dualOpponentKeyCount() : oldPlrM;
-			// Psych/EK 谱面 keyCount 为 null：进入双侧语义前补齐对手侧 = 原 mania+1（原始 4 键）。
+			// Psych/EK 谱面对手侧字段为 null：进入双侧语义前补齐 opponentKeyCount = 原玩家侧键数。
 			// 否则 isDualChart() 恒 false，对手侧网格会跟着玩家侧 mania 一起变（初次调整"双方同时变化"）。
-			if (PlayState.SONG.keyCount == null)
-				PlayState.SONG.keyCount = ((PlayState.SONG.mania != null) ? Std.int(PlayState.SONG.mania) : 3) + 1;
+			if (PlayState.SONG.opponentKeyCount == null)
+				PlayState.SONG.opponentKeyCount = Song.getPlayerKeys(PlayState.SONG);
 			// 先把当前显示层编辑（未保存的放置/删除/移动）同步回 SONG——
 			// 否则下方 reloadNotes() 从 SONG.sectionNotes 全量重建会丢失所有未保存编辑（谱面"重置回最初进入时"）。
 			updateChartData();
@@ -7194,7 +7187,7 @@ for (i in 0...GRID_PLAYERS)
 			updateJsonData();
 		};
 
-		// LE LTS 双侧：对手侧键数（keyCount，1..18），BPM 下一行第二列（objX+110），始终显示（Psych/EK 谱面默认为玩家侧同值）。
+		// LE LTS 双侧：对手侧键数（opponentKeyCount，1..18），BPM 下一行第二列（objX+110），始终显示（Psych/EK 谱面默认为玩家侧同值）。
 		opponentKeyStepper = new PsychUINumericStepper(objX + 110, objY + 40, 1, 4, 1, 18, 0, 80);
 		opponentKeyStepper.onValueChange = function()
 		{
@@ -7209,7 +7202,7 @@ for (i in 0...GRID_PLAYERS)
 			// 先把当前显示层编辑（未保存的放置/删除/移动）同步回 SONG——
 			// 否则下方 reloadNotes() 从 SONG.sectionNotes 全量重建会丢失所有未保存编辑（谱面"重置回最初进入时"）。
 			updateChartData();
-			PlayState.SONG.keyCount = newKeys;
+			PlayState.SONG.opponentKeyCount = newKeys;
 			if (isDualChart() && oldOppO != newKeys)
 				reencodeChartNotes(oldPlrO, oldOppO, oldDualO); // 保持侧+侧内列不变，按新键数重编码 LE 编号
 			refreshDualUI();
@@ -9651,17 +9644,37 @@ for (i in 0...GRID_PLAYERS)
 	{
 		updateChartData();
 		chartDataDirty = false;
-		// LE LTS 双侧：保存格式按两侧键数相等性切换（仅作用于深拷贝，不影响内存 SONG）——
-		// 相等（或未设置 playerKeyCount）→ EK/Psych 格式：输出 mania = keyCount-1、不输出 playerKeyCount；
-		// 不等 → LE 格式：输出 keyCount + playerKeyCount、不输出 mania（LE 引擎读取）。
+		// LE LTS 双侧：保存格式按是否双侧切换（仅作用于深拷贝，不影响内存 SONG）——
+		// 双侧（playerKeyCount 与 opponentKeyCount 不等）→ LE 格式：输出 playerKeyCount + opponentKeyCount，
+		//   并兼容旧字段 keyCount = opponentKeyCount（供旧版 LE 引擎读取），不输出 mania；
+		// 单侧 → EK/Psych 格式：输出 mania（= 玩家侧键数 - 1）+ keyCount（= 玩家侧键数），
+		//   清掉两侧字段，杜绝残留字段在下次读谱时被误判成双侧。
 		var saveSong:Dynamic = haxe.Json.parse(haxe.Json.stringify(PlayState.SONG));
-		if (saveSong.playerKeyCount == null || saveSong.playerKeyCount == saveSong.keyCount)
+		if (isDualChart())
 		{
-			Reflect.deleteField(saveSong, 'playerKeyCount');
-			if (saveSong.keyCount != null) saveSong.mania = Std.int(saveSong.keyCount) - 1;
-			else if (saveSong.mania == null) saveSong.mania = 3;
+			saveSong.keyCount = saveSong.opponentKeyCount;
+			Reflect.deleteField(saveSong, 'mania');
 		}
-		else Reflect.deleteField(saveSong, 'mania');
+		else
+		{
+			var keys:Int = Song.getPlayerKeys(PlayState.SONG);
+			Reflect.deleteField(saveSong, 'playerKeyCount');
+			Reflect.deleteField(saveSong, 'opponentKeyCount');
+			if (keys == 4)
+			{
+				// 标准 4K：输出纯原版 psych 格式——mania / keyCount 都不写。
+				// 加载时无键数字段即默认 4K，与原版 base_game 谱一致；
+				// 不再产生 mania:0 这类死字段污染（FK 旧谱里常见，会误导其它工具）。
+				Reflect.deleteField(saveSong, 'mania');
+				Reflect.deleteField(saveSong, 'keyCount');
+			}
+			else
+			{
+				// 多键单侧：仍需 mania（0-based 档位）+ keyCount（1-based），供 EK/Matt 系引擎识别
+				saveSong.mania = keys - 1;
+				saveSong.keyCount = keys;
+			}
+		}
 		var chartData:String = PsychJsonPrinter.print(saveSong, ['sectionNotes', 'events']);
 		if(canQuickSave && Song.chartPath != null)
 		{

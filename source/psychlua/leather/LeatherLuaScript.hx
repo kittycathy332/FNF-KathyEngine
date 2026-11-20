@@ -125,9 +125,10 @@ class LeatherLuaScript
 		set('difficulty', PlayState.storyDifficulty);
 		set('bpm', Conductor.bpm);
 		set('songBpm', PlayState.SONG.bpm);
-		set('keyCount', PlayState.SONG.keyCount);
-		// LE 的玩家侧键数概念：Kathy 双侧谱面有 playerKeyCount（!= keyCount 时两侧独立），缺失时回落 keyCount
-		set('playerKeyCount', (PlayState.SONG.playerKeyCount != null) ? PlayState.SONG.playerKeyCount : PlayState.SONG.keyCount);
+		set('keyCount', Song.getPlayerKeys(PlayState.SONG));
+		// LE 的玩家/对手侧键数概念，统一走 Song helper；keyCount 保留为玩家侧键数（单侧键数）。
+		set('playerKeyCount', Song.getPlayerKeys(PlayState.SONG));
+		set('opponentKeyCount', Song.getOpponentKeys(PlayState.SONG));
 		set('scrollspeed', PlayState.SONG.speed);   // LE 原版全小写
 		set('scrollSpeed', PlayState.SONG.speed);    // 兼容写法
 		set('stepCrochet', Conductor.stepCrochet);

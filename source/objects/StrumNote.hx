@@ -126,7 +126,7 @@ class StrumNote extends FlxSprite
 
 		// LE LTS 双侧：两侧 strum 颜色都按各自运行时档位重算（玩家=totalColumns-1、对手=oppMania），
 		// 覆盖 super 前按玩家档的默认值。档位用运行时值（change keycount 改键后重建即用新档），
-		// 而非 SONG.keyCount/SONG.mania（保持谱面原始值）。
+		// 而非 SONG 的原始键数字段（保持谱面原始值）。
 		// 制谱器（Note.editorDualMode）：PlayState.instance 为 null，按编辑器侧键数取档。
 		if ((PlayState.instance != null && PlayState.instance.isLeDualChart) || Note.editorDualMode)
 		{
