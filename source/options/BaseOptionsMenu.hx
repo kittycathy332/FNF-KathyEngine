@@ -593,6 +593,9 @@ class BaseOptionsMenu extends MusicBeatSubstate
 			prevTouchSel = curSelected;
 			updateDescText();
 			refreshCandidatePanel();
+			// 松手确定选中项后通知子类做重活（如 speaki 联动）：手指滑动过程中
+			// 直接改 curSelected 绕过了 changeSelection，子类需要在这一刻统一同步一次。
+			onTouchSelectionSettled(curSelected);
 			return;
 		}
 
@@ -623,6 +626,11 @@ class BaseOptionsMenu extends MusicBeatSubstate
 
 	private var prevTouchSel:Int = 0; // 触屏拖拽中上一帧的选中项（用于检测跨项与限频音效）
 #end
+
+	// 移动端手指滑动松手、选中项尘埃落定后调用。子类可重写以同步那些原本挂在
+	// changeSelection 上的联动（滑动过程中 curSelected 会被直接修改，不走 changeSelection）。
+	// 默认空实现，不影响其它设置界面。
+	private function onTouchSelectionSettled(selected:Int):Void {}
 
 	function changeSelection(change:Int = 0, skipRefresh:Bool = false, skipDesc:Bool = false)
 	{

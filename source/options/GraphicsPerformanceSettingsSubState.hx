@@ -5,12 +5,18 @@ import com.yagp.Gif;
 import flixel.util.FlxColor;
 import flixel.math.FlxPoint;
 import flixel.text.FlxText;
+import shaders.SpeakiShadeShader;
 
 class GraphicsPerformanceSettingsSubState extends BaseOptionsMenu
 {
 	var antialiasingOption:Int;
+	var shadersOption:Int = -1; // 「着色器」选项索引：选中时 speaki 也进画面（跟抗锯齿同姿态）
 	var arisDance:Int;
 	var spkGif:objects.GifSprite = null;
+	var spkGifShader:SpeakiShadeShader = null; // 着色器启用时给 speaki 挂的演示着色器（只作用于自身像素）
+	// speaki 当前"展示态"对应的选项索引。键盘切换立即同步；移动端手指滑动期间保持不变，
+	// 松手才同步到 curSelected——这样滑动经过各选项时 speaki 不会乱跑/变形/乱转。
+	var spkGifSel:Int = 0;
 	var spkGifTween:FlxTween;
 	var spkGifSizeTween:FlxTween;
 	var spkGifPokeTween:FlxTween;
@@ -135,7 +141,9 @@ class GraphicsPerformanceSettingsSubState extends BaseOptionsMenu
 				Language.get("shaders_desc"),
 				'shaders',
 				BOOL);
+			option.onChange = onShadersChanged;
 			addOption(option);
+			shadersOption = optionsArray.length - 1;
 			option = new Option(Language.get('gpu_caching'),
 				Language.get("gpu_caching_desc"),
 				'cacheOnGPU',
@@ -306,14 +314,15 @@ class GraphicsPerformanceSettingsSubState extends BaseOptionsMenu
 			spkGif.scrollFactor.set();
 			spkGif.visible = false;
 			add(spkGif);
+			spkGifSel = curSelected; // 初始展示态与当前选中项一致
 
 			GifAssets.load('assets/shared/images/gifs/minispeaki.gif', function(gif:Gif) {
 					if (spkGif == null || !spkGif.exists) return;
 					spkGif.attachGif(gif);
 					spkGif.setGraphicSize(400);
 					spkGifBaseScale = spkGif.scale.x;
-					var isSpecial:Bool = (arisDance == curSelected) || (antialiasingOption == curSelected);
-					var initSize:Float = (arisDance == curSelected) ? 240 : 400;
+					var isSpecial:Bool = isSpeakiSpecial(spkGifSel);
+					var initSize:Float = (arisDance == spkGifSel) ? 240 : 400;
 					if (initSize != 400)
 						spkGif.setGraphicSize(initSize);
 					spkGif.updateHitbox(); // centerOrigin() 默认居中
@@ -322,8 +331,8 @@ class GraphicsPerformanceSettingsSubState extends BaseOptionsMenu
 					spkGifOriginCenter.set(spkGif.frameWidth / 2, spkGif.frameHeight / 2);
 					spkGifOriginBR.set(spkGif.frameWidth, spkGif.frameHeight);
 
-					// 根据当前选中项设定初始锚点
-					setSpkGifOrigin(curSelected);
+					// 根据当前展示态设定初始锚点
+					setSpkGifOrigin(spkGifSel);
 
 					// 初始静止位置（按当前 origin 修正，与 changeSelection 保持一致）
 					var ts:Float = spkGif.scale.x;
@@ -332,6 +341,7 @@ class GraphicsPerformanceSettingsSubState extends BaseOptionsMenu
 					spkGif.y = spkGifRestY(ts);
 					spkGif.alpha = 0;
 					spkGif.visible = true;
+					applySpeakiShade();
 					FlxTween.tween(spkGif, {alpha: 0.9}, 0.5, {ease: FlxEase.quadOut});
 				});
 
@@ -342,6 +352,85 @@ class GraphicsPerformanceSettingsSubState extends BaseOptionsMenu
 			warningText.alpha = 0.8; // 添加透明度
 			add(warningText); // 确保在最上层
 		}
+
+	// 哪些选项需要 speaki 滑进画面：帧率（旋转）、抗锯齿、着色器（后两者同姿态）
+	private function isSpeakiSpecial(sel:Int):Bool
+	{
+		return arisDance == sel || antialiasingOption == sel || shadersOption == sel;
+	}
+
+	// 根据 ClientPrefs.data.shaders 给 speaki 挂/摘演示着色器。
+	// 着色器只处理 sprite 自身像素（透明区域不会被染色），所以不会像叠加渐变图那样露出矩形色块。
+	private function applySpeakiShade():Void
+	{
+		if (spkGif == null || !spkGif.exists) return;
+
+		if (ClientPrefs.data.shaders)
+		{
+			if (spkGifShader == null)
+			{
+				spkGifShader = new SpeakiShadeShader();
+				// 构造完成后 uniform 字段才由 ShaderMacro/OpenFL 建好，这里初始化流光时间
+				spkGifShader.uTime.value = [0.0];
+			}
+			spkGif.shader = spkGifShader;
+		}
+		else
+		{
+			spkGif.shader = null;
+		}
+	}
+
+	// 「着色器」选项值变更回调：实时切换 speaki 的着色效果
+	function onShadersChanged()
+	{
+		applySpeakiShade();
+	}
+
+	// 移动端手指滑动松手后：把 speaki 展示态同步到尘埃落定的选中项，
+	// 走与键盘切换相同的完整联动（大小/锚点/位置/旋转一次性切换到位）。
+	override function onTouchSelectionSettled(selected:Int):Void
+	{
+		// 滑动后仍停在原来那一项（只是随手拖了一下）：不做联动，
+		// 否则每次松手都会重播一次 squash 动画，看起来像是 speaki 莫名变扁。
+		if (selected == spkGifSel) return;
+
+		spkGifSel = selected;
+		updateSpeakiForSelection();
+	}
+
+	// 根据 spkGifSel 更新 speaki 的大小/锚点/位置（键盘切换与触摸松手共用）
+	private function updateSpeakiForSelection():Void
+	{
+		if (spkGif == null || !spkGif.exists) return;
+
+		setSpkGifOrigin(spkGifSel);
+
+		var isSpecial:Bool = isSpeakiSpecial(spkGifSel);
+		var targetSize:Float = (arisDance == spkGifSel) ? 240 : 400;
+		var targetScale:Float = spkGifBaseScale * (targetSize / 400);
+		spkGifTargetScale = targetScale;
+
+		var targetX:Float = spkGifRestX(isSpecial ? 800 : 1560, targetScale);
+		var targetY:Float = spkGifRestY(targetScale);
+
+		if (spkGifTween != null) { spkGifTween.cancel(); spkGifTween.destroy(); spkGifTween = null; }
+		if (spkGifSizeTween != null) { spkGifSizeTween.cancel(); spkGifSizeTween.destroy(); spkGifSizeTween = null; }
+		if (spkGifPokeTween != null) { spkGifPokeTween.cancel(); spkGifPokeTween.destroy(); spkGifPokeTween = null; }
+
+		spkGifTween = FlxTween.tween(spkGif, {x: targetX, y: targetY}, 0.45, {
+			ease: FlxEase.quadOut,
+			onComplete: function(twn:FlxTween) { if (spkGifTween == twn) spkGifTween = null; }
+		});
+
+		spkGif.scale.y *= 0.6;
+		spkGifSizeTween = FlxTween.tween(spkGif.scale, {
+			x: targetScale, y: targetScale
+		}, 0.45, {
+			ease: FlxEase.backOut,
+			onComplete: function(_) { spkGifSizeTween = null; }
+		});
+	}
 
 	function onChangeAntiAliasing()
 	{
@@ -403,6 +492,11 @@ class GraphicsPerformanceSettingsSubState extends BaseOptionsMenu
 			arisTween = null;
 		}
 		
+		if (spkGifShader != null)
+		{
+			if (spkGif != null) spkGif.shader = null;
+			spkGifShader = null;
+		}
 		if (spkGif != null)
 		{
 			spkGif.destroy();
@@ -434,7 +528,8 @@ class GraphicsPerformanceSettingsSubState extends BaseOptionsMenu
 	{
 		if (spkGif == null || !spkGif.exists) return;
 
-		var wantBR:Bool = (antialiasingOption == selIndex);
+		// 抗锯齿与着色器共用"右下角锚点"姿态；帧率仍是居中旋转
+		var wantBR:Bool = (antialiasingOption == selIndex) || (shadersOption == selIndex);
 		var newMode:String = wantBR ? 'br' : 'center';
 		if (newMode == spkGifLastOriginMode) return; // 没变就跳过
 
@@ -456,50 +551,11 @@ class GraphicsPerformanceSettingsSubState extends BaseOptionsMenu
 
 	override function changeSelection(change:Int = 0, skipRefresh:Bool = false, skipDesc:Bool = false)
 	{
-		// 安全清理之前的所有 tween（poke 和 sizeTween 互斥）
-		if (spkGifTween != null) { spkGifTween.cancel(); spkGifTween.destroy(); spkGifTween = null; }
-		if (spkGifSizeTween != null) { spkGifSizeTween.cancel(); spkGifSizeTween.destroy(); spkGifSizeTween = null; }
-		if (spkGifPokeTween != null) { spkGifPokeTween.cancel(); spkGifPokeTween.destroy(); spkGifPokeTween = null; }
-
+		// 键盘/虚拟键切换：立即把展示态同步到新选中项并启动完整联动。
+		// 移动端手指滑动不经过这里（基类直接改 curSelected），改由 onTouchSelectionSettled 松手同步。
 		super.changeSelection(change, skipRefresh, skipDesc);
-
-		if (spkGif != null && spkGif.exists)
-		{
-			// 锚点切换先做（位置补偿在 scale tween 之前）
-			setSpkGifOrigin(curSelected);
-
-			var isSpecial:Bool = (arisDance == curSelected) || (antialiasingOption == curSelected);
-			var targetSize:Float = (arisDance == curSelected) ? 240 : 400;
-			var targetScale:Float = spkGifBaseScale * (targetSize / 400);
-
-			// 更新静止目标 scale（poke 弹回这个值，不会被 sizeTween 干扰）
-			spkGifTargetScale = targetScale;
-
-			// 目标位置：按当前 origin 修正，保证不同锚点下视觉落点一致
-			var targetX:Float = spkGifRestX(isSpecial ? 800 : 1560, targetScale);
-			var targetY:Float = spkGifRestY(targetScale);
-
-			// x/y 位置过渡
-			spkGifTween = FlxTween.tween(spkGif, {
-				x: targetX, y: targetY
-			}, 0.45, {
-				ease: FlxEase.quadOut,
-				onComplete: function(twn:FlxTween) {
-					if (spkGifTween == twn) spkGifTween = null;
-				}
-			});
-
-			// 先立刻 squash Y 轴（戳戳效果），再用 backOut ease 过渡到目标 scale
-			// X/Y 同时过渡，确保不出现 X=1.0 Y=0.5 这种形变
-			spkGif.scale.y *= 0.6;
-
-			spkGifSizeTween = FlxTween.tween(spkGif.scale, {
-				x: targetScale, y: targetScale
-			}, 0.45, {
-				ease: FlxEase.backOut,
-				onComplete: function(_) { spkGifSizeTween = null; }
-			});
-		}
+		spkGifSel = curSelected;
+		updateSpeakiForSelection();
 	}
 
 	// 点击触发的戳戳动画：固定基准 scale + speaki 音效 + 音频结束冷却 + 与 sizeTween 互斥
@@ -535,10 +591,15 @@ class GraphicsPerformanceSettingsSubState extends BaseOptionsMenu
 	{
 		super.update(elapsed);
 
-		// spkGif 旋转：选中 FPS 选项时持续旋转（angle 保持 0~360 不累积），其他选项最多转半圈归位
+		// 演示着色器开启时推进流光时间（关闭时着色器未挂载，无需更新）
+		if (spkGifShader != null && ClientPrefs.data.shaders)
+			spkGifShader.uTime.value[0] += elapsed;
+
+		// spkGif 旋转：展示态是 FPS 选项时持续旋转（angle 保持 0~360 不累积），其他选项最多转半圈归位。
+		// 用 spkGifSel 而非 curSelected：移动端手指滑动过程中展示态冻结，松手才切换，避免边滑边乱转。
 		if (spkGif != null && spkGif.exists)
 		{
-			if (arisDance == curSelected)
+			if (arisDance == spkGifSel)
 				spkGif.angle = (spkGif.angle + 1) % 360;
 			else
 			{
