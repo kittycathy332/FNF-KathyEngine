@@ -13,7 +13,7 @@ haxelib install lime 8.3.2 --quiet --skip-dependencies
 REM haxelib install libhxcpp 6.0.0-rc.1 --skip-dependencies
 haxelib install openfl 9.5.2 --quiet --skip-dependencies
 haxelib install flixel 5.9.0 --quiet --skip-dependencies
-haxelib install flixel-addons 4.0.2 --quiet --skip-dependencies
+haxelib install flixel-addons 3.3.2 --quiet --skip-dependencies
 haxelib install flixel-tools 1.5.1 --quiet --skip-dependencies
 haxelib install flixel-ui 2.6.5 --quiet --skip-dependencies
 haxelib git flixel-text-input https://github.com/kittycathy332/flixel-text-input.git --quiet --skip-dependencies

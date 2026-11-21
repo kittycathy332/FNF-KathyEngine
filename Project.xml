@@ -126,7 +126,7 @@
 	<java path="project/android/jni" if="android"/>
 	<!-- 数据目录 DocumentsProvider（仅 Android，极简 Gradle 模块） -->
 	<dependency name="kathyengine-data" path="project/android/data" if="android"/>
-	<haxelib name="flixel-addons" version="4.0.2"/>
+	<haxelib name="flixel-addons" version="3.3.2"/>
 	<haxelib name="flixel-ui" version="2.6.5"/>
 	<haxelib name="tjson" version="1.4.0"/>
 	<haxelib name="away3d" version="5.0.9"/>
