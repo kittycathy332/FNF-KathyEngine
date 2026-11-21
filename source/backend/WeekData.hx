@@ -32,12 +32,14 @@ class WeekData {
 	private static var _lastReloadKey:String = null;
 
 	/// 失效 reloadWeekFiles 缓存。退出 Freeplay 时调，下次进入会重新全量扫描。
+	/// 注意：只失效缓存键，不清空 weeksList / weeksLoaded —— 因为调用发生在
+	/// FreeplayState.destroy()，紧接着 PlayState.create() 会用 weeksList[storyWeek]
+	/// 注入 Lua 的 `week` 全局、并用 getWeekFileName()/getCurrentWeek() 读成就与存档。
+	/// 若在此清空，PlayState 里脚本读到的 `week` 会是 null（模组脚本按 week 分支演出会失效）。
+	/// 保留数据不影响内存回收：下次 reloadWeekFiles 会重建并覆盖这些结构。
 	public static function _invalidateReloadCache():Void
 	{
 		_lastReloadKey = null;
-		weeksList = [];
-		weeksLoaded.clear();
-		loadedFiles = new Map();
 	}
 	#end
 	public var folder:String = '';
