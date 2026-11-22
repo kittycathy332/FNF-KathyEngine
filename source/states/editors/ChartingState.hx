@@ -897,6 +897,11 @@ if(_shouldReset) Conductor.songPosition = 0;
 		{
 			openNewChart();
 		}
+		else
+		{
+			// 从 PlayState 试玩返回 / 重建 SONG 后，恢复降档暂存音符（openNewChart 内部已 restore）
+			restoreStashedNotes();
+		}
 
 		// 设置 mustHitIndicator 的初始位置
 		var initialMustHit:Bool = (PlayState.SONG.notes.length > 0 && PlayState.SONG.notes[0] != null && PlayState.SONG.notes[0].mustHitSection);
@@ -4028,39 +4033,168 @@ if(_shouldReset) Conductor.songPosition = 0;
 		return out;
 	}
 
-	// LE LTS 双侧：改键数后按"新键数"重编码全部音符的 LE 连续编号，保持音符的"侧 + 侧内列"不变。
-	// 双侧谱面音符编号按谱面当前键数编码（mustHit 小节 0..plr-1=玩家/plr..=对手；非 mustHit 小节 0..opp-1=对手/opp..=玩家）。
-	// 若只改 SONG.opponentKeyCount/playerKeyCount 而不重编码，改对手键数后对手边界（opp）变化，
-	// 原玩家音符（如非 mustHit 下 LE 4..9）会被新边界重新判成对手——侧判定翻转、按对手档取动画/着色，
-	// 即"改对手键数后玩家箭头动画受影响"（改玩家键数不动 opp 边界，所以对手不受影响，现象不对称）。
-	// oldDual=false（改前是 Psych/EK 编码）：侧判定固定为 noteData < oldPlr（不随小节），转新 LE 编码。
+	// 改键数时放不下的音符暂存区（参考 063/073 的 stashedNotes，实现往返无损）。
+	// 存的是「逻辑位置（侧 + 侧内列）+ 完整数据副本」，与当前编码无关：
+	// 降档超范围的音符暂存，升档能容纳时按新档位重算 lane 放回。绝不删除任何音符。
+	// 每项: {sec:Int, side:Bool(玩家), key:Int(侧内列), type:String, data:Array<Dynamic>}
+	var stashedNotes:Array<Dynamic> = [];
+	// 持久化（参考 073）：暂存音符不进 sectionNotes，但必须跨 state 存活——
+	// 降档后按 ENTER 进 PlayState 试玩，PlayState 会重建 SONG 并转换谱面格式，
+	// 若 stash 只存在实例字段里就会丢失，试玩回来升档时箭头永久消失。
+	// 双保险：写进 SONG 字段（随谱面/autosave 落盘，跨重启）+ 会话静态 Map（切 state 后 SONG 被重建时兜底）。
+	static inline var STASH_FIELD:String = 'editorStashedNotes';
+	static var sessionStashBySong:Map<String, Array<Dynamic>> = new Map();
+
+	// 深拷贝 stash（隔离工作副本与落盘副本，避免 undo/song 替换互相污染）
+	static function cloneStash(src:Array<Dynamic>):Array<Dynamic>
+	{
+		return src != null ? haxe.Json.parse(haxe.Json.stringify(src)) : [];
+	}
+
+	// 校验外部读回的暂存项，坏项跳过；保证 data 至少 4 项且 type/data[3] 对齐
+	static function sanitizeStash(raw:Dynamic):Array<Dynamic>
+	{
+		var out:Array<Dynamic> = [];
+		if (raw == null || !Std.isOfType(raw, Array)) return out;
+		for (s in (cast raw:Array<Dynamic>))
+		{
+			if (s == null || Reflect.field(s, 'sec') == null || Reflect.field(s, 'key') == null
+				|| Reflect.field(s, 'side') == null || Reflect.field(s, 'data') == null
+				|| !Std.isOfType(Reflect.field(s, 'data'), Array))
+				continue;
+			var data:Array<Dynamic> = Reflect.field(s, 'data');
+			while (data.length < 3) data.push(null);
+			var t:String = Reflect.hasField(s, 'type') ? Std.string(Reflect.field(s, 'type')) : '';
+			if (t.length < 1 && data.length > 3 && data[3] != null) t = Std.string(data[3]);
+			if (data.length < 4) data.push(t);
+			else data[3] = t;
+			Reflect.setField(s, 'type', t);
+			out.push(s);
+		}
+		return out;
+	}
+
+	function stashSongKey():String
+	{
+		return (PlayState.SONG != null && PlayState.SONG.song != null) ? Std.string(PlayState.SONG.song) : '';
+	}
+
+	// 把 stash 同步到 SONG 字段 + 会话 Map（所有改动 stash 的地方都要调）
+	function syncStashedNotes():Void
+	{
+		if (PlayState.SONG == null) return;
+		var copy:Array<Dynamic> = cloneStash(stashedNotes);
+		if (copy.length == 0)
+			Reflect.deleteField(PlayState.SONG, STASH_FIELD);
+		else
+			Reflect.setField(PlayState.SONG, STASH_FIELD, copy);
+		sessionStashBySong.set(stashSongKey(), copy);
+	}
+
+	// 从 SONG 字段 / 会话 Map 恢复 stash（SONG 字段优先：跨重启/跨文件；会话兜底：切 state）
+	function restoreStashedNotes():Void
+	{
+		if (PlayState.SONG == null) return;
+		var fromSong:Array<Dynamic> = null;
+		var raw:Dynamic = Reflect.field(PlayState.SONG, STASH_FIELD);
+		if (raw != null) fromSong = sanitizeStash(cloneStash(raw));
+		var cached:Array<Dynamic> = sessionStashBySong.get(stashSongKey());
+		stashedNotes = (fromSong != null && fromSong.length > 0)
+			? fromSong
+			: ((cached != null && cached.length > 0) ? sanitizeStash(cloneStash(cached)) : []);
+		syncStashedNotes(); // 恢复后回写，保证 Save/autosave 拿到同一份
+	}
+
+	// 把逻辑位置 (isPlr, col) 按当前 SONG 编码写成 note[1]。
+	// isDual=true → LE 连续编号（mustHit 小节 玩家0..plr-1/对手plr..；非 mustHit 对手0..opp-1/玩家opp..）
+	// isDual=false → Psych/EK（玩家0..cols-1 / 对手cols..，不随小节）
+	static function encodeNoteData(isPlr:Bool, col:Int, secMustHit:Bool, plr:Int, opp:Int, isDual:Bool):Int
+	{
+		if (!isDual) return isPlr ? col : (plr + col);
+		return isPlr ? (secMustHit ? col : opp + col) : (secMustHit ? plr + col : col);
+	}
+
+	// 把 note[1] 解码成逻辑位置 (isPlr, col)，与编码方式无关。
+	static function decodeNoteData(d:Int, secMustHit:Bool, plr:Int, opp:Int, isDual:Bool):{isPlr:Bool, col:Int}
+	{
+		if (isDual)
+		{
+			if (secMustHit) return {isPlr: d < plr, col: d < plr ? d : (d - plr)};
+			return {isPlr: d >= opp, col: d >= opp ? (d - opp) : d};
+		}
+		return {isPlr: d < plr, col: d % plr};
+	}
+
+	// LE LTS 双侧：改键数后按"新键数"重编码全部音符，保持"侧 + 侧内列"语义，往返无损。
+	// 超出新档位容量的音符暂存到 stashedNotes（不删除），升档时再按新档位还原原位。
+	// oldDual=false（改前 Psych/EK）：侧固定为 noteData < oldPlr，转新编码。
 	function reencodeChartNotes(oldPlr:Int, oldOpp:Int, oldDual:Bool):Void
 	{
 		var newPlr:Int = dualPlayerKeyCount();
 		var newOpp:Int = dualOpponentKeyCount();
-		for (sec in PlayState.SONG.notes)
+		var newDual:Bool = isDualChart();
+		var newPlrMax:Int = newPlr - 1;
+		var newOppMax:Int = newOpp - 1;
+
+		// 1) 先把当前谱面音符按「逻辑位置」重映射到新编码；放不下的暂存（顺序：先重映射后还原）。
+		for (secIdx in 0...PlayState.SONG.notes.length)
 		{
+			var sec = PlayState.SONG.notes[secIdx];
+			if (sec == null || sec.sectionNotes == null) continue;
 			var secMustHit:Bool = sec.mustHitSection;
+			var kept:Array<Dynamic> = [];
 			for (note in sec.sectionNotes)
 			{
-				if (note == null || note.length < 2) continue;
-				var d:Int = Std.int(note[1]);
-				var isPlr:Bool;
-				var col:Int;
-				if (oldDual)
+				if (note == null || note.length < 2) { kept.push(note); continue; }
+				var pos = decodeNoteData(Std.int(note[1]), secMustHit, oldPlr, oldOpp, oldDual);
+				var capacity:Int = pos.isPlr ? newPlrMax : newOppMax;
+				if (pos.col > capacity)
 				{
-					if (secMustHit) { isPlr = (d < oldPlr); col = isPlr ? d : (d - oldPlr); }
-					else { isPlr = (d >= oldOpp); col = isPlr ? (d - oldOpp) : d; }
+					// 数据用副本（不再与 sectionNotes 共享引用），存逻辑位置而非 lane，支持多级升降档还原
+					stashedNotes.push({sec: secIdx, side: pos.isPlr, key: pos.col,
+						type: (note.length > 3 ? note[3] : ''), data: note.copy()});
+					continue;
 				}
-				else
-				{
-					// Psych/EK 编码：0..oldPlr-1=玩家（固定，不随小节）、oldPlr..=对手
-					isPlr = (d < oldPlr);
-					col = d % oldPlr;
-				}
-				note[1] = isPlr ? (secMustHit ? col : newOpp + col) : (secMustHit ? newPlr + col : col);
+				note[1] = encodeNoteData(pos.isPlr, pos.col, secMustHit, newPlr, newOpp, newDual);
+				kept.push(note);
 			}
+			sec.sectionNotes = kept;
 		}
+
+		// 2) 把暂存区里新档位能容纳的音符按新编码还原，放回原小节
+		if (stashedNotes.length == 0) { syncStashedNotes(); return; }
+		var stillStashed:Array<Dynamic> = [];
+		var touched:Map<Int, Bool> = new Map();
+		for (s in stashedNotes)
+		{
+			var capacity:Int = s.side ? newPlrMax : newOppMax;
+			var secIdx:Int = s.sec;
+			if (s.key > capacity || secIdx < 0 || secIdx >= PlayState.SONG.notes.length
+				|| PlayState.SONG.notes[secIdx] == null || PlayState.SONG.notes[secIdx].sectionNotes == null)
+			{
+				stillStashed.push(s);
+				continue;
+			}
+			var src:Array<Dynamic> = s.data;
+			var secMustHit:Bool = PlayState.SONG.notes[secIdx].mustHitSection;
+			var rebuilt:Array<Dynamic> = [src[0],
+				encodeNoteData(s.side, s.key, secMustHit, newPlr, newOpp, newDual),
+				src.length > 2 ? src[2] : 0, s.type];
+			for (k in 4...src.length) rebuilt.push(src[k]);
+			PlayState.SONG.notes[secIdx].sectionNotes.push(rebuilt);
+			touched.set(secIdx, true);
+		}
+		stashedNotes = stillStashed;
+		for (idx in touched.keys())
+			PlayState.SONG.notes[idx].sectionNotes.sort(PlayState.sortByTime);
+		syncStashedNotes();
+	}
+
+	// 加载新谱面 / 重置时清暂存区（否则旧谱面的暂存音符会串进新谱面）
+	function clearStashedNotes():Void
+	{
+		stashedNotes = [];
+		syncStashedNotes();
 	}
 
 	function applySectionColumns(secNum:Int):Void
@@ -4250,6 +4384,9 @@ if(_shouldReset) Conductor.songPosition = 0;
 	function loadChart(song:SwagSong)
 	{
 		PlayState.SONG = song;
+		// 恢复暂存音符：SONG 字段优先（跨重启/跨文件），会话 Map 兜底（试玩切 state 后 SONG 被重建）。
+		// 换到全新谱面时字段与会话都为空，自然得到空 stash，不会串谱。
+		restoreStashedNotes();
 		StageData.loadDirectory(PlayState.SONG);
 		Conductor.bpm = PlayState.SONG.bpm;
 		Conductor.mapBPMChanges(PlayState.SONG);
@@ -5152,6 +5289,9 @@ if(_shouldReset) Conductor.songPosition = 0;
 	{
 		var removedNotes:Int = 0;
 		var removedEvents:Int = 0;
+		// 收集被删对象供撤销恢复（删除只从数组移除，不 destroy，MetaNote 仍存活）
+		var deletedNotes:Array<MetaNote> = [];
+		var deletedEvents:Array<EventMetaNote> = [];
 		var minTime:Float = wholeSong ? Math.NEGATIVE_INFINITY : getMinNoteTime(curSec);
 		var maxTime:Float = wholeSong ? Math.POSITIVE_INFINITY : getMaxNoteTime(curSec);
 
@@ -5183,6 +5323,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 					{
 						notes.remove(note);
 						selectedNotes.remove(note);
+						deletedNotes.push(note);
 						removedNotes++;
 						deletedKeys.set(key, true);
 					}
@@ -5193,6 +5334,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 					{
 						notes.remove(note);
 						selectedNotes.remove(note);
+						deletedNotes.push(note);
 						removedNotes++;
 					}
 					else keptNotes.set(key, true);
@@ -5239,6 +5381,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 						{
 							events.remove(ev);
 							selectedNotes.remove(ev);
+							deletedEvents.push(ev);
 							removedEvents++;
 							deletedEventKeys.set(key, true);
 							break;
@@ -5250,6 +5393,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 						{
 							events.remove(ev);
 							selectedNotes.remove(ev);
+							deletedEvents.push(ev);
 							removedEvents++;
 							break; // 该图标已判定为重复，不再处理其后续条目
 						}
@@ -5261,6 +5405,9 @@ if(_shouldReset) Conductor.songPosition = 0;
 
 		if (removedNotes + removedEvents > 0)
 		{
+			// 整批作为一次 DELETE_NOTE 撤销：被删 MetaNote 仍存活（只从数组 remove），
+			// 撤销时 actionPushNotes 会把它们整批放回并刷新渲染。
+			addUndoAction(DELETE_NOTE, {notes: deletedNotes, events: deletedEvents});
 			softReloadNotes(wholeSong ? false : true);
 			chartDataDirty = true;
 			showOutput(Language.get('charting_dedupesec_result', [Std.string(removedNotes), Std.string(removedEvents)]), true);
@@ -7298,8 +7445,13 @@ for (i in 0...GRID_PLAYERS)
 			updateChartData();
 			PlayState.SONG.mania = newKeys - 1;
 			PlayState.SONG.playerKeyCount = newKeys;
-			if (isDualChart() && oldPlrM != newKeys)
-				reencodeChartNotes(oldPlrM, oldOppM, oldDualM); // 保持侧+侧内列不变，按新键数重编码 LE 编号
+			// 只要键数变化就重编码，不再限定 isDualChart()：
+			// 普通 Psych 谱改 mania 时 opponentKeyCount 被补齐=玩家键数、两侧恒等，
+			// 旧代码因此从不重编码 → note[1] 沿用旧列号，新网格按 % newCols 解码，
+			// 对手音符被错判成玩家侧（错位/丢失）。reencode 的写回公式在两侧相等时
+			// 天然产出 Psych 编码（玩家0..col-1 / 对手col..），故单/双侧都适用。
+			if (oldPlrM != newKeys || oldOppM != dualOpponentKeyCount())
+				reencodeChartNotes(oldPlrM, oldOppM, oldDualM);
 			refreshDualUI();
 			applySectionColumns(curSec);
 			reloadNotes(); // 改键后重建音符：已放置箭头的列/位置需按新网格重新映射
@@ -7322,8 +7474,10 @@ for (i in 0...GRID_PLAYERS)
 			// 否则下方 reloadNotes() 从 SONG.sectionNotes 全量重建会丢失所有未保存编辑（谱面"重置回最初进入时"）。
 			updateChartData();
 			PlayState.SONG.opponentKeyCount = newKeys;
-			if (isDualChart() && oldOppO != newKeys)
-				reencodeChartNotes(oldPlrO, oldOppO, oldDualO); // 保持侧+侧内列不变，按新键数重编码 LE 编号
+			// 与玩家侧同理：只要键数变化就重编码，不限定 isDualChart()，
+			// 否则单/双侧切换或单侧调整时旧列号会按新网格错误解码。
+			if (oldPlrO != dualPlayerKeyCount() || oldOppO != newKeys)
+				reencodeChartNotes(oldPlrO, oldOppO, oldDualO);
 			refreshDualUI();
 			applySectionColumns(curSec);
 			reloadNotes(); // 改键后重建音符：已放置箭头的列/位置需按新网格重新映射
@@ -10138,6 +10292,7 @@ function adaptNotesToNewTimes(oldTimes:Array<Float>)
 		}
 		setSongPlaying(false);
 		chartEditorSave.flush(); //just in case a random crash happens before loading
+		syncStashedNotes(); // 暂存音符持久化，避免预览期间状态丢失
 
 		// 预览游玩期间暂停制谱器主逻辑：
 		// 1) 避免父状态每帧用已暂停的 FlxG.sound.music.time 覆盖 Conductor.songPosition（否则预览卡在同一时机不动）；
@@ -10154,10 +10309,27 @@ function adaptNotesToNewTimes(oldTimes:Array<Float>)
 
 	function goToPlayState()
 	{
+		// 降档暂存状态下试玩：暂存音符不在当前键数网格内、不会出现在试玩里，
+		// 弹出提示让用户知情（073 的 stashWarn 等价）。确认后照常进入 PlayState；
+		// 暂存已持久化到 SONG 字段 + 会话 Map，试玩返回后升档会自动还原。
+		if (stashedNotes != null && stashedNotes.length > 0)
+		{
+			var warn:String = '有 ${stashedNotes.length} 个箭头在当前键数范围外，试玩中不会出现。\n'
+				+ '它们不会丢失：回到编谱器并把键数调回后可恢复。是否继续试玩？';
+			openSubState(new Prompt(warn, doGoToPlayState));
+			return;
+		}
+		doGoToPlayState();
+	}
+
+	function doGoToPlayState()
+	{
 		persistentUpdate = false;
 		FlxG.mouse.visible = false;
 		chartEditorSave.flush();
 
+		// 试玩前把 stash 落盘/会话同步，确保 PlayState 重建 SONG 后仍能恢复
+		syncStashedNotes();
 		setSongPlaying(false);
 		updateChartData();
 		StageData.loadDirectory(PlayState.SONG);
