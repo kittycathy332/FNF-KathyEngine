@@ -966,7 +966,7 @@ class EditorPlayState extends MusicBeatSubstate
 		{
 			var chartingState:ChartingState = cast FlxG.state;
 			if(chartingState.dad != null && chartingState.dad.visible) {
-				chartingState.playCharacterSing(chartingState.dad, Std.int(Math.abs(note.noteData)));
+				chartingState.playCharacterSing(chartingState.dad, Std.int(Math.abs(note.noteData)), true, false, note.noteType, curSection);
 			}
 		}
 
@@ -1054,7 +1054,7 @@ class EditorPlayState extends MusicBeatSubstate
 			var chartingState:ChartingState = cast FlxG.state;
 			if (chartingState.boyfriend != null && chartingState.boyfriend.visible)
 			{
-				chartingState.playCharacterSing(chartingState.boyfriend, Std.int(Math.abs(note.noteData)));
+				chartingState.playCharacterSing(chartingState.boyfriend, Std.int(Math.abs(note.noteData)), true, false, note.noteType, curSection);
 			}
 		}
 

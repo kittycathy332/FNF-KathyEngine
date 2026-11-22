@@ -1233,9 +1233,44 @@ if(_shouldReset) Conductor.songPosition = 0;
 	// 播放角色的sing动画
 	// LE LTS 双侧：isBf 决定取哪侧档位的 sing 方向映射（玩家=playerKeyCount-1、对手=keyCount-1）——
 	// 全局 singAnimations 是"当前编辑侧"档位，跨两侧播放时对侧角色会用错档方向（"播放的不是箭头对应动画"）。
-	public function playCharacterSing(char:Character, noteData:Int, ?isBf:Bool = true, ?forcePlay:Bool = false):Void
+	/**
+	 * 编辑 / 预览时播放角色唱歌动画。
+	 * noteType 对齐 PlayState 的三种特殊语义：
+	 *  - 'Hey!'         → 播 hey（有该动画时），对齐 goodNoteHit/opponentNoteHit
+	 *  - 'No Animation' → 完全不播 sing（对齐 Note.noAnimation）
+	 *  - 'Alt Animation'/'小节 AltAnimation' → sing 动画加 -alt 后缀（对齐 Note.animSuffix）
+	 * sectionIndex 用于读取该音符所属小节的 altAnim（PlayState 中 section.altAnim && !mustPress 才生效）。
+	 */
+	public function playCharacterSing(char:Character, noteData:Int, ?isBf:Bool = true, ?forcePlay:Bool = false, ?noteType:String = null, ?sectionIndex:Int = -1):Void
 	{
 		if(char == null || !char.visible) return;
+
+		// No Animation：命中不出 sing（也不出 hey），与游玩一致
+		if(noteType == 'No Animation' || noteType == 'NoAnimation') return;
+
+		// Hey!：角色有 hey 动画就播它并置 specialAnim，对齐 PlayState
+		if(noteType == 'Hey!')
+		{
+			if(char.hasAnimation('hey') || (char.isAnimateAtlas && char.atlas.anim.getByName('hey') != null))
+			{
+				char.playAnim('hey', true);
+				char.specialAnim = true;
+				char.heyTimer = 0.6;
+				char.holdTimer = 0;
+				return;
+			}
+			// 没有 hey 动画时回退普通 sing（PlayState 也是这个行为）
+		}
+
+		// Alt Animation：noteType 显式指定，或所属小节启用 altAnim 且该音符是对手侧
+		var useAlt:Bool = (noteType == 'Alt Animation' || noteType == 'AltAnimation');
+		// 小节 altAnim 只对对手侧生效（对齐 PlayState 的 section.altAnim && !mustPress）。
+		// 用 char == dad 判断而非 isBf：后者在部分调用里为保持既有键数档行为而传 true。
+		if(!useAlt && sectionIndex >= 0 && char == dad)
+		{
+			var sec = PlayState.SONG.notes[sectionIndex];
+			if(sec != null && sec.altAnim) useAlt = true;
+		}
 
 		var dir:Int = Std.int(Math.abs(noteData));
 		var animToPlay:String = singAnimations[Std.int(Math.abs(Math.min(singAnimations.length-1, dir)))];
@@ -1253,6 +1288,15 @@ if(_shouldReset) Conductor.songPosition = 0;
 				case 'singRIGHT': animToPlay = 'singRIGHT';
 			}
 		}
+		// Alt：-alt 动画存在就用，不存在则回退普通 sing（与 Note 的 animSuffix 行为一致：
+		// 游玩时若角色无 -alt 动画，Character.playAnim 也会回退）
+		if(useAlt)
+		{
+			var altAnim:String = animToPlay + '-alt';
+			if(char.animation.exists(altAnim) || (char.isAnimateAtlas && char.atlas.anim.getByName(altAnim) != null))
+				animToPlay = altAnim;
+		}
+
 		if(char.animation.exists(animToPlay) || (char.isAnimateAtlas && char.atlas.anim.getByName(animToPlay) != null))
 		{
 			char.playAnim(animToPlay, true);
@@ -2585,7 +2629,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 								var targetChar:Character = charSide[0] ? boyfriend : dad;
 								var direction:Int = charSide[1];
 								if(targetChar != null && targetChar.visible)
-									playCharacterSing(targetChar, direction, charSide[0]);
+									playCharacterSing(targetChar, direction, charSide[0], false, noteAdded.noteType, noteAdded.editorSection);
 							}
 								else if(!lockedEvents)
 								{
@@ -2866,7 +2910,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 								var targetChar:Character = charSide[0] ? boyfriend : dad;
 								var direction:Int = charSide[1];
 								if(targetChar != null && targetChar.visible)
-									playCharacterSing(targetChar, direction, charSide[0]);
+									playCharacterSing(targetChar, direction, charSide[0], false, noteAdded.noteType, noteAdded.editorSection);
 							}
 							else if(!lockedEvents)
 							{
@@ -2960,7 +3004,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 				var targetChar:Character = charSide[0] ? boyfriend : dad;
 				var direction:Int = charSide[1];
 				if(targetChar != null && targetChar.visible)
-					playCharacterSing(targetChar, direction, charSide[0]);
+					playCharacterSing(targetChar, direction, charSide[0], false, note.noteType, noteSec);
 			}
 		}
 
@@ -5540,7 +5584,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 			var targetChar:Character = charSide[0] ? boyfriend : dad;
 			var direction:Int = charSide[1];
 			if(targetChar != null && targetChar.visible)
-				playCharacterSing(targetChar, direction, charSide[0]);
+				playCharacterSing(targetChar, direction, charSide[0], false, noteAdded.noteType, noteAdded.editorSection);
 		}
 		else if(!lockedEvents && dragStartTrackType == 'event')
 		{
