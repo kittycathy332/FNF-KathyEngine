@@ -66,6 +66,24 @@ class Paths
 	}
 
 	public static var dumpExclusions:Array<String> = ['assets/shared/music/freakyMenu.$SOUND_EXT', 'assets/shared/mobile/touchpad/bg.png'];
+
+	/**
+	 * 软清理（仅用于"重新加载时缓存资源=开"时的同曲重玩）：
+	 * 解除 localTrackedAssets 保护列表、清 atlas 缓存，但**保留 currentTrackedAssets/FlxG.bitmap 里的 GPU 纹理**，
+	 * 让重玩能命中缓存加速加载。之所以要解除保护列表：否则这些资源的 contains(key) 恒真，
+	 * 回到菜单后 clearUnusedMemory 无法回收，会重现内存 100MB→500MB 的累积。
+	 * 与 clearStoredMemory 的区别：后者会把未保护的 graphic 一并 destroy（硬清）；本函数不 destroy 任何纹理。
+	 */
+	public static function releaseForSongRestart()
+	{
+		#if debug
+		trace('[CACHE] releaseForSongRestart: 保留 ${Lambda.count(currentTrackedAssets)} 张纹理，解除 localTrackedAssets(${localTrackedAssets.length}) 保护');
+		#end
+		localTrackedAssets = [];
+		_atlasCache = new Map();
+		#if !html5 openfl.Assets.cache.clear("songs"); #end
+	}
+
 	// haya I love you for the base cache dump I took to the max
 	public static function clearUnusedMemory()
 	{
@@ -75,6 +93,9 @@ class Paths
 			// if it is not currently contained within the used local assets
 			if (!localTrackedAssets.contains(key) && !dumpExclusions.contains(key))
 			{
+				#if debug
+				trace('[CACHE] FREE  $key');
+				#end
 				destroyGraphic(currentTrackedAssets.get(key)); // get rid of the graphic
 				currentTrackedAssets.remove(key); // and remove the key from local cache map
 			}
@@ -772,11 +793,17 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 			if (cached != null && cached.bitmap != null
 				&& FlxG.bitmap.get(cached.key) == cached)
 			{
+				#if debug
+				trace('[CACHE] HIT  $cacheKey');
+				#end
 				trackLocalAsset(cacheKey);
 				return cached;
 			}
 			currentTrackedAssets.remove(cacheKey); // 失效则丢弃，后续走 cacheBitmap 重新加载
 		}
+		#if debug
+		trace('[CACHE] MISS $cacheKey');
+		#end
 		return cacheBitmap(key, parentFolder, bitmap, allowGPU, cacheKey);
 	}
 
@@ -940,7 +967,25 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 	static public function getSparrowAtlas(key:String, ?parentFolder:String = null, ?allowGPU:Bool = true):FlxAtlasFrames
 	{
 		var __cacheKey:String = 'Sparrow|' + key;
-		if (_atlasCache.exists(__cacheKey)) return _atlasCache.get(__cacheKey);
+		if (_atlasCache.exists(__cacheKey))
+		{
+			var cached:FlxAtlasFrames = _atlasCache.get(__cacheKey);
+			// 失效校验：clearUnusedMemory() 会销毁底层 FlxGraphic（bitmap 置空并从 FlxG.bitmap 移除），
+			// 但不会清 _atlasCache，导致缓存的 FlxAtlasFrames 仍指向已销毁贴图，渲染成 flixel 默认缺失贴图。
+			// 与 image()/Note.getCachedSparrowAtlas() 用同一判据；失效则丢弃重建。
+			// null 也是有效缓存值（XML 缺失时写入），直接返回交给调用方回退。
+			if (cached == null) return null;
+			if (cached.parent != null && cached.parent.bitmap != null
+				&& FlxG.bitmap.get(cached.parent.key) == cached.parent)
+			{
+				// 关键：命中图集缓存时绕过了 image()，必须补登记保护，
+				// 否则下一帧 clearUnusedMemory() 会把这张"仍在用"的贴图当未使用资源删掉，
+				// 导致重玩时贴图变 flixel 默认（交替消失/出现的根因）。
+				trackLocalAsset(cached.parent.key);
+				return cached;
+			}
+			_atlasCache.remove(__cacheKey);
+		}
 
 		if(key.contains('psychic')) trace(key, parentFolder, allowGPU);
 		// 读取 Sparrow XML 内容（经 OpenFlAssets 读取打包资源，兼容 Android），

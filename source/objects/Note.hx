@@ -716,7 +716,13 @@ class Note extends FlxSprite
 			// 一旦发现失效就丢弃并重新解析，从根本上避免这个问题，同时保留正常情况下的缓存收益。
 			if (cached != null && cached.parent != null && cached.parent.bitmap != null
 				&& FlxG.bitmap.get(cached.parent.key) == cached.parent)
+			{
+				// 命中 Note 自己的 static 图集缓存时绕过了 Paths.image()，必须补登记保护。
+				// 否则下一帧 clearUnusedMemory() 会删除这张仍在用的皮肤贴图，
+				// 重玩时音符变回默认贴图（交替消失/出现的根因）。
+				Paths.trackLocalAsset(cached.parent.key);
 				return cached;
+			}
 			_atlasCache.remove(key);
 		}
 		var atlas:FlxAtlasFrames = Paths.getSparrowAtlas(key);

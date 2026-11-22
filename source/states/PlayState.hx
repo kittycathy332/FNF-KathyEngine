@@ -613,6 +613,9 @@ class PlayState extends MusicBeatState
 	// generateSong 每次进歌都要遍历全部 84 个模组探测音频是否存在，跨曲切换时是固定开销，会话内缓存可消除。
 	public static var _songAudioModCache:Map<String, String> = null;
 	public static var nextReloadAll:Bool = false;
+	// "重新加载时缓存资源"：pause 菜单重玩同曲时置位，让本次 destroy 走软清理（保留纹理缓存供重玩复用）。
+	// 只覆盖游戏内重玩；退出到菜单的路径不置位，仍走硬清理防止内存累积。
+	public static var softCacheOnNextDestroy:Bool = false;
 
 	public var luaTouchPad:TouchPad;
 
@@ -697,7 +700,8 @@ class PlayState extends MusicBeatState
 		//trace('Playback Rate: ' + playbackRate);
 		_lastLoadedModDirectory = Mods.currentModDirectory;
 
-		// 只有当不缓存资源或F5刷新时才清空资源
+		// 只有当不缓存资源或F5刷新时才清空资源。
+		// 注：pause 重玩走软清理（destroy 时已处理），这里开关=开就不再清，命中上一局保留的缓存。
 		if(!ClientPrefs.data.cacheResourcesOnReload || nextReloadAll)
 		{
 			Paths.clearStoredMemory();
@@ -708,6 +712,8 @@ class PlayState extends MusicBeatState
 			}
 		}
 		nextReloadAll = false;
+		// 标记只应影响"置位后的那一次 destroy"；新 state 已 create，复位防止残留到下次退出。
+		softCacheOnNextDestroy = false;
 
 		// 离线渲染 + Replay 输入源：渲染请求只由设置页「渲染下一首曲目」置位，
 		// 这里【不自动置位】——普通回放局应该照常游玩，不进渲染。
@@ -8999,8 +9005,15 @@ tempScore += '${lblScore}: ${songScore}';
 
 		// 退出歌曲时释放本局加载的贴图/音频缓存：否则这些资源被 localTrackedAssets
 		// 永久钉住，回到菜单后 GC 无法回收，内存从 ~100MB 累积到 ~500MB 不回落。
-		// clearStoredMemory() 会清缓存 + 重置保护列表，且不强制 GC（退出瞬间不卡顿）。
-		Paths.clearStoredMemory();
+		// 例外：pause 菜单"重玩歌曲"且开启"重新加载时缓存资源"时走软清理——
+		// 只解除保护列表、保留 GPU 纹理缓存供重玩命中加速；解除保护后回菜单仍能被 clearUnusedMemory 回收。
+		if (softCacheOnNextDestroy)
+		{
+			Paths.releaseForSongRestart();
+			softCacheOnNextDestroy = false;
+		}
+		else
+			Paths.clearStoredMemory();
 		shutdownThread = true;
 		_syncThreadGen++; // 让所有代次的看门狗线程退出，释放对 this(整个state图)的引用
 		FlxG.signals.preUpdate.remove(checkForResync);

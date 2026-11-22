@@ -632,6 +632,10 @@ class PauseSubState extends MusicBeatSubstate
 		PlayState.instance.vocals.volume = 0;
 		PlayState.instance.opponentVocals.volume = 0;
 
+		// "重新加载时缓存资源"：重玩同曲走软清理，保留 GPU 纹理缓存加速重新加载。
+		// F5 全刷新（nextReloadAll）不走此路径，不受影响。
+		PlayState.softCacheOnNextDestroy = ClientPrefs.data.cacheResourcesOnReload;
+
 		if(noTrans)
 		{
 			FlxTransitionableState.skipNextTransIn = true;
