@@ -721,6 +721,8 @@
     "discord_rich_presence": "Discord 富媒体状态",
     "disable_networking": "禁用网络连接",
     "combo_stacking": "连击堆叠效果",
+    "judge_popup_perf": "判定弹窗性能模式",
+    "judge_popup_perf_desc": "开启（默认）：即使在每秒上千音符的极限垃圾谱面下，连击/评级弹窗、判定毫秒文本、击中粒子每帧最多只生成一组，并复用精灵对象，避免内存暴涨和掉帧。关闭：恢复原版「每次命中都生成一组弹窗」的行为。",
     "single_hold_animation": "长按箭头仅播放一次(箭头)动画",
     "auto_reset_strum_animation": "自动重置箭头动画",
     "fallback_perfect_to_sick": "Perfect评级精灵 回退至 Sick",

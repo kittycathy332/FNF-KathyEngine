@@ -679,6 +679,8 @@
     "discord_rich_presence": "Discord 富媒體狀態",
     "disable_networking": "停用網路連線",
     "combo_stacking": "連擊堆疊效果",
+    "judge_popup_perf": "判定彈窗效能模式",
+    "judge_popup_perf_desc": "開啟（預設）：即使在每秒上千音符的極限垃圾譜面下，連擊/評級彈窗、判定毫秒文字、擊中粒子每幀最多只生成一組，並複用精靈物件，避免記憶體暴漲和掉幀。關閉：恢復原版「每次命中都生成一組彈窗」的行為。",
     "single_hold_animation": "長按箭頭僅播放一次(箭頭)動畫",
     "auto_reset_strum_animation": "自動重置箭頭動畫",
     "fallback_perfect_to_sick": "Perfect評級精靈 回退至 Sick",

@@ -394,6 +394,19 @@ class PlayState extends MusicBeatState
 	public var maxCombo:Int = 0; // 本局最大连击，用于回放 meta 展示
 	public var comboJustBroke:Bool = false; // 断连(失手)后首次命中标记，供 OG Funkin 显示模式强制显示 000
 
+	// ===== 判定弹窗性能模式：每帧只生成一组判定视觉（记账逻辑完全不受影响）=====
+	var judgeFrameJustBroke:Bool = false;   // 本帧首次命中的断连标记快照（OG Funkin 显示 000 用）
+	var judgeFrameId:Int = -1;              // 当前帧号，用于每帧一次的门控
+	var judgeVisualFrame:Int = -1;          // 上次生成判定视觉的帧号
+	var comboSpritePool:Array<FlxSprite> = [];        // combo 精灵对象池（无上限复用，消除每帧 new；同屏数量由帧率×淡出时长自然有界）
+
+	/** 本帧是否允许生成判定视觉（每帧最多一次，且只在性能模式开启时限流） */
+	inline function judgeCanEmit():Bool
+	{
+		if (!ClientPrefs.data.judgePopupPerf) return true; // 关闭=原版行为，每次命中都生成
+		return judgeVisualFrame != judgeFrameId;
+	}
+
 	public var healthBar:Bar;
 	public var timeBar:Bar;
 	var songPercent:Float = 0;
@@ -2319,7 +2332,9 @@ isReplaying = false;
 	 */
 	inline private function removeComboSpr(spr:FlxSprite):Void
 	{
-		if (comboGroup != null && comboGroup.members.indexOf(spr) != -1)
+		// FlxGroup.remove 内部已做 indexOf 并安全处理"不存在"的情况，
+		// 不必再额外查一次（SPAM 下同屏 sprite 多，省掉这半次 O(n) 扫描）。
+		if (comboGroup != null)
 			comboGroup.remove(spr, true);
 		if (ClientPrefs.data.legacyHUD)
 			members.remove(spr);
@@ -4754,6 +4769,13 @@ tempScore += '${lblScore}: ${songScore}';
 
 	override public function update(elapsed:Float)
 	{
+		// 判定弹窗性能模式：递增帧号，用于视觉生成的一帧一次门控。
+		// 弹窗的回收不在这里强制进行——保留完整淡出动画（视觉不变）；
+		// 每个 sprite 在其淡出 tween 完成时经 killComboSprite 归还对象池，
+		// 因每帧最多生成一组、且对象复用，稳态下不再 new，内存稳定。
+		if (ClientPrefs.data.judgePopupPerf)
+			judgeFrameId++;
+
 		// 分帧延迟初始化：将非关键操作分散到后续帧，避免 create() 中长时间阻塞主线程
 		if (_deferredInitStep >= 0)
 		{
@@ -6582,11 +6604,17 @@ tempScore += '${lblScore}: ${songScore}';
 	// Stores Ratings and Combo Sprites in a group
 	public var comboGroup:FlxSpriteGroup;
 
-	// 取一个全新的、干净的 rating/combo 精灵：直接 new，行为与旧引擎/模组完全一致。
-	// （已移除 comboSpritePooling 对象池——之前池复用会残留视觉状态，改为每次 new 确保渲染符合预期。）
+	// 取一个干净的 rating/combo 精灵。
+	// 性能模式开启时从对象池复用（彻底重置一切视觉状态，避免残留）；
+	// 关闭时保持原版行为：每次 new 一个全新精灵，确保与旧引擎/模组渲染完全一致。
 	function recycleComboSprite():FlxSprite
 	{
-		var spr:FlxSprite = new FlxSprite();
+		var spr:FlxSprite = null;
+		if (ClientPrefs.data.judgePopupPerf && comboSpritePool.length > 0)
+			spr = comboSpritePool.pop();
+		if (spr == null)
+			spr = new FlxSprite();
+		// 彻底重置：任何可能被补间/逻辑改过的属性都恢复默认，杜绝复用残留。
 		FlxTween.cancelTweensOf(spr);
 		// scale 是独立的 FlxPoint，cancelTweensOf(spr) 无法取消作用于它的补间，
 		// 必须单独取消，否则残留的 scale 补间会在复用后继续篡改新精灵的大小。
@@ -6597,12 +6625,20 @@ tempScore += '${lblScore}: ${songScore}';
 		spr.alpha = 1;
 		spr.scale.set(1, 1);
 		spr.offset.set(0, 0);
+		spr.color = FlxColor.WHITE;
+		spr.visible = true;
+		spr.active = true;
+		spr.exists = true;
+		spr.antialiasing = ClientPrefs.data.antialiasing;
+		spr.blend = openfl.display.BlendMode.NORMAL;
 		spr.loadGraphic(null);
 		return spr;
 	}
 
-	// 用完一个 rating/combo 精灵：先从 comboGroup 移除，再立即销毁释放。
-	// （已移除对象池归属判断，全部 new 出来的对象直接 destroy。）
+	// 用完一个 rating/combo 精灵：从 comboGroup 移除。
+	// 性能模式开启时无条件归还对象池复用（不设上限——池大小由同屏峰值自然有界，
+	// 每帧只生成一组，稳态下就是"帧率×淡出时长×每组数量"，不会无限增长）；
+	// 关闭时保持原版直接 destroy。
 	function killComboSprite(spr:FlxSprite):Void
 	{
 		if (spr == null) return;
@@ -6610,7 +6646,10 @@ tempScore += '${lblScore}: ${songScore}';
 		FlxTween.cancelTweensOf(spr.scale);
 		spr.scale.set(1, 1);
 		removeComboSpr(spr);
-		spr.destroy();
+		if (ClientPrefs.data.judgePopupPerf)
+			comboSpritePool.push(spr);
+		else
+			spr.destroy();
 	}
 
 	// ===== Camellia 跳动风格（复刻自 VSCam 2.75）=====
@@ -6769,6 +6808,19 @@ tempScore += '${lblScore}: ${songScore}';
 		// 全程只读取、从不重设。旧实现每次命中都把 showRating 强行写回 true，导致脚本的隐藏在下一击
 		// 立刻失效（表现为「combo 数字隐藏了，但 rating 贴图还在冒」）。
 		// 改成局部屏蔽位，只在计算 visible 时叠加，既保留 Kade botplay 隐藏意图，又不污染脚本标志。
+
+		// ===== 判定视觉每帧一次门控 =====
+		// 记账（combo/分数/判定/回放/rating.hits 统计）不受影响，每次命中照常执行。
+		// 只有纯视觉部分（评级计数器动画、msTimeTxt、NoteSplash、combo 弹窗）在性能模式下每帧最多一次。
+		var frameEmit:Bool = judgeCanEmit();
+		if (frameEmit && ClientPrefs.data.judgePopupPerf)
+		{
+			judgeVisualFrame = judgeFrameId;
+			judgeFrameJustBroke = comboJustBroke; // 本帧要显示的断连标记快照
+		}
+		// comboJustBroke 是记账状态，必须每次命中都消费，不能被视觉门控跳过
+		comboJustBroke = false;
+
 		var kadeBotHideRating:Bool = (ClientPrefs.data.showcaseStyle == 'Kade' && cpuControlled && !isReplaying);
 
 		var noteDiff:Float = note.strumTime - Conductor.songPosition + (cpuControlled ? 0 : ClientPrefs.data.ratingOffset);
@@ -6826,8 +6878,8 @@ tempScore += '${lblScore}: ${songScore}';
 			if (absJudgeDiff <= ClientPrefs.data.perfectWindow)
 				isSickPlus = true;
 		}
-		// 触发评分计数器动画
-		if (ratingCounterModule != null && !note.ratingDisabled)
+		// 触发评分计数器动画（纯视觉：cancel+新建 2 个 tween，SPAM 下开销大 → 每帧最多一次）
+		if (ratingCounterModule != null && !note.ratingDisabled && frameEmit)
 		{
 			ratingCounterModule.triggerHitAnimation(daRating.name);
 		}
@@ -6854,7 +6906,7 @@ tempScore += '${lblScore}: ${songScore}';
 		// 人声恢复统一由 goodNoteHit / opponentNoteHit 负责；
 		// 此处原本无条件写 vocals.volume = 1，playOpponent 时会误把 BF 轨恢复。
 
-		if (!ClientPrefs.data.comboStacking && comboGroup.members.length > 0)
+		if (!ClientPrefs.data.comboStacking && frameEmit && comboGroup.members.length > 0)
 		{
 			// 遍历成员副本，避免边遍历边移除导致跳过元素；kill 回收进对象池而非 destroy，供后续复用。
 			for (spr in comboGroup.members.copy())
@@ -6865,7 +6917,7 @@ tempScore += '${lblScore}: ${songScore}';
 			}
 		}
 
-		if (!ClientPrefs.data.rmmsTimeTxt) {
+		if (!ClientPrefs.data.rmmsTimeTxt && frameEmit) {
 			if (ClientPrefs.data.msTimingStyle == 'Kade') {
 				// ===== Kade 风格：复用原 msTimeTxt，覆盖为 Kade 样式（20px/1px黑描边/居中）=====
 				if (!msTimeTxtKadeStyle) {
@@ -7017,7 +7069,7 @@ tempScore += '${lblScore}: ${songScore}';
 		// Sick+ 计数（纯统计用，不影响FC/准度）
 		if (isSickPlus && !note.ratingDisabled) songSickPlus++;
 
-		if(daRating.noteSplash && !note.noteSplashData.disabled && ClientPrefs.data.cpuStrums)
+		if(daRating.noteSplash && !note.noteSplashData.disabled && ClientPrefs.data.cpuStrums && frameEmit)
 			spawnNoteSplashOnNote(note);
 
 		/*if(!cpuControlled) */
@@ -7033,7 +7085,9 @@ tempScore += '${lblScore}: ${songScore}';
 		}
 
 		if(cpuControlled) cpuHits++;
-		if (ClientPrefs.data.ratCounter)	updateRatingCounters();
+		// 评级计数文本重绘：每次命中都重排 5 行文字开销大，性能模式下每帧最多一次。
+		// rating.hits 是记账数据、已在上面每次命中累加，所以这里读到的是本帧最新计数，不丢数据。
+		if (ClientPrefs.data.ratCounter && frameEmit) updateRatingCounters();
 
 		var uiFolder:String = "";
 		var antialias:Bool = ClientPrefs.data.antialiasing;
@@ -7055,7 +7109,7 @@ tempScore += '${lblScore}: ${songScore}';
 				displayExRatingName = 'perfect';
 		}
 
-		if (ClientPrefs.data.popUpRating)
+		if (ClientPrefs.data.popUpRating && frameEmit)
 		{
 			// 跳动风格只在此处求值一次，避免在下方多个分支里重复做字符串比较（热路径，一首歌可达数千次命中）
 			var isKathyStyle:Bool = isKathyFallStyle();
@@ -7097,7 +7151,7 @@ tempScore += '${lblScore}: ${songScore}';
 		switch (ClientPrefs.data.comboNumDisplay)
 		{
 			case 'OG Funkin':
-				if (comboJustBroke)
+				if (judgeFrameJustBroke)
 				{
 					separatedScore = '000'; // 断连后首次命中强制显示 000
 					showThisComboNum = true;
@@ -7418,7 +7472,7 @@ tempScore += '${lblScore}: ${songScore}';
 					msTimeTxt.x = FlxG.width * 0.35 + 100 + ClientPrefs.data.comboOffset[2] + ClientPrefs.data.comboOffset[6] + 60 - 20 - 40 + 43 * (numDigits - 3);
 				}
 			}
-		comboJustBroke = false; // 本次命中已消费断连标记
+			// 断连标记已在门控处按命中消费；此处不再重复清零
 
 			// 根据不同的跳动风格设置渐隐延迟
 			var ratingFadeDelay:Float = Conductor.crochet * 0.001 / playbackRate;
@@ -8569,7 +8623,7 @@ tempScore += '${lblScore}: ${songScore}';
 				combo++;
 				if (combo > maxCombo) maxCombo = combo;
 				//if(combo > 9999) combo = 9999;
-				notesHitArray.unshift(backend.RenderClock.hudTimeMs());
+				notesHitArray.push(backend.RenderClock.hudTimeMs());
 				popUpScore(note);
 			}
 			// 特性2：长条最后一个尾音命中时，算作一个有效命中判定 —— 加 combo + 显示评级，但不加分
@@ -8579,7 +8633,7 @@ tempScore += '${lblScore}: ${songScore}';
 				var tailLeniencyMs:Float = (holdTailLeniency) ? holdTailLeniencyMs : 0;
 				combo++;
 				if (combo > maxCombo) maxCombo = combo;
-				notesHitArray.unshift(backend.RenderClock.hudTimeMs());
+				notesHitArray.push(backend.RenderClock.hudTimeMs());
 				popUpScore(note, false, tailLeniencyMs); // scoreGain=false：只显示评级/计入准度，不加 songScore
 			}
 			// 长条按住期间每个命中节段：开启长条准确率时计入准确率（分子/分母各 +1）
@@ -8768,7 +8822,7 @@ tempScore += '${lblScore}: ${songScore}';
 		{
 			combo++;
 			if (combo > maxCombo) maxCombo = combo;
-			notesHitArray.unshift(backend.RenderClock.hudTimeMs());
+			notesHitArray.push(backend.RenderClock.hudTimeMs());
 		}
 		// 特性2：长条尾音命中同样计入一次有效命中（连击 + 准度），但不加分
 		else if (holdTailJudge && note.parent != null && note.parent.tail.length > 0
@@ -8776,7 +8830,7 @@ tempScore += '${lblScore}: ${songScore}';
 		{
 			combo++;
 			if (combo > maxCombo) maxCombo = combo;
-			notesHitArray.unshift(backend.RenderClock.hudTimeMs());
+			notesHitArray.push(backend.RenderClock.hudTimeMs());
 		}
 
 		var gainHealth:Bool = true;
@@ -8837,6 +8891,10 @@ tempScore += '${lblScore}: ${songScore}';
 			keyViewer.destroy();
 			keyViewer = null;
 		}
+		// 清理 combo 精灵对象池：池内 sprite 不在任何 group 中，需显式销毁
+		for (spr in comboSpritePool) if (spr != null) spr.destroy();
+		comboSpritePool = [];
+
 		// 清理评分贴图缓存引用（FlxGraphic 本身由 Paths.currentTrackedAssets 统一管理，这里只释放本实例的引用）
 		_ratingGfxCache = null;
 		_exRatingGfxCache = null;

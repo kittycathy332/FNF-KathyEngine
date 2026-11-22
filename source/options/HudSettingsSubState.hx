@@ -220,6 +220,12 @@ class HudSettingsSubState extends BaseOptionsMenu
 			'comboStacking',
 			BOOL);
 		addOption(option);
+		// 判定弹窗性能模式：默认开。SPAM 谱面下一帧只生成一组判定视觉，避免内存/帧率崩溃。
+		option = new Option(Language.get('judge_popup_perf'),
+			Language.get("judge_popup_perf_desc"),
+			'judgePopupPerf',
+			BOOL);
+		addOption(option);
 		option = new Option(Language.get('rating_fall_style'),
 			Language.get("rating_fall_style_desc"),
 			'ratingFallStyle',

@@ -183,6 +183,10 @@ import haxe.io.BytesInput;
 	public var receiveBetaBuilds:Bool = false; // 更新检查是否包含测试版（Pre-release）构建：关闭时只检查正式版
 	public var disableNetworking:Bool = false; // 全局联网开关：true 时拦截所有联网行为
 	public var comboStacking:Bool = true;
+	// 判定弹窗性能模式（默认开）：一帧内无论命中多少 note，combo/rating 弹窗、ms 文本、击中粒子
+	// 每帧最多只生成一次（用本帧最新状态），避免 SPAM 谱面下每帧 new 数千个 sprite 导致内存暴涨/掉帧。
+	// 关闭则恢复原版「每次命中都生成一组弹窗」的行为。
+	public var judgePopupPerf:Bool = true;
 	public var gameplaySettings:Map<String, Dynamic> = [
 		'scrollspeed' => 1.0,
 		'scrolltype' => 'multiplicative', 

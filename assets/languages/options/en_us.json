@@ -716,6 +716,8 @@
     "discord_rich_presence": "Discord Rich Presence",
     "disable_networking": "Disable Networking",
     "combo_stacking": "Combo Stacking Effect",
+    "judge_popup_perf": "Judgment Popup Performance Mode",
+    "judge_popup_perf_desc": "ON (default): even in extreme SPAM charts with thousands of notes per second, combo/rating popups, the ms text and hit particles are generated at most once per frame using pooled sprites. Prevents memory spikes and frame drops. OFF: restore the original behavior of generating a full popup set on every single hit.",
     "single_hold_animation": "Hold Notes Play Animation Once (Strum)",
     "auto_reset_strum_animation": "Auto Reset Strum Animation",
     "fallback_perfect_to_sick": "Perfect Rating Sprite Fallback to Sick",
