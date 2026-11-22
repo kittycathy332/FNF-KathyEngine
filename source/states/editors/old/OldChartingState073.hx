@@ -2819,12 +2819,16 @@ class OldChartingState073 extends OldEditorState
 	 * 用镜像真值把被污染的音符整支重建为显式 Array<Dynamic>。返回重建数量。
 	 * 绝不原地写 note[3] —— 日志已证实那条写入会被吞掉。
 	 */
-	function healNoteTypeMirror():Int
+	// sectionFilter: 可选，只 heal 指定小节（updateGrid 每帧/切小节调用时只处理当前可见小节，
+	// 避免超大谱上每次切小节都全谱 O(n) 扫描；保存/改档等路径不传=全谱，语义不变）。
+	function healNoteTypeMirror(?sectionFilter:Int->Bool):Int
 	{
 		if (noteTypeMirror == null || _song == null || _song.notes == null) return 0;
 		var fixed:Int = 0;
-		for (sec in _song.notes)
+		for (secIdx in 0..._song.notes.length)
 		{
+			var sec = _song.notes[secIdx];
+			if (sectionFilter != null && !sectionFilter(secIdx)) continue;
 			if (sec == null || sec.sectionNotes == null) continue;
 			var list:Array<Dynamic> = sec.sectionNotes;
 			var freshList:Array<Dynamic> = [];
@@ -3683,7 +3687,10 @@ class OldChartingState073 extends OldEditorState
 
 		// 重建前按引用镜像恢复被外部路径写成 0 / 空串的 noteType。
 		// 放在 setupNoteData() 之前，保证本帧的编号标签与下拉框读到的都是正确值。
-		healNoteTypeMirror();
+		// 只 heal 本帧可见小节（当前±1），超大谱上避免每次切小节全谱扫描。
+		// 其余小节的 noteType 即便暂时被污染也不会丢失——镜像保留着真值，
+		// 滚动到那里时本函数会 heal 它们，保存/改档路径更是全谱 heal。
+		healNoteTypeMirror(function(idx:Int):Bool return idx >= curSec - 1 && idx <= curSec + 1);
 
 		curRenderedNotes.forEachAlive(function(spr:Note) spr.destroy());
 		curRenderedNotes.clear();

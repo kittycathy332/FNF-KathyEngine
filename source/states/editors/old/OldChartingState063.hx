@@ -2940,7 +2940,8 @@ class OldChartingState063 extends OldEditorState
 	{
 		// 重建前按引用镜像恢复被外部路径写成 0 / 空串的 noteType。
 		// 放在 setupNoteData() / noteTypeLabel() 之前，保证本帧标签与下拉框读到正确值。
-		healNoteTypeMirror();
+		// 只 heal 本帧可见小节（当前±1），超大谱避免每次切小节全谱扫描；其余小节真值仍在镜像里。
+		healNoteTypeMirror(function(idx:Int):Bool return idx >= curSec - 1 && idx <= curSec + 1);
 		curRenderedNotes.clear();
 		curRenderedSustains.clear();
 		curRenderedNoteType.clear();
@@ -3444,12 +3445,16 @@ class OldChartingState063 extends OldEditorState
 	}
 
 	/** 用镜像真值把被污染的音符整支重建为显式 Array<Dynamic>。绝不原地写 note[3]。 */
-	function healNoteTypeMirror():Int
+	// sectionFilter: 可选，只 heal 指定小节（updateGrid 切小节时只处理当前可见小节，
+	// 避免超大谱上每次切小节全谱 O(n) 扫描；保存/改档不传=全谱，语义不变）。
+	function healNoteTypeMirror(?sectionFilter:Int->Bool):Int
 	{
 		if (noteTypeMirror == null || _song == null || _song.notes == null) return 0;
 		var fixed:Int = 0;
-		for (sec in _song.notes)
+		for (secIdx in 0..._song.notes.length)
 		{
+			var sec = _song.notes[secIdx];
+			if (sectionFilter != null && !sectionFilter(secIdx)) continue;
 			if (sec == null || sec.sectionNotes == null) continue;
 			var list:Array<Dynamic> = sec.sectionNotes;
 			var freshList:Array<Dynamic> = [];

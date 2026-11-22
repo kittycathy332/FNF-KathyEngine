@@ -9899,6 +9899,27 @@ for (i in 0...GRID_PLAYERS)
 			arr.push(note.songData);
 		}
 
+		// 优化加载（OptimizedNoteLoading）：只有当前/前后小节的音符被实例化进 notes 数组，
+		// 其余仍在 preloadedNoteData 里（preloadedMetaNotes[i]==null）。上面清空了所有
+		// sectionNotes 且只从 notes 写回，未实例化的音符会被永久丢弃（SPAM/密集谱尤甚，
+		// 保存、改键、进 PlayState 都会触发）。这里把未实例化的原始数据按所属小节补写回。
+		if (useOptimizedLoading)
+		{
+			for (i in 0...preloadedNoteData.length)
+			{
+				if (preloadedMetaNotes[i] != null) continue; // 已实例化：已由上面 notes 循环写回
+				var secIdx:Int = preloadedSecNum[i];
+				if (preloadedNoteData[i] == null || secIdx < 0 || secIdx >= PlayState.SONG.notes.length
+					|| PlayState.SONG.notes[secIdx] == null) continue;
+				PlayState.SONG.notes[secIdx].sectionNotes.push(preloadedNoteData[i]);
+			}
+			// 每小节按时间排序（sectionNotes 是原始数组 [time,data,...]，不能用 MetaNote 的 sortByTime）
+			for (sec in PlayState.SONG.notes)
+				if (sec != null && sec.sectionNotes != null)
+					sec.sectionNotes.sort(function(a:Dynamic, b:Dynamic):Int
+						return a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0));
+		}
+
 		// 排序：先按时间，再按轨道索引（最左侧轨道优先）
 		events.sort(function(a:EventMetaNote, b:EventMetaNote):Int {
 			var timeDiff = a.strumTime - b.strumTime;
