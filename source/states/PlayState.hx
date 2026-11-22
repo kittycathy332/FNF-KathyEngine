@@ -410,6 +410,7 @@ class PlayState extends MusicBeatState
 	var judgeFrameJustBroke:Bool = false;   // 本帧首次命中的断连标记快照（OG Funkin 显示 000 用）
 	var judgeFrameId:Int = -1;              // 当前帧号，用于每帧一次的门控
 	var judgeVisualFrame:Int = -1;          // 上次生成判定视觉的帧号
+	var splashFrame:Int = -1;               // 上次生成 NoteSplash 的帧号（独立于判定弹窗，避免互相抢额度）
 	var comboSpritePool:Array<FlxSprite> = [];        // combo 精灵对象池（无上限复用，消除每帧 new；同屏数量由帧率×淡出时长自然有界）
 
 	/** 本帧是否允许生成判定视觉（每帧最多一次，且只在性能模式开启时限流） */
@@ -417,6 +418,15 @@ class PlayState extends MusicBeatState
 	{
 		if (!ClientPrefs.data.judgePopupPerf) return true; // 关闭=原版行为，每次命中都生成
 		return judgeVisualFrame != judgeFrameId;
+	}
+
+	/** 本帧是否允许生成 NoteSplash（玩家/对手/漏键三处共用此额度，每帧最多一次） */
+	inline function splashCanEmit():Bool
+	{
+		if (!ClientPrefs.data.judgePopupPerf) return true;
+		if (splashFrame == judgeFrameId) return false;
+		splashFrame = judgeFrameId;
+		return true;
 	}
 
 	public var healthBar:Bar;
@@ -7092,7 +7102,7 @@ tempScore += '${lblScore}: ${songScore}';
 		// Sick+ 计数（纯统计用，不影响FC/准度）
 		if (isSickPlus && !note.ratingDisabled) songSickPlus++;
 
-		if(daRating.noteSplash && !note.noteSplashData.disabled && ClientPrefs.data.cpuStrums && frameEmit)
+		if(daRating.noteSplash && !note.noteSplashData.disabled && ClientPrefs.data.cpuStrums && splashCanEmit())
 			spawnNoteSplashOnNote(note);
 
 		/*if(!cpuControlled) */
@@ -8448,9 +8458,10 @@ tempScore += '${lblScore}: ${songScore}';
 		note.hitByOpponent = true;
 
 		// 对手侧 NoteSplash（兼容 playOpponent：此时对手侧箭头在 playerStrums 上）
+		// 性能模式下与玩家侧/漏键飞溅共用每帧一次额度
 		if (ClientPrefs.data.opponentSplashes && ClientPrefs.data.cpuStrums
 			&& !arrowsModeActive()
-			&& !note.noteSplashData.disabled && !note.isSustainNote) {
+			&& !note.noteSplashData.disabled && !note.isSustainNote && splashCanEmit()) {
 			var strum:StrumNote = opponentSideStrums().members[note.noteData];
 			if (strum != null)
 				spawnNoteSplash(strum.x, strum.y, note.noteData, note, strum);
@@ -8732,7 +8743,7 @@ tempScore += '${lblScore}: ${songScore}';
 			}
 
 			noteMiss(note);
-			if(!note.noteSplashData.disabled && !note.isSustainNote && ClientPrefs.data.cpuStrums) spawnNoteSplashOnNote(note);
+			if(!note.noteSplashData.disabled && !note.isSustainNote && ClientPrefs.data.cpuStrums && splashCanEmit()) spawnNoteSplashOnNote(note);
 		}
 
 		stagesFunc(function(stage:BaseStage) {
