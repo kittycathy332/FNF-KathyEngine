@@ -394,6 +394,18 @@ class PlayState extends MusicBeatState
 	public var maxCombo:Int = 0; // 本局最大连击，用于回放 meta 展示
 	public var comboJustBroke:Bool = false; // 断连(失手)后首次命中标记，供 OG Funkin 显示模式强制显示 000
 
+	// ===== Kathy exRating 角度：每拍重掷一次随机角，帧间向 0 lerp =====
+	// SPAM 谱面下若每次命中都 Math.random()，角度会疯狂乱跳；改为每拍更新一次共享值，
+	// 同拍内各弹窗读同一个值（并随时间衰减），观感有节奏。仅 Kathy 风格 + exratbounce 生效。
+	var exratBeatAngle:Float = 0;
+	var exratBeatDecayK:Float = 1.0;  // 每拍随机的衰减速度系数（越大衰减越快）
+	// 角度上限 ±15°
+	static inline var EXRAT_ANGLE_MAX:Float = 15.0;
+	// 衰减速度范围：用"一拍后角度剩余比例"定义，K = -ln(remain)。
+	// 每拍在 [0.25, 0.55] 内随机剩余比例 → K 在 [0.598, 1.386]，一拍后角度剩 25%~55%。
+	static inline var EXRAT_DECAY_REMAIN_MIN:Float = 0.25;
+	static inline var EXRAT_DECAY_REMAIN_MAX:Float = 0.55;
+
 	// ===== 判定弹窗性能模式：每帧只生成一组判定视觉（记账逻辑完全不受影响）=====
 	var judgeFrameJustBroke:Bool = false;   // 本帧首次命中的断连标记快照（OG Funkin 显示 000 用）
 	var judgeFrameId:Int = -1;              // 当前帧号，用于每帧一次的门控
@@ -4776,6 +4788,17 @@ tempScore += '${lblScore}: ${songScore}';
 		if (ClientPrefs.data.judgePopupPerf)
 			judgeFrameId++;
 
+		// Kathy exRating 角度：每帧按时间归一化向 0 lerp，速度由本拍随机到的 exratBeatDecayK 决定。
+		// 公式 exp(-K·dt·playbackRate/beatSec)：一拍后剩 e^-K（即重掷时随机的 remain），
+		// 保证任意 BPM/倍速/刷新率下"一拍剩 25%~55%"的节奏一致。
+		if (exratBeatAngle != 0)
+		{
+			var beatSec:Float = Math.max(0.0001, Conductor.crochet / 1000);
+			var exratDecay:Float = 1 - Math.exp(-exratBeatDecayK * elapsed * playbackRate / beatSec);
+			exratBeatAngle = FlxMath.lerp(exratBeatAngle, 0, exratDecay);
+			if (Math.abs(exratBeatAngle) < 0.05) exratBeatAngle = 0; // 足够接近 0 就归零，避免长尾抖动
+		}
+
 		// 分帧延迟初始化：将非关键操作分散到后续帧，避免 create() 中长时间阻塞主线程
 		if (_deferredInitStep >= 0)
 		{
@@ -7294,7 +7317,8 @@ tempScore += '${lblScore}: ${songScore}';
 
 				if(ClientPrefs.data.exratbounce == true && ClientPrefs.data.exratingDisplay && isKathyStyle)
 				{
-					theEXrating.angle = (Math.random() * 10) * (Math.random() > .5 ? 1 : -1);
+					// 角度读每拍共享值（同拍内一致、拍间随机），不再每次命中 Math.random() 乱跳。
+					theEXrating.angle = exratBeatAngle;
 					theEXrating.scale.set(0.85, 0.85);
 					FlxTween.tween(theEXrating, {angle: 0}, 0.4, {ease: FlxEase.backOut});
 					FlxTween.tween(theEXrating.scale, {x: 0.7, y: 0.7}, 0.4, {ease: FlxEase.quartOut});
@@ -7310,7 +7334,8 @@ tempScore += '${lblScore}: ${songScore}';
 
 				if(ClientPrefs.data.exratbounce == true && ClientPrefs.data.exratingDisplay && isKathyStyle)
 				{
-					theEXrating.angle = (Math.random() * 7) * (Math.random() > .5 ? 1 : -1);
+					// 同 comboStacking 开分支：角度用每拍共享值，避免 SPAM 下逐次随机乱跳。
+					theEXrating.angle = exratBeatAngle;
 				}
 
 				if (isKathyStyle)
@@ -9100,6 +9125,16 @@ tempScore += '${lblScore}: ${songScore}';
 		if(lastBeatHit >= curBeat) {
 			//trace('BEAT HIT: ' + curBeat + ', LAST HIT: ' + lastBeatHit);
 			return;
+		}
+
+		// Kathy exRating 角度：每拍重掷一次随机角 + 随机衰减速度，供本拍内所有弹窗读取。
+		// 只在 Kathy 风格 + exratbounce 开启时更新，其余情况保持 0（不影响其它风格）。
+		if (ClientPrefs.data.exratbounce && (ClientPrefs.data.ratingFallStyle == "Kathy" || ClientPrefs.data.ratingFallStyle == "Kathy(Legacy)"))
+		{
+			exratBeatAngle = (Math.random() * EXRAT_ANGLE_MAX) * (Math.random() > 0.5 ? 1 : -1);
+			// 随机本拍衰减速度：先随机一拍后的剩余比例，再换算成指数衰减系数 K = -ln(remain)。
+			var remain:Float = EXRAT_DECAY_REMAIN_MIN + Math.random() * (EXRAT_DECAY_REMAIN_MAX - EXRAT_DECAY_REMAIN_MIN);
+			exratBeatDecayK = -Math.log(remain);
 		}
 
 		if (generatedMusic)
