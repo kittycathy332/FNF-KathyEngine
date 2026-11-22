@@ -285,7 +285,26 @@ class Paths
 	static public function setCurrentLevel(name:String)
 		currentLevel = name.toLowerCase();
 
+	// getPath 解析结果缓存（进入编谱器卡住 96s 的修复）：
+	// 553 个事件各构造一次 FlxText → Paths.font() → getPath() → modFolders()+FileSystem.exists()
+	// 同步磁盘查询，即使资源早已加载过。解析结果只依赖入参 + 当前 mod 目录 + 当前关卡 +
+	// 语言（已翻译进 file），命中后直接返回，彻底消除热路径的重复磁盘 I/O。
+	// 切模组时 clearModPathCache() 会清空；编辑器里新建文件后若需立即生效，也走该清理。
+	static var _pathResolveCache:Map<String, String> = new Map();
+
 	public static function getPath(file:String, ?type:AssetType = TEXT, ?parentfolder:String, ?modsAllowed:Bool = true):String
+	{
+		var resolveKey:String = file + '|' + type + '|' + parentfolder + '|' + modsAllowed + '|'
+			+ Mods.currentModDirectory + '|' + currentLevel;
+		var cachedPath:String = _pathResolveCache.get(resolveKey);
+		if (cachedPath != null) return cachedPath;
+
+		var result:String = getPathUncached(file, type, parentfolder, modsAllowed);
+		_pathResolveCache.set(resolveKey, result);
+		return result;
+	}
+
+	static function getPathUncached(file:String, ?type:AssetType = TEXT, ?parentfolder:String, ?modsAllowed:Bool = true):String
 	{
 		#if MODS_ALLOWED
 		if(modsAllowed)
@@ -726,8 +745,11 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 				currentTrackedSounds.set(file, null);
 		}
 		touchSoundLru(file);
-		if (isNewLoad) trimSoundCache(); // 同 returnSound：仅新解码时检查淘汰
-		return currentTrackedSounds.get(file);
+		var loaded:Sound = currentTrackedSounds.get(file);
+		// 仅「真正解码出一个有效 Sound」后才检查淘汰；探测到不存在的音频（null）不新增
+		// 缓存占用，跳过可避免 loadMusic 里多次 Voices fallback 探测反复遍历缓存表。
+		if (isNewLoad && loaded != null) trimSoundCache();
+		return loaded;
 	}
 
 	inline static public function soundRandom(key:String, min:Int, max:Int, ?modsAllowed:Bool = true)
@@ -820,14 +842,23 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 		#end
 	}
 
-	inline static public function font(key:String)
+	static var _fontPathCache:Map<String, String> = new Map();
+
+	static public function font(key:String):String
 	{
 		var folderKey:String = LanguageBasic.getFileTranslation('fonts/$key');
+		// 缓存解析结果：编谱器里每个事件构造 FlxText 都会调 font()，
+		// 原实现每次 modFolders()+FileSystem.exists() 同步磁盘查询，553 事件时累计接近 100 秒。
+		var cacheKey:String = folderKey + '|' + Mods.currentModDirectory;
+		var cached:String = _fontPathCache.get(cacheKey);
+		if (cached != null) return cached;
+		var result:String = 'assets/$folderKey';
 		#if MODS_ALLOWED
 		var file:String = modFolders(folderKey);
-		if(FileSystem.exists(file)) return file;
+		if(FileSystem.exists(file)) result = file;
 		#end
-		return 'assets/$folderKey';
+		_fontPathCache.set(cacheKey, result);
+		return result;
 	}
 
 	public static function fileExists(key:String, type:AssetType, ?ignoreMods:Bool = false, ?parentFolder:String = null)
@@ -998,6 +1029,13 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 	static var _soundLru:Array<String> = [];
 	static inline var SOUND_CACHE_LIMIT:Int = 24;
 
+	// returnSound 的 key→file 解析缓存（滚动卡顿修复）：
+	// Paths.sound('scrollMenu') 在滚动时每格调用，即便 Sound 已在 currentTrackedSounds 命中，
+	// getPath() 仍每次执行 modFolders()+FileSystem.exists() 的同步磁盘 I/O。
+	// 缓存命中后只做一次 Map 查找。mod 目录/语言/关卡会影响解析结果，已编入缓存 key；
+	// 切模组时 clearModPathCache() 也会一并清空。
+	static var _soundPathCache:Map<String, String> = new Map();
+
 	// 标记一次音频访问（命中或新加载）：把 key 提到 LRU 末尾。
 	static function touchSoundLru(file:String):Void
 	{
@@ -1060,7 +1098,17 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 
 	public static function returnSound(key:String, ?path:String, ?modsAllowed:Bool = true, ?beepOnNull:Bool = true)
 	{
-		var file:String = getPath(LanguageBasic.getFileTranslation(key) + '.$SOUND_EXT', SOUND, path, modsAllowed);
+		// 路径解析缓存：mod 目录/当前关卡/当前语言都编入 key，任一变化自动失效。
+		// 这样滚动播放 UI 音效时不再反复触发 FileSystem.exists()/目录扫描。
+		var translated:String = LanguageBasic.getFileTranslation(key);
+		var cacheKey:String = translated + '|' + path + '|' + modsAllowed + '|'
+			+ Mods.currentModDirectory + '|' + currentLevel;
+		var file:String = _soundPathCache.get(cacheKey);
+		if (file == null)
+		{
+			file = getPath(translated + '.$SOUND_EXT', SOUND, path, modsAllowed);
+			_soundPathCache.set(cacheKey, file);
+		}
 
 		//trace('precaching sound: $file');
 		var isNewLoad:Bool = !currentTrackedSounds.exists(file);
@@ -1092,10 +1140,11 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 		}
 		trackLocalAsset(file);
 		touchSoundLru(file);
-		// 只在真正新解码音频后才检查淘汰；缓存命中（如快速滚动反复播放 scrollMenu）
-		// 不做全表枚举，避免在 Freeplay 切歌热路径引入额外开销。
-		if (isNewLoad) trimSoundCache();
-		return currentTrackedSounds.get(file);
+		// 只在真正新解码出一个有效音频后才检查淘汰；缓存命中（如快速滚动反复播放
+		// scrollMenu）或探测到不存在的音频（null）都不新增占用，跳过全表枚举。
+		var loaded:Sound = currentTrackedSounds.get(file);
+		if (isNewLoad && loaded != null) trimSoundCache();
+		return loaded;
 	}
 
 	#if MODS_ALLOWED
@@ -1114,6 +1163,9 @@ inline static public function inst(song:String, ?specialInst:String = null, ?mod
 		_dirMutex.acquire();
 		_dirCache.clear();
 		_audioPathCache.clear();
+		_soundPathCache.clear(); // 音效路径解析结果依赖 mod 目录，切模组时必须一并失效
+		_pathResolveCache.clear(); // getPath 通用解析缓存同理
+		_fontPathCache.clear();    // font 路径解析缓存同理
 		_dirMutex.release();
 	}
 

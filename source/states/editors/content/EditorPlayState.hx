@@ -2,6 +2,7 @@ package states.editors.content;
 
 import backend.Song;
 import backend.Rating;
+import backend.HitSoundPool;
 import backend.Language.ScoreLanguage;
 
 import objects.Note;
@@ -13,6 +14,7 @@ import flixel.util.FlxStringUtil;
 import flixel.animation.FlxAnimationController;
 import flixel.input.keyboard.FlxKey;
 import openfl.events.KeyboardEvent;
+import flash.media.Sound;
 
 class EditorPlayState extends MusicBeatSubstate
 {
@@ -26,6 +28,9 @@ class EditorPlayState extends MusicBeatSubstate
 	var inst:FlxSound = new FlxSound();
 	var vocals:FlxSound;
 	var opponentVocals:FlxSound;
+	// F12 试玩命中音：与 PlayState / ChartingState 共用 HitSoundPool，
+	// 避免每次命中 FlxG.sound.play() 都新建 SoundChannel（native 内存涨不回落的根源）。
+	var hitSoundPool:HitSoundPool;
 	
 	var notes:FlxTypedGroup<Note>;
 	var unspawnNotes:Array<Note> = [];
@@ -96,6 +101,8 @@ class EditorPlayState extends MusicBeatSubstate
 
 		cachePopUpScore();
 		guitarHeroSustains = ClientPrefs.data.guitarHeroSustains;
+		if (ClientPrefs.data.hitSoundPoolEnabled)
+			hitSoundPool = new HitSoundPool(ClientPrefs.data.hitSoundPoolSize);
 		if(ClientPrefs.data.hitsoundVolume > 0) Paths.sound('hitsound');
 		if (ClientPrefs.data.hitsound != 'none' && ClientPrefs.data.hitsound != null && ClientPrefs.data.hitsound.length > 0)
 			Paths.sound('hitsounds/' + ClientPrefs.data.hitsound);
@@ -301,6 +308,13 @@ class EditorPlayState extends MusicBeatSubstate
 		FlxG.stage.removeEventListener(KeyboardEvent.KEY_UP, onKeyRelease);
 		FlxG.mouse.visible = true;
 		NoteSplash.configs.clear();
+		// 命中音池由本状态创建，对称释放；vocals/opponentVocals 是 ChartingState 传入的，
+		// 由父状态 destroy() 统一清理，这里不能碰。
+		if (hitSoundPool != null)
+		{
+			hitSoundPool.destroy();
+			hitSoundPool = null;
+		}
 		FlxG.sound.list.remove(inst);
 		flixel.util.FlxDestroyUtil.destroy(inst);
 		super.destroy();
@@ -971,7 +985,11 @@ class EditorPlayState extends MusicBeatSubstate
 			if (ClientPrefs.data.hitsound != 'none' && ClientPrefs.data.hitsound != null && ClientPrefs.data.hitsound.length > 0
 				&& note.hitsound == 'hitsound')
 				useSound = 'hitsounds/' + ClientPrefs.data.hitsound;
-			FlxG.sound.play(Paths.sound(useSound), note.hitsoundVolume);
+			var hitSnd:Sound = Paths.sound(useSound);
+			if (hitSoundPool != null)
+				hitSoundPool.play(hitSnd, note.hitsoundVolume);
+			else
+				FlxG.sound.play(hitSnd, note.hitsoundVolume);
 		}
 
 		if(note.hitCausesMiss) {

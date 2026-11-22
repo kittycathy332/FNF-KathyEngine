@@ -30,6 +30,8 @@ import haxe.Json;
 import haxe.Exception;
 import haxe.io.Bytes;
 
+import backend.HitSoundPool;
+
 import states.editors.content.MetaNote;
 import states.editors.content.VSlice;
 import states.editors.content.Prompt;
@@ -330,7 +332,9 @@ class ChartingState extends MusicBeatState implements PsychUIEventHandler.PsychU
 	var mainBox:PsychUIBox;
 	var mainBoxPosition:FlxPoint = FlxPoint.get(920, 40);
 	var infoBox:PsychUIBox;
-	var infoBoxPosition:FlxPoint = FlxPoint.get(1000, 360);
+	// 播放信息 Box 默认移到左上角、HaxeUI 菜单条（高 30）下方。
+	// 旧位置 (1000,360) 与 mainBox (920,40,高360→底部400) 重叠 40px，顶部 song tab 会盖住信息栏。
+	var infoBoxPosition:FlxPoint = FlxPoint.get(40, 40);
 	var upperBox:PsychUIBox;
 	var searchBox:PsychUIBox;
 	var camUI:FlxCamera;
@@ -475,10 +479,11 @@ class ChartingState extends MusicBeatState implements PsychUIEventHandler.PsychU
 	var vocals:FlxSound = new FlxSound();
 	var opponentVocals:FlxSound = new FlxSound();
 	
-	// 击打声音效池 - 用于高密度音符播放
-	var hitSoundPool:Array<FlxSound> = [];
-	var hitSoundPoolSize:Int = 16; // 池大小
-	var hitSoundPoolIndex:Int = 0; // 轮询索引
+	// 击打声音效池 - 与 PlayState 共用 backend.HitSoundPool。
+	// 旧实现是自建的 16 个 FlxSound 数组，每次命中 loadEmbedded() 会先 destroy 当前
+	// SoundChannel 再 play() 新建，native audio source 反复分配且退出时不清理，
+	// 表现为命中/播放时系统内存单调上涨。统一走 HitSoundPool 后由其在 destroy() 中对称释放。
+	var hitSoundPool:HitSoundPool;
 
 	// 轨道颜色标识控制
 	var trackColorsCheckBox:PsychUICheckBox; // 主题设置中的复选框
@@ -582,12 +587,9 @@ if(_shouldReset) Conductor.songPosition = 0;
 	FlxG.sound.list.add(vocals);
 	FlxG.sound.list.add(opponentVocals);
 	
-	// 初始化击打声音效池
-	for (i in 0...hitSoundPoolSize)
-	{
-		hitSoundPool[i] = new FlxSound();
-		FlxG.sound.list.add(hitSoundPool[i]);
-	}
+	// 初始化击打声音效池（与 PlayState 同一实现；destroy() 中对称清理）
+	if (ClientPrefs.data.hitSoundPoolEnabled)
+		hitSoundPool = new HitSoundPool(ClientPrefs.data.hitSoundPoolSize);
 
 		vocals.autoDestroy = false;
 		vocals.looped = true;
@@ -913,7 +915,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 		selectionBox.visible = false;
 		add(selectionBox);
 
-		infoBox = new PsychUIBox(infoBoxPosition.x #if mobile - 900 #end, infoBoxPosition.y #if mobile - 250 #end, 220, 220, [Language.get('charting_infotab_text')]);
+		infoBox = new PsychUIBox(infoBoxPosition.x, infoBoxPosition.y, 220, 220, [Language.get('charting_infotab_text')]);
 		infoBox.scrollFactor.set();
 		infoBox.cameras = [camUI];
 		infoText = new FlxText(15, 15, 230, '', 16);
@@ -921,6 +923,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 		infoBox.getTab(Language.get('charting_infotab_text')).menu.add(infoText);
 		add(infoBox);
 		applyChartBoxRoundedStyle(infoBox);
+		applyBoxInputFilter(infoBox);
 
 		mainBox = new PsychUIBox(mainBoxPosition.x, mainBoxPosition.y, 350, 360, [Language.get('charting_charting_text'), Language.get('charting_data_text'), Language.get('charting_events_text'), Language.get('charting_notes_text'), Language.get('charting_section_text'), Language.get('charting_song_text')]);
 		mainBox.selectedName = Language.get('charting_song_text');
@@ -928,6 +931,7 @@ if(_shouldReset) Conductor.songPosition = 0;
 		mainBox.cameras = [camUI];
 		add(mainBox);
 		applyChartBoxRoundedStyle(mainBox);
+		applyBoxInputFilter(mainBox);
 
 		// 轨道整体左右移动按钮：与 063/073 一样放在信息框左侧、按住持续滚动。
 		// 用 StyledButton（纯矢量自绘箭头）而不是文字按钮，避免中文字体/宽度问题。
@@ -972,6 +976,14 @@ if(_shouldReset) Conductor.songPosition = 0;
 		upperBox.bgFollowsSelectedTab = true; // 让背景板实时跟随下拉菜单选中的 tab
 		add(upperBox);
 		applyChartBoxRoundedStyle(upperBox);
+		// upperBox 只是 HaxeUI 菜单的「源按钮」容器，平时处于最小化且 bg 不可见；
+		// 它的 tab 仍会参与鼠标命中，导致与 HaxeUI 菜单条 / infoBox 重复点击。
+		// 最小化期间完全让出鼠标输入，展开时才正常响应。
+		upperBox.inputFilter = function():Bool
+		{
+			if (upperBox.isMinimized) return false;
+			return boxInputAllowed();
+		};
 
 		outputTxt = new FlxText(25, FlxG.height - 50, FlxG.width - 50, '', 20);
 		outputTxt.setFormat(Paths.font(Language.get('uitab_font')), 20);
@@ -1540,6 +1552,23 @@ if(_shouldReset) Conductor.songPosition = 0;
 	var haxeMenuBarMenus:Array<Menu> = [];
 	var haxeMenuBarButtons:Array<Button> = [];
 	var haxeMenuOpenMenu:Menu = null; // 当前打开的下拉菜单（用于按钮高亮判断，比 selected 更可靠）
+
+	// 给 PsychUIBox 挂输入门控：HaxeUI 菜单栏交互期间让 box 跳过点击，
+	// 解决「点菜单时 box 的 tab 也切换 / 点 box 时菜单也响应」的双向重复点击。
+	// 坐标口径与 HaxeUI 自身一致（MouseHelper.currentWorldY），与 update() 里的菜单拦截相同。
+	function boxInputAllowed():Bool
+	{
+		if (haxeMenuOpen || haxeMenuIgnoreFrames > 0) return false;
+		if (FlxG.mouse.justPressed && MouseHelper.currentWorldY <= haxeMenuBarHeight) return false;
+		// 下拉菜单展开时，其覆盖区域内也不让 box 响应
+		if (backend.ui.DropdownInputPriority.pointerInsideOpenList()) return false;
+		return true;
+	}
+	function applyBoxInputFilter(box:PsychUIBox):Void
+	{
+		if (box != null) box.inputFilter = boxInputAllowed;
+	}
+
 	// HaxeUI 的圆角由后端用 OpenFL 矢量画进 _surface.pixels，同样带半透明 AA 边。
 	// 状态变化会重绘，用「待处理」标记在绘制前统一二值化一次，避免每帧遍历像素。
 	var _haxeUIHardEdgePending:Bool = false;
@@ -2049,7 +2078,15 @@ if(_shouldReset) Conductor.songPosition = 0;
 		ClientPrefs.data.keepSingAnimation = false;
 		
 		super.update(elapsed);
-		
+
+		// 平移箭头按钮点击穿透最终防线：super.update() 刚更新过按钮，其 justPressed/pressed
+		// 由 StyledButton 自己的 hitTest（getViewPosition(camUI)）算出，是最权威的"按钮被按下"
+		// 信号。只要按钮正在被按，本帧网格一律不得生成/删除音符。
+		// 放在这里而非 updateChartPanInput（那在 super.update 之前、按钮状态还是上一帧的）。
+		if ((btnTrackLeft != null && (btnTrackLeft.justPressed || btnTrackLeft.pressed))
+			|| (btnTrackRight != null && (btnTrackRight.justPressed || btnTrackRight.pressed)))
+			ignoreClickForThisFrame = true;
+
 		// 恢复原值
 		ClientPrefs.data.keepSingAnimation = originalKeepSingAnimation;
 
@@ -3103,23 +3140,15 @@ if(_shouldReset) Conductor.songPosition = 0;
 			{
 				if(canPlayHitSound)
 				{
-					// 使用音效池轮询播放，确保每个音符都能发声
+					// 统一走 HitSoundPool：复用固定数量 FlxSound，避免每次命中重建 SoundChannel。
+					// 池被用户在设置里关闭时，回退到 FlxG.sound.play() 保证功能不丢。
 					if(note.mustPress && hitsoundPlayerStepper.value > 0)
 					{
-						var sound:FlxSound = hitSoundPool[hitSoundPoolIndex];
-						sound.loadEmbedded(Paths.sound('hitsounds/quaver'));
-						sound.volume = hitsoundPlayerStepper.value;
-						sound.play();
-						hitSoundPoolIndex = (hitSoundPoolIndex + 1) % hitSoundPoolSize;
+						playEditorHitSound(Paths.sound('hitsounds/quaver'), hitsoundPlayerStepper.value);
 					}
 					else if(!note.mustPress && hitsoundOpponentStepper.value > 0)
 					{
-						var sound:FlxSound = hitSoundPool[hitSoundPoolIndex];
-						sound.loadEmbedded(Paths.sound('hitsounds/stepmania'));
-						sound.volume = hitsoundOpponentStepper.value;
-						// sound.pan = 1; // 对手音符：纯右声道
-						sound.play();
-						hitSoundPoolIndex = (hitSoundPoolIndex + 1) % hitSoundPoolSize;
+						playEditorHitSound(Paths.sound('hitsounds/stepmania'), hitsoundOpponentStepper.value);
 					}
 				}
 
@@ -3835,20 +3864,49 @@ if(_shouldReset) Conductor.songPosition = 0;
 				btnTrackLeft.setPosition(bx, by1);
 				btnTrackRight.setPosition(bx, by2);
 
-				// 点按钮时不穿透到网格（按钮在 camUI 上，x/y 就是屏幕坐标）
-				if (FlxG.mouse.justPressed)
+				// 点按钮时不穿透到网格。
+				// 必须与 StyledButton 自己的命中判定用完全相同的坐标口径：按钮在 camUI 上，
+				// 其 x/y 是游戏逻辑坐标；screenX/Y 是窗口像素（缩放后不等），FlxG.mouse.x/y
+				// 是默认相机世界坐标（随滚动偏移），两者都会误判。StyledButton.update() 用的是
+				// getViewPosition(camUI) vs getScreenPosition(btn, camUI)，这里照搬该口径。
+				var cam:FlxCamera = (btnTrackLeft.cameras != null && btnTrackLeft.cameras.length > 0)
+					? btnTrackLeft.cameras[0] : camUI;
+				var btnPt:FlxPoint = FlxPoint.get();
+				var viewPt:FlxPoint = FlxPoint.get();
+				function pointOnButton(px:Float, py:Float):Bool
 				{
-					var mx:Float = FlxG.mouse.x;
-					var my:Float = FlxG.mouse.y;
 					for (b in [btnTrackLeft, btnTrackRight])
 					{
-						if (mx >= b.x - 4 && mx <= b.x + b.width + 4 && my >= b.y - 4 && my <= b.y + b.height + 4)
+						b.getScreenPosition(btnPt, cam);
+						var pad:Float = b.hitPadding;
+						if (px >= btnPt.x - pad && px <= btnPt.x + b.width + pad
+							&& py >= btnPt.y - pad && py <= btnPt.y + b.height + pad)
+							return true;
+					}
+					return false;
+				}
+
+				// 鼠标：只要按下且落在按钮上就拦截（不局限 justPressed，避免与按钮自身
+				// update 帧错开一帧时漏判；按住期间持续拦截也正好防止拖动穿透）。
+				if (FlxG.mouse.pressed)
+				{
+					var mp:FlxPoint = FlxG.mouse.getViewPosition(cam, viewPt);
+					if (pointOnButton(mp.x, mp.y)) ignoreClickForThisFrame = true;
+				}
+				// 触控：逐个检查按下中的触点，落在按钮上才拦截（不能用「有任意触点」这种宽松条件）
+				if (!ignoreClickForThisFrame)
+					for (touch in FlxG.touches.list)
+					{
+						if (touch == null || !touch.pressed) continue;
+						var tp:FlxPoint = touch.getViewPosition(cam, viewPt);
+						if (pointOnButton(tp.x, tp.y))
 						{
 							ignoreClickForThisFrame = true;
 							break;
 						}
 					}
-				}
+				btnPt.put();
+				viewPt.put();
 			}
 		}
 
@@ -4544,15 +4602,31 @@ if(_shouldReset) Conductor.songPosition = 0;
 		swagEvent.scrollFactor.x = 0;
 		swagEvent.active = false;
 
-		var secNum:Int = 0;
-		for (i in 1...cachedSectionTimes.length)
-		{
-			if(cachedSectionTimes[i] > daStrumTime) break;
-			secNum++;
-		}
+		// 定位所属小节：cachedSectionTimes 按小节顺序单调递增，二分查找等价替代原来的线性扫描
+		// （553 事件 × 236 段的 O(n) 扫描改为 O(log n)，结果完全一致）。
+		var secNum:Int = findSectionAtTime(daStrumTime);
 		positionNoteYOnTime(swagEvent, secNum);
 		positionEventOnTrack(swagEvent, trackIndex);
 		return swagEvent;
+	}
+
+	// 二分查找事件所属小节，严格等价原线性逻辑：
+	// 原逻辑 secNum=0; for i in 1...len: if times[i]>t break; secNum++;
+	// 即返回「满足 times[i]<=t 的最大 i（i>=1）」，没有则 0；times 单调递增。
+	function findSectionAtTime(t:Float):Int
+	{
+		var len:Int = cachedSectionTimes.length;
+		if (len <= 1) return 0;
+		if (cachedSectionTimes[1] > t) return 0;
+		var lo:Int = 1;
+		var hi:Int = len - 1;
+		while (lo < hi)
+		{
+			var mid:Int = (lo + hi + 1) >> 1;
+			if (cachedSectionTimes[mid] <= t) lo = mid;
+			else hi = mid - 1;
+		}
+		return lo;
 	}
 
 	function positionEventOnTrack(event:EventMetaNote, trackIndex:Int)
@@ -6327,6 +6401,7 @@ for (i in 0...GRID_PLAYERS)
 		searchBox.visible = false;
 		add(searchBox);
 		applyChartBoxRoundedStyle(searchBox);
+		applyBoxInputFilter(searchBox);
 
 		var tab = searchBox.getTab(searchBoxTabs[0]);
 		var tab_group = tab.menu;
@@ -10079,6 +10154,16 @@ function adaptNotesToNewTimes(oldTimes:Array<Float>)
 		// if(haxeMenuBar != null) haxeMenuBar.visible = true;
 	}
 
+	// 打击音播放统一入口：池开启时复用 FlxSound，关闭时回退 FlxG.sound.play()。
+	inline function playEditorHitSound(sound:Sound, volume:Float):Void
+	{
+		if (sound == null || volume <= 0) return;
+		if (hitSoundPool != null)
+			hitSoundPool.play(sound, volume);
+		else
+			FlxG.sound.play(sound, volume);
+	}
+
 	override function destroy()
 	{
 		// 退出制谱器还原全局圆角皮肤，避免后续状态/其它编辑器拿到 4px 设置
@@ -10112,6 +10197,19 @@ function adaptNotesToNewTimes(oldTimes:Array<Float>)
 		}
 
 
+
+		// 音频池与两条人声均由本状态 new + add 到 FlxG.sound.list，必须对称清理。
+		// 否则每次进出编谱器都会在全局 list 里残留实例，既钉住 native source 不释放，
+		// 又让 Paths.soundInUse() 的全表遍历越来越慢（滚动卡顿的放大因素）。
+		if (hitSoundPool != null)
+		{
+			hitSoundPool.destroy();
+			hitSoundPool = null;
+		}
+		vocals.stop();
+		opponentVocals.stop();
+		FlxG.sound.list.remove(vocals);
+		FlxG.sound.list.remove(opponentVocals);
 
 		Note.globalRgbShaders = [];
 		backend.NoteTypesConfig.clearNoteTypesData();

@@ -106,9 +106,22 @@ class PsychUIBox extends FlxSpriteGroup
 
 	public var forceCheckNext:Bool = false;
 	public var broadcastBoxEvents:Bool = true;
+
+	// 可选输入门控：返回 false 时本帧跳过 tab 点击/拖动/最小化等鼠标交互。
+	// 用于外部 HaxeUI 菜单栏与 box Overlap 时避免"点一个两边都响应"；
+	// 默认 null = 完全保持原行为。
+	public var inputFilter:Void->Bool = null;
+
 	override function update(elapsed:Float)
 	{
 		super.update(elapsed);
+
+		// 隐藏 / 停用的 box 不得处理鼠标输入：调用方常用 visible=false 把 box 让位给
+		// HaxeUI 菜单栏等替代 UI，但 FlxSpriteGroup.update 仍会走这里的点击逻辑，
+		// 于是「看不见的 box」照样响应点击 → 与替代 UI 双向重复触发。
+		// 只门控输入，不跳过动画/updateMenu，保证隐藏 box 的数据源按钮仍能被外部同步。
+		var inputsAllowed:Bool = visible && active
+			&& (inputFilter == null || inputFilter());
 
 		// 最小 / 最大化过渡：在其它输入逻辑之前推进，保证本帧背景板高度已是最新值
 		if (_animActive) stepMinimizeAnimation(elapsed);
@@ -140,7 +153,7 @@ class PsychUIBox extends FlxSpriteGroup
 		}
 
 		var _ignoreTabUpdate:Bool = false;
-		if(forceCheckNext || FlxG.mouse.justMoved || FlxG.mouse.justPressed || FlxG.mouse.justReleased)
+		if(inputsAllowed && (forceCheckNext || FlxG.mouse.justMoved || FlxG.mouse.justPressed || FlxG.mouse.justReleased))
 		{
 			forceCheckNext = false;
 			for (tab in tabs)
@@ -215,7 +228,7 @@ class PsychUIBox extends FlxSpriteGroup
 		else if(selectedTab != null && !isMinimized && menuVisibleDuringAnim())
 			selectedTab.updateMenu(this, elapsed);
 
-		if(minimizeOnFocusLost && FlxG.mouse.justPressed && !isMinimized && !FlxG.mouse.overlaps(bg, camera))
+		if(inputsAllowed && minimizeOnFocusLost && FlxG.mouse.justPressed && !isMinimized && !FlxG.mouse.overlaps(bg, camera))
 		{
 			isMinimized = true;
 			if(broadcastBoxEvents)

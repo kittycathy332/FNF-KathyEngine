@@ -164,6 +164,9 @@ class EventMetaNote extends MetaNote
 	{
 		if(eventText != null && eventText.exists && eventText.visible)
 		{
+			// 文本的 x 由事件本体实时推导：轨道整体水平平移（applyChartPanDelta）只移动本体，
+			// 若沿用 positionEventOnTrack() 里写死的绝对 x，文本会留在原位与事件图标错位。
+			eventText.x = this.x - eventText.width - 10;
 			eventText.y = this.y + this.height/2 - eventText.height/2;
 			eventText.alpha = this.alpha;
 			eventText.draw();
