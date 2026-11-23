@@ -83,10 +83,9 @@ class FunkinLua {
 		var game:PlayState = PlayState.instance;
 		if(game != null) game.luaArray.push(this);
 
-		var myFolder:Array<String> = this.scriptName.split('/');
 		#if MODS_ALLOWED
-		if(myFolder[0] + '/' == Paths.mods() && (Mods.currentModDirectory == myFolder[1] || Mods.getGlobalMods().contains(myFolder[1]))) //is inside mods folder
-			this.modFolder = myFolder[1];
+		// 兼容 Android 上 Paths.mods() 为绝对路径（原版相对路径判断会永远失败）
+		this.modFolder = LuaUtils.resolveScriptModFolder(this.scriptName);
 		#end
 
 		// Lua shit

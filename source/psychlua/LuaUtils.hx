@@ -118,6 +118,41 @@ class LuaUtils
 		return Reflect.getProperty(instance, variable);
 	}
 
+	/**
+	 * 从脚本路径推断所属 mod 名（供 getModSetting/setModSetting 单参数调用用）。
+	 * 兼容 Paths.mods() 的两种形态：桌面相对 'mods/'、Android 绝对 '/sdcard/.../mods/'。
+	 * 原版 PE 用 `myFolder[0] + '/' == Paths.mods()`，在绝对路径下永远不成立。
+	 * @return mod 名；不在 mod 目录或是全局 mod 时返回 null。
+	 */
+	public static function resolveScriptModFolder(scriptPath:String):Null<String>
+	{
+		#if MODS_ALLOWED
+		if(scriptPath == null || scriptPath.length < 1) return null;
+		var normalized:String = scriptPath.replace('\\', '/');
+		// Paths.mods() 在 Windows 下含 Sys.getCwd()，返回反斜杠路径；
+		// 必须与脚本路径同样归一化，否则 startsWith 永远失败（桌面端报 packed Mod folder 错误）。
+		var modsRoot:String = Paths.mods().replace('\\', '/');
+		if(!modsRoot.endsWith('/')) modsRoot += '/';
+		var lowerPath:String = normalized.toLowerCase();
+		var lowerRoot:String = modsRoot.toLowerCase();
+		var rel:String = null;
+
+		if(lowerPath.startsWith(lowerRoot))
+			rel = normalized.substring(modsRoot.length); // 绝对路径（Android / Windows）
+		else if(lowerPath.startsWith('mods/'))
+			rel = normalized.substring(5);               // 相对路径（原版 PE）
+		else
+			return null;
+
+		var firstSlash:Int = rel.indexOf('/');
+		var folder:String = firstSlash > 0 ? rel.substring(0, firstSlash) : rel;
+		if(folder.length < 1) return null;
+		if(Mods.currentModDirectory == folder || Mods.getGlobalMods().contains(folder))
+			return folder;
+		#end
+		return null;
+	}
+
 	public static function getModSetting(saveTag:String, ?modName:String = null)
 	{
 		#if MODS_ALLOWED

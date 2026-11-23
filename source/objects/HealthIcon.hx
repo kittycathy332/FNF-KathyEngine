@@ -100,6 +100,16 @@ class HealthIcon extends FlxSprite
 			else
 				loadStaticIcon(graphic, char);
 
+			// 兜底：某些外部 HScript 脚本（如老 port 的 HUD）会读 iconP1._frame.frame.width。
+			// 若 loadGraphic/atlas 路径没设置出有效帧，_frame 为 null 会让脚本每帧抛 Null Object Reference。
+			// 原版 PE 无条件 loadGraphic 所以不会遇到；这里补一个最小兜底，保证 _frame 永远有效。
+			if (_frame == null || _frame.frame == null)
+			{
+				var fallback:FlxGraphic = Paths.image('icons/icon-face', allowGPU);
+				if (fallback != null)
+					loadGraphic(fallback, true, Math.floor(fallback.width / 2), fallback.height);
+			}
+
 			this.char = char;
 
 			// JSON 的 antialiasing 优先级最高；否则沿用原来的 -pixel / 全局设置逻辑。

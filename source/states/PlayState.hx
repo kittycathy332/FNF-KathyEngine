@@ -1210,7 +1210,9 @@ isReplaying = false;
 		Conductor.songPosition = -Conductor.crochet * 5 + Conductor.offset;
 		var showTime:Bool = (ClientPrefs.data.timeBarType != 'Disabled');
 
-		timeTxt = new FlxText(STRUM_X + (FlxG.width / 2) - 248, 19, 640, "", 32);
+		// width 保持与原版 PE 1.0.4 一致的 400：老 HScript 模组（如 dnb_port）会用
+		// timeTxt.width 与 timeBar.width(400) 反推 timeTxt.x 做居中，640 会让文本偏移。
+		timeTxt = new FlxText(STRUM_X + (FlxG.width / 2) - 248, 19, 400, "", 32);
 		// 设置时间条文本大小和边框大小
 		var baseTextSize:Int = (ClientPrefs.data.timebarStyle == "Leather" || ClientPrefs.data.timebarStyle == "Leather (Legacy)") ? 16 : 32;
 		var baseBorderSize:Float = (ClientPrefs.data.timebarStyle == "Leather" || ClientPrefs.data.timebarStyle == "Leather (Legacy)") ? 1 : 2;
@@ -5994,19 +5996,13 @@ tempScore += '${lblScore}: ${songScore}';
 			}
 			else
 			{
+				// Psych 原版风格：忠实复刻 PE 1.0.4 updateIconsScale——纯指数 lerp 回 1，
+				// 不做 <0.001 吸附、不做 1.2 上限钳制。老 port 的 HUD 脚本会在 onUpdatePost
+				// 把 scale 写到 >1.2（夸张跳动），钳制会在下一帧削平，导致与原版视觉不一致。
 				var mult:Float = FlxMath.lerp(1, iconP1.scale.x, Math.exp(-elapsed * speedMultiplier * playbackRate));
 				iconP1.scale.set(mult, mult);
 				mult = FlxMath.lerp(1, iconP2.scale.x, Math.exp(-elapsed * speedMultiplier * playbackRate));
 				iconP2.scale.set(mult, mult);
-
-				if (Math.abs(iconP1.scale.x - 1) < 0.001) iconP1.scale.set(1, 1);
-				if (Math.abs(iconP2.scale.x - 1) < 0.001) iconP2.scale.set(1, 1);
-
-				iconP1.scale.x = FlxMath.bound(iconP1.scale.x, Math.NEGATIVE_INFINITY, ICON_BOUND);
-				iconP1.scale.y = FlxMath.bound(iconP1.scale.y, Math.NEGATIVE_INFINITY, ICON_BOUND);
-				iconP2.scale.x = FlxMath.bound(iconP2.scale.x, Math.NEGATIVE_INFINITY, ICON_BOUND);
-				iconP2.scale.y = FlxMath.bound(iconP2.scale.y, Math.NEGATIVE_INFINITY, ICON_BOUND);
-
 			}
     }
     

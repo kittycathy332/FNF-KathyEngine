@@ -92,9 +92,8 @@ class HScript extends Iris
 		{
 			this.origin = filePath;
 			#if MODS_ALLOWED
-			var myFolder:Array<String> = filePath.split('/');
-			if(myFolder[0] + '/' == Paths.mods() && (Mods.currentModDirectory == myFolder[1] || Mods.getGlobalMods().contains(myFolder[1]))) //is inside mods folder
-				this.modFolder = myFolder[1];
+			// 兼容 Android 上 Paths.mods() 为绝对路径（原版相对路径判断会永远失败）
+			this.modFolder = LuaUtils.resolveScriptModFolder(filePath);
 			#end
 		}
 		var scriptThing:String = file;

@@ -58,7 +58,24 @@ class FPSCounter extends Sprite
 
 	// 文本字段
 	private var allInfoText:TextField;
+
+	/**
+	 * 兼容原版 Psych 1.0.4：那里 FPSCounter extends TextField，外部 HScript 模组会写
+	 * `Main.fpsVar.defaultTextFormat = new TextFormat(...)`（如 dnb_port 的 hud.hx）。
+	 * 本引擎把 FPSCounter 重写成 Sprite，转发到内部 allInfoText 保持脚本兼容，
+	 * 避免脚本在 onCreatePost 抛异常中断后续初始化。
+	 */
+	public var defaultTextFormat(get, set):TextFormat;
+	function get_defaultTextFormat():TextFormat
+		return allInfoText != null ? allInfoText.defaultTextFormat : null;
+	function set_defaultTextFormat(v:TextFormat):TextFormat
+	{
+		if (allInfoText != null && v != null)
+			allInfoText.defaultTextFormat = v;
+		return v;
+	}
 	
+
 	// 背景
 	private var bgSprite:Sprite;
 
