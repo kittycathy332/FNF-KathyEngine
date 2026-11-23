@@ -1143,10 +1143,22 @@ class Note extends FlxSprite
 		baseScaleY = scale.y;
 	}
 
-	// 判断当前皮肤图集中是否存在名为 `name + '0000'` 的帧（用于缺失动画的回退判断）
+	// 判断当前皮肤图集中是否存在颜色 name 对应的帧（用于缺失动画的回退判断）。
+	// 用前缀匹配而非 getByName 精确匹配，与实际 addByPrefix 的行为一致：
+	// 有些模组图集帧名带扩展名（如 NOTE_assets_Shape_optimized 的 "purple0000.png"），
+	// getByName("purple0000") 查不到会误判缺帧、把箭头错误回退成 green（第3键）颜色。
+	//
+	// 长条图集帧名格式不同：NOTE_3D_holds 是 "purple hold piece0000" / "purple hold end0000"，
+	// 没有 "purple0" 前缀，若仍按 name+'0' 检查，四色都会误判缺帧→长条全变绿。
+	// 因此长条按 "name + ' hold'" 前缀检查，与 addByPrefix(framePrefix+' hold piece') 一致。
 	function hasNoteFrame(name:String):Bool
 	{
-		return frames != null && frames.getByName(name + '0000') != null;
+		if (frames == null) return false;
+		var prefix:String = isSustainNote ? (name + ' hold') : (name + '0');
+		for (frame in frames.frames)
+			if (frame != null && frame.name != null && frame.name.startsWith(prefix))
+				return true;
+		return false;
 	}
 
 	function loadPixelNoteAnims() {
