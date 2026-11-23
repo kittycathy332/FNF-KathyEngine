@@ -161,7 +161,7 @@ class PreloadListSubState extends MusicBeatSubstate implements PsychUIEvent
 			else showOutput(Language.get('stage_editor_preload_not_inside_engine'), true);
 		}
 
-		#if !mobile
+		#if !ios
 		var loadFileBtn:PsychUIButton = new PsychUIButton(0, bg.y + bg.height - 40, Language.get('stage_editor_preload_load_file'), function()
 		{
 			if(!fileDialog.completed) return;
@@ -210,7 +210,7 @@ class PreloadListSubState extends MusicBeatSubstate implements PsychUIEvent
 		});
 		saveBtn.screenCenter(X);
 		saveBtn.cameras = cameras;
-		#if !mobile
+		#if !ios
 		saveBtn.x += 120;
 		#end
 		saveBtn.normalStyle.bgColor = FlxColor.GREEN;

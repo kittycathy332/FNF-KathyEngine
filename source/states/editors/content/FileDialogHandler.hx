@@ -10,6 +10,9 @@ import sys.io.File;
 import lime.ui.*;
 
 import flixel.FlxBasic;
+#if android
+import mobile.backend.AndroidFilePicker;
+#end
 
 //Currently only supports OPEN and SAVE, might change that in the future, who knows
 class FileDialogHandler extends FlxBasic
@@ -39,6 +42,60 @@ class FileDialogHandler extends FlxBasic
 			throw new Exception('You must finish previous operation before starting a new one.');
 		}
 
+		#if android
+		// Android：原生「另存为」对话框（ACTION_CREATE_DOCUMENT），废弃自制列表选择器
+		_startUp(onComplete, onCancel, onError);
+		var name:String = (fileName != null && fileName.length > 0) ? fileName : 'chart.json';
+		var mime:String = mimeFromName(name);
+		AndroidFilePicker.saveFile(name, mime, dataToSave == null ? '' : dataToSave, function(ok:Bool, uri:String)
+		{
+			completed = true;
+			if(!ok || uri == null)
+			{
+				if(onCancel != null) onCancel();
+				return;
+			}
+			this.path = uri;
+			if(onComplete != null) onComplete();
+		});
+		return;
+		#elseif ios
+		// iOS：无原生保存对话框，用纯 Haxe 选择器兜底（UI 层大多隐藏）
+		_startUp(onComplete, onCancel, onError);
+		MobileFilePicker.onDone = function(path:String, data:String)
+		{
+			completed = true;
+			if(path == null)
+			{
+				if(onCancel != null) onCancel();
+				return;
+			}
+			if(dataToSave != null)
+			{
+				try
+				{
+					var dir:String = haxe.io.Path.directory(path);
+					if(dir.length > 0 && !sys.FileSystem.exists(dir))
+						sys.FileSystem.createDirectory(dir);
+					sys.io.File.saveContent(path, dataToSave);
+				}
+				catch(e:Dynamic)
+				{
+					if(onError != null) onError();
+					return;
+				}
+			}
+			this.path = path;
+			if(onComplete != null) onComplete();
+		};
+		if(!MobileFilePicker.pick(MobileFilePicker.MODE_SAVE, fileName, '保存文件', null))
+		{
+			completed = true;
+			if(onError != null) onError();
+		}
+		return;
+		#end
+
 		this._dialogMode = SAVE;
 		_startUp(onComplete, onCancel, onError);
 
@@ -54,6 +111,61 @@ class FileDialogHandler extends FlxBasic
 		{
 			throw new Exception('You must finish previous operation before starting a new one.');
 		}
+
+		#if android
+		// Android：走系统原生文件选择器（SAF / Documents UI），可从下载/Drive 等任意位置选
+		_startUp(onComplete, onCancel, onError);
+		AndroidFilePicker.pick(mimeTypeFromFilter(filter), function(text:String, name:String)
+		{
+			completed = true;
+			if(text == null)
+			{
+				if(onCancel != null) onCancel();
+				return;
+			}
+			// content:// URI 不可直接用 File.getContent 读；把内容落盘到 saves/，
+			// 回填一个真实可读路径给调用方（Song.chartPath 等后续读写都依赖它）。
+			var fileName:String = (name != null && name.length > 0) ? name : (defaultName != null ? defaultName : 'picked.json');
+			var dest:String = mobile.backend.StorageUtil.getExternalStorageDirectory() + 'saves/' + fileName;
+			try
+			{
+				var dir:String = haxe.io.Path.directory(dest);
+				if(dir.length > 0 && !sys.FileSystem.exists(dir)) sys.FileSystem.createDirectory(dir);
+				sys.io.File.saveContent(dest, text);
+			}
+			catch(e:Dynamic)
+			{
+				if(onError != null) onError();
+				return;
+			}
+			this.path = dest;
+			this.data = text;
+			if(onComplete != null) onComplete();
+		});
+		return;
+		#elseif ios
+		// iOS：无原生文件选择能力（无 UIDocumentPicker 扩展），用纯 Haxe 目录枚举兜底；
+		// 相关菜单项在 UI 层按 #if ios 隐藏，此处保留仅为 API 完整性。
+		_startUp(onComplete, onCancel, onError);
+		MobileFilePicker.onDone = function(path:String, data:String)
+		{
+			completed = true;
+			if(path == null)
+			{
+				if(onCancel != null) onCancel();
+				return;
+			}
+			this.path = path;
+			this.data = data;
+			if(onComplete != null) onComplete();
+		};
+		if(!MobileFilePicker.pick(MobileFilePicker.MODE_OPEN, defaultName, title, 'json'))
+		{
+			completed = true;
+			if(onError != null) onError();
+		}
+		return;
+		#end
 
 		this._dialogMode = OPEN;
 		_startUp(onComplete, onCancel, onError);
@@ -75,6 +187,42 @@ class FileDialogHandler extends FlxBasic
 			throw new Exception('You must finish previous operation before starting a new one.');
 		}
 
+		#if android
+		// Android：系统目录选择器（ACTION_OPEN_DOCUMENT_TREE），多文件保存用
+		_startUp(onComplete, onCancel, onError);
+		AndroidFilePicker.pickDirectory(function(uri:String)
+		{
+			completed = true;
+			if(uri == null)
+			{
+				if(onCancel != null) onCancel();
+				return;
+			}
+			this.path = uri;
+			if(onComplete != null) onComplete();
+		});
+		return;
+		#elseif ios
+		_startUp(onComplete, onCancel, onError);
+		MobileFilePicker.onDone = function(path:String, data:String)
+		{
+			completed = true;
+			if(path == null)
+			{
+				if(onCancel != null) onCancel();
+				return;
+			}
+			this.path = path;
+			if(onComplete != null) onComplete();
+		};
+		if(!MobileFilePicker.pick(MobileFilePicker.MODE_DIRECTORY, null, title, null))
+		{
+			completed = true;
+			if(onError != null) onError();
+		}
+		return;
+		#end
+
 		this._dialogMode = OPEN_DIRECTORY;
 		_startUp(onComplete, onCancel, onError);
 
@@ -83,6 +231,42 @@ class FileDialogHandler extends FlxBasic
 		_fileRef.addEventListener(#if desktop Event.SELECT #else Event.COMPLETE #end, _currentEvent);
 		_fileRef.browseEx(OPEN_DIRECTORY, null, title);
 	}
+
+	#if android
+	/** 从文件名推断 MIME，供 ACTION_CREATE_DOCUMENT 使用。 */
+	static function mimeFromName(name:String):String
+	{
+		var lower:String = name.toLowerCase();
+		if(lower.endsWith('.json')) return 'application/json';
+		if(lower.endsWith('.txt')) return 'text/plain';
+		if(lower.endsWith('.png')) return 'image/png';
+		if(lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+		if(lower.endsWith('.ogg') || lower.endsWith('.mp3') || lower.endsWith('.wav')) return 'audio/*';
+		return '*/*';
+	}
+
+	/** 把 FileFilter 首个扩展名转成 SAF MIME（json→application/json，其余 image/* 等）。 */
+	static function mimeTypeFromFilter(filter:Array<FileFilter>):String
+	{
+		if(filter == null || filter.length < 1 || filter[0] == null || filter[0].extension == null)
+			return 'application/json';
+		var raw:String = filter[0].extension;
+		raw = StringTools.replace(raw, '*.', '');
+		if(raw.indexOf(';') >= 0) return '*/*'; // 多扩展名时不过滤，回调按实际扩展判断
+		raw = StringTools.trim(raw).toLowerCase();
+		if(raw.length < 1) return 'application/json';
+		return switch(raw)
+		{
+			case 'json': 'application/json';
+			case 'txt': 'text/plain';
+			case 'png': 'image/png';
+			case 'jpg', 'jpeg': 'image/jpeg';
+			case 'ogg', 'mp3', 'wav': 'audio/*';
+			case 'mp4', 'webm': 'video/*';
+			default: '*/*';
+		};
+	}
+	#end
 
 	public var data:String;
 	public var path:String;

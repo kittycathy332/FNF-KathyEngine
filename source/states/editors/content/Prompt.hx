@@ -74,6 +74,8 @@ class BasePrompt extends MusicBeatSubstate
 
 	public var onCreate:BasePrompt->Void;
 	public var onUpdate:BasePrompt->Float->Void;
+	/** 可选关闭钩子（MobileFilePicker 用它保证取消路径一定释放 busy 标志）。 */
+	public var onClose:Void->Void;
 	var _pendingClose:Bool = false;
 	public function new(?sizeX:Float = 420, ?sizeY:Float = 160, title:String, ?onCreate:BasePrompt->Void, ?onUpdate:BasePrompt->Float->Void)
 	{
@@ -134,6 +136,12 @@ class BasePrompt extends MusicBeatSubstate
 
 		if(onUpdate != null)
 			onUpdate(this, elapsed);
+	}
+
+	override function close()
+	{
+		if(onClose != null) onClose();
+		super.close();
 	}
 
 	override function destroy()

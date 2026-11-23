@@ -8097,7 +8097,7 @@ for (i in 0...GRID_PLAYERS)
 		var btnY = 1;
 		var btnWid = 180; // 下拉选项条宽度，加宽以容纳较长文本单行显示
 
-		#if !mobile
+		#if !ios
 		var btn:PsychUIButton = new PsychUIButton(btnX, btnY, Language.get('charting_new_tab1'), function()
 		{
 			var func:Void->Void = function()
@@ -8246,7 +8246,7 @@ for (i in 0...GRID_PLAYERS)
 		btn.text.alignment = LEFT;
 		tab_group.add(btn);
 
-		#if !mobile
+		#if !ios
 		if(SHOW_EVENT_COLUMN)
 		{
 			btnY += 20;
@@ -8352,7 +8352,7 @@ for (i in 0...GRID_PLAYERS)
 		btn.text.alignment = LEFT;
 		tab_group.add(btn);
 
-		#if !mobile
+		#if !ios
 		btnY += 20;
 		var btn:PsychUIButton = new PsychUIButton(btnX, btnY, Language.get('charting_save2_tab1'), function()
 		{
@@ -8430,7 +8430,7 @@ for (i in 0...GRID_PLAYERS)
 			tab_group.add(btn);
 		}
 
-		#if !mobile
+		#if !ios
 		btnY += 20;
 		var btn:PsychUIButton = new PsychUIButton(btnX, btnY, Language.get('charting_savelegacy_tab1'), function()
 		{
@@ -8480,7 +8480,7 @@ for (i in 0...GRID_PLAYERS)
 		}, btnWid);
 		btn.text.alignment = LEFT;
 		tab_group.add(btn);
-		#if !mobile
+		#if !ios
 		btnY++;
 		btnY += 20;
 		var btn:PsychUIButton = new PsychUIButton(btnX, btnY, Language.get('charting_save4V_tab1'), function()
@@ -8499,7 +8499,9 @@ for (i in 0...GRID_PLAYERS)
 				var songFolder:String = Paths.formatToSongPath(PlayState.SONG.song);
 				if (songFolder.length < 1) songFolder = 'song';
 				path = '$path/$songFolder';
+				#if !android // Android SAF 目录下 writeToTree 会自动建子目录，File API 对 content:// 无效
 				if (!FileSystem.exists(path)) FileSystem.createDirectory(path);
+				#end
 
 				var chartName:String = songFolder;
 
@@ -8666,7 +8668,9 @@ for (i in 0...GRID_PLAYERS)
 									var songFolder:String = songName;
 									if (songFolder.length < 1) songFolder = 'song';
 									path = '$path/$songFolder';
+									#if !android
 									if (!FileSystem.exists(path)) FileSystem.createDirectory(path);
+									#end
 										overwriteCheck('$path/$songName-chart.json', '$songName-chart.json', PsychJsonPrinter.print(pack.chart, ['events', 'notes', 'scrollSpeed']), function()
 										{
 											overwriteCheck('$path/$songName-metadata.json', '$songName-metadata.json', PsychJsonPrinter.print(pack.metadata, ['characters', 'difficulties', 'timeChanges']), function()
@@ -8780,7 +8784,9 @@ for (i in 0...GRID_PLAYERS)
 								var songFolder:String = Paths.formatToSongPath(metadata.songName);
 								if (songFolder.length < 1) songFolder = 'song';
 								path += '$songFolder/';
+								#if !android
 								if (!FileSystem.exists(path)) FileSystem.createDirectory(path);
+								#end
 
 								var diffs:Array<String> = metadata.playData.difficulties.copy();
 								var defaultDiff:String = Paths.formatToSongPath(Difficulty.getDefault());
@@ -8852,7 +8858,7 @@ for (i in 0...GRID_PLAYERS)
 					if(chartData == null) return; // 错误信息已在转换函数内提示
 
 					var chartName:String = Paths.formatToSongPath(loadedChart.song) + '.json';
-					#if mobile
+					#if ios
 					StorageUtil.saveContent(chartName, chartData);
 					showOutput(Language.get('charting_legacy_saved_mobile', [chartName]));
 					#else
@@ -9983,10 +9989,13 @@ for (i in 0...GRID_PLAYERS)
 		else
 		{
 			var chartName:String = Paths.formatToSongPath(PlayState.SONG.song) + '.json';
-			if(Song.chartPath != null) chartName = Song.chartPath.substr(Song.chartPath.lastIndexOf('/')).trim();
-			#if mobile
+			// 仅当 chartPath 是普通文件路径时沿用其文件名；SAF content:// URI 用曲名兜底
+			if(Song.chartPath != null && !Song.chartPath.startsWith('content://'))
+				chartName = Song.chartPath.substr(Song.chartPath.lastIndexOf('/')).trim();
+			#if ios
 			StorageUtil.saveContent(chartName, chartData);
 			#else
+			// Android / 桌面：「另存为」弹窗选位置；Android 走原生 ACTION_CREATE_DOCUMENT
 			fileDialog.save(chartName, chartData,
 				function()
 				{
@@ -10108,7 +10117,7 @@ for (i in 0...GRID_PLAYERS)
 		if(chartData == null) return;
 
 		var chartName:String = Paths.formatToSongPath(PlayState.SONG.song) + '.json';
-		#if mobile
+		#if ios
 		StorageUtil.saveContent(chartName, chartData);
 		showOutput(Language.get('charting_legacy_saved_mobile', [chartName]));
 		#else
@@ -10678,6 +10687,38 @@ function adaptNotesToNewTimes(oldTimes:Array<Float>)
 	var overwriteSavedSomething:Bool = false;
 	function overwriteCheck(savePath:String, overwriteName:String, saveData:String, continueFunc:Void->Void = null, ?continueOnCancel:Bool = false)
 	{
+		#if android
+		// 原生 SAF 目录 URI：savePath 形如 "content://.../tree/xxx/song-chart.json"
+		// 拆成 treeUri + 相对文件名，用 ContentResolver 写入（File API 对 content:// 无效）
+		if(savePath.startsWith('content://'))
+		{
+			// 形如 content://.../tree/<documentId>/<子路径>/<文件>
+			var marker:Int = savePath.indexOf('/tree/');
+			var fileName:String = null;
+			var treeUri:String = savePath;
+			if(marker >= 0)
+			{
+				var idEnd:Int = savePath.indexOf('/', marker + 6);
+				if(idEnd > marker)
+				{
+					treeUri = savePath.substring(0, idEnd);
+					fileName = savePath.substring(idEnd + 1); // 含子目录，用 / 分隔
+				}
+			}
+			if(fileName != null && fileName.length > 0)
+			{
+				var ok:Bool = mobile.backend.MobileUtil.writeToTree(treeUri, fileName, saveData);
+				if(ok)
+				{
+					overwriteSavedSomething = true;
+					if(continueFunc != null) continueFunc();
+				}
+				else showOutput(Language.get('charting_msg_chart_saveerr'), true);
+				return;
+			}
+			// 解析失败回退到真实路径写入（不应发生）
+		}
+		#end
 		if(FileSystem.exists(savePath))
 		{
 			openSubState(new Prompt('Overwrite: "$overwriteName"?', function()

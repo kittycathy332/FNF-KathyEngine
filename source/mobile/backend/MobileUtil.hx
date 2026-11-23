@@ -180,6 +180,83 @@ class MobileUtil
 		#end
 	}
 
+	/** 打开系统文件选择器（SAF），mimeType 如 application/json、image/*，null=全部类型。仅 Android。 */
+	public static function openFilePicker(requestCode:Int, ?mimeType:String):Bool
+	{
+		#if android
+		JNICache.createStaticMethod('com/kathyengine/mobile/MobileBridge', 'openFilePicker', '(ILjava/lang/String;)V')(requestCode, mimeType);
+		return true;
+		#else
+		return false;
+		#end
+	}
+
+	/** 读取 SAF content:// URI 指向的文本（JSON 等），失败返回 null。仅 Android。 */
+	public static function readUriText(uri:String):String
+	{
+		#if android
+		if (uri == null) return null;
+		return JNICache.createStaticMethod('com/kathyengine/mobile/MobileBridge', 'readUriText', '(Ljava/lang/String;)Ljava/lang/String;')(uri);
+		#else
+		return null;
+		#end
+	}
+
+	/** 打开系统「另存为」对话框（ACTION_CREATE_DOCUMENT），仅 Android。 */
+	public static function createDocument(requestCode:Int, fileName:String, mimeType:String):Bool
+	{
+		#if android
+		JNICache.createStaticMethod('com/kathyengine/mobile/MobileBridge', 'createDocument', '(ILjava/lang/String;Ljava/lang/String;)V')(requestCode, fileName, mimeType);
+		return true;
+		#else
+		return false;
+		#end
+	}
+
+	/** 打开系统目录选择对话框（ACTION_OPEN_DOCUMENT_TREE），仅 Android。 */
+	public static function openDocumentTree(requestCode:Int):Bool
+	{
+		#if android
+		JNICache.createStaticMethod('com/kathyengine/mobile/MobileBridge', 'openDocumentTree', '(I)V')(requestCode);
+		return true;
+		#else
+		return false;
+		#end
+	}
+
+	/** 写文本到 SAF content:// URI（另存为结果），仅 Android。 */
+	public static function writeUriText(uri:String, text:String):Bool
+	{
+		#if android
+		if (uri == null) return false;
+		return JNICache.createStaticMethod('com/kathyengine/mobile/MobileBridge', 'writeUriText', '(Ljava/lang/String;Ljava/lang/String;)Z')(uri, text);
+		#else
+		return false;
+		#end
+	}
+
+	/** 在 SAF 目录 URI 下创建文件并写入（多文件保存），仅 Android。 */
+	public static function writeToTree(treeUri:String, fileName:String, text:String):Bool
+	{
+		#if android
+		if (treeUri == null) return false;
+		return JNICache.createStaticMethod('com/kathyengine/mobile/MobileBridge', 'writeToTree', '(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z')(treeUri, fileName, text);
+		#else
+		return false;
+		#end
+	}
+
+	/** 获取 SAF content:// URI 的显示文件名。仅 Android。 */
+	public static function getUriDisplayName(uri:String):String
+	{
+		#if android
+		if (uri == null) return null;
+		return JNICache.createStaticMethod('com/kathyengine/mobile/MobileBridge', 'getUriDisplayName', '(Ljava/lang/String;)Ljava/lang/String;')(uri);
+		#else
+		return null;
+		#end
+	}
+
 	/** 把 content:// URI 写入为 PNG 文件（仅 Android） */
 	public static function importImage(uri:String, destPath:String, maxSize:Int = 2048):Bool
 	{

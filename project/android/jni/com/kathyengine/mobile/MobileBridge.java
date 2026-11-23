@@ -133,6 +133,227 @@ public class MobileBridge {
 	}
 
 	/**
+	 * 打开系统文件选择器（SAF / Documents UI），可选择任意类型文件。
+	 * 结果通过 androidtools CallBack.onActivityResult 返回，字段含 requestCode/resultCode/uri。
+	 * @param requestCode 用于识别本次选择
+	 * @param mimeType    MIME 过滤，如 application/json、image/* 或 * 斜杠 *（全部类型）
+	 */
+	public static void openFilePicker(int requestCode, String mimeType) {
+		Activity a = activity();
+		if (a == null) return;
+		Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+		intent.addCategory(Intent.CATEGORY_OPENABLE);
+		intent.setType((mimeType == null || mimeType.length() == 0) ? "*/*" : mimeType);
+		try {
+			intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+			a.startActivityForResult(intent, requestCode);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	/**
+	 * 打开系统「另存为」对话框（ACTION_CREATE_DOCUMENT）。
+	 * 用户选保存位置+文件名，返回 content:// URI，再用 writeUriText 写入。
+	 * 结果通过 CallBack.onActivityResult 返回（字段 uri）。
+	 * @param requestCode 用于识别本次请求
+	 * @param fileName    建议文件名（如 song.json）
+	 * @param mimeType    MIME 类型，如 application/json
+	 */
+	public static void createDocument(int requestCode, String fileName, String mimeType) {
+		Activity a = activity();
+		if (a == null) return;
+		Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+		intent.addCategory(Intent.CATEGORY_OPENABLE);
+		intent.setType((mimeType == null || mimeType.length() == 0) ? "*/*" : mimeType);
+		intent.putExtra(Intent.EXTRA_TITLE, fileName == null ? "chart.json" : fileName);
+		try {
+			intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+			a.startActivityForResult(intent, requestCode);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	/**
+	 * 打开系统目录选择对话框（ACTION_OPEN_DOCUMENT_TREE）。
+	 * 用于多文件保存（V-Slice 谱面+元数据等）。返回目录 content:// URI。
+	 * 注意：SAF 目录 URI 不能直接用 java.io.File 写，需通过 ContentResolver 创建子文件。
+	 */
+	public static void openDocumentTree(int requestCode) {
+		Activity a = activity();
+		if (a == null) return;
+		Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+		try {
+			intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+				| Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+				| Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+			a.startActivityForResult(intent, requestCode);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	/**
+	 * 写入文本到 SAF content:// URI（ACTION_CREATE_DOCUMENT 返回的 URI）。
+	 * @return true 成功
+	 */
+	public static boolean writeUriText(String uriString, String text) {
+		if (uriString == null || text == null) return false;
+		Context c = ctx();
+		if (c == null) return false;
+		java.io.OutputStream out = null;
+		try {
+			ContentResolver cr = c.getContentResolver();
+			out = cr.openOutputStream(Uri.parse(uriString), "w");
+			if (out == null) return false;
+			out.write(text.getBytes("UTF-8"));
+			out.flush();
+			return true;
+		} catch (Exception e) {
+			e.printStackTrace();
+			return false;
+		} finally {
+			if (out != null) {
+				try { out.close(); } catch (Exception ignored) {}
+			}
+		}
+	}
+
+	/**
+	 * 在父文档下查找同名子项，存在则复用（覆盖写入），不存在才创建。
+	 * DocumentsContract.createDocument 遇到同名会生成 "name (1)" 副本，
+	 * 所以多文件保存必须先查再建，否则 chart/metadata 各建一遍目录产生多个副本。
+	 */
+	private static Uri findOrCreateDocument(ContentResolver cr, Uri treeUri, Uri parentUri, String name, String mimeType) {
+		String parentId = android.provider.DocumentsContract.getDocumentId(parentUri);
+		// 关键：buildChildDocumentsUriUsingTree / buildDocumentUriUsingTree 的第一参必须是
+		// 原始 tree URI，不能是 document URI，否则 query 查不到子项、去重失效。
+		Uri childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId);
+		android.database.Cursor cursor = null;
+		try {
+			cursor = cr.query(childrenUri,
+				new String[]{
+					android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+					android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME
+				}, null, null, null);
+			if (cursor != null) {
+				while (cursor.moveToNext()) {
+					String displayName = cursor.getString(cursor.getColumnIndex(
+						android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME));
+					if (name.equals(displayName)) {
+						String docId = cursor.getString(cursor.getColumnIndex(
+							android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID));
+						return android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
+					}
+				}
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		} finally {
+			if (cursor != null) cursor.close();
+		}
+		try {
+			return android.provider.DocumentsContract.createDocument(cr, parentUri, mimeType, name);
+		} catch (java.io.FileNotFoundException e) {
+			e.printStackTrace();
+			return null;
+		}
+	}
+
+	/**
+	 * 在 SAF 目录 URI 下创建文件并写入文本（多文件保存用）。
+	 * 同名目录/文件会复用，避免 dad-battle、dad-battle (1)... 副本泛滥。
+	 * @param treeUri  目录 content:// URI
+	 * @param fileName 文件名（可含子目录用 / 分隔）
+	 * @param text     文件内容
+	 * @return true 成功
+	 */
+	public static boolean writeToTree(String treeUri, String fileName, String text) {
+		if (treeUri == null || fileName == null || text == null) return false;
+		Context c = ctx();
+		if (c == null) return false;
+		ContentResolver cr = c.getContentResolver();
+		try {
+			Uri rootUri = Uri.parse(treeUri);
+			Uri docUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(
+				rootUri, android.provider.DocumentsContract.getTreeDocumentId(rootUri));
+			// 逐级查找/创建子目录
+			String[] parts = fileName.split("/");
+			for (int i = 0; i < parts.length - 1; i++) {
+				Uri childUri = findOrCreateDocument(cr, rootUri, docUri, parts[i],
+					android.provider.DocumentsContract.Document.MIME_TYPE_DIR);
+				if (childUri == null) return false;
+				docUri = childUri;
+			}
+			String lastName = parts[parts.length - 1];
+			Uri fileUri = findOrCreateDocument(cr, rootUri, docUri, lastName, "application/json");
+			if (fileUri == null) return false;
+			return writeUriText(fileUri.toString(), text);
+		} catch (Exception e) {
+			e.printStackTrace();
+			return false;
+		}
+	}
+
+	/**
+	 * 读取 SAF content:// URI 指向的文本内容（如 JSON）。
+	 * content:// 不能直接用 File 读，必须走 ContentResolver。
+	 * @param uriString SAF 返回的 URI 字符串
+	 * @return 文本；失败返回 null
+	 */
+	public static String readUriText(String uriString) {
+		if (uriString == null) return null;
+		Context c = ctx();
+		if (c == null) return null;
+		InputStream in = null;
+		try {
+			ContentResolver cr = c.getContentResolver();
+			Uri uri = Uri.parse(uriString);
+			in = cr.openInputStream(uri);
+			if (in == null) return null;
+			java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+			byte[] buf = new byte[8192];
+			int len;
+			while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
+			return out.toString("UTF-8");
+		} catch (Exception e) {
+			e.printStackTrace();
+			return null;
+		} finally {
+			if (in != null) {
+				try { in.close(); } catch (Exception ignored) {}
+			}
+		}
+	}
+
+	/**
+	 * 获取 SAF URI 的显示文件名（从 DisplayName column）。
+	 */
+	public static String getUriDisplayName(String uriString) {
+		if (uriString == null) return null;
+		Context c = ctx();
+		if (c == null) return null;
+		android.database.Cursor cursor = null;
+		try {
+			Uri uri = Uri.parse(uriString);
+			String[] projection = { android.provider.OpenableColumns.DISPLAY_NAME };
+			cursor = c.getContentResolver().query(uri, projection, null, null, null);
+			if (cursor != null && cursor.moveToFirst()) {
+				int idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+				if (idx >= 0) return cursor.getString(idx);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		} finally {
+			if (cursor != null) cursor.close();
+		}
+		// 回退：从 URI 末段取
+		int slash = uriString.lastIndexOf('/');
+		return slash >= 0 ? uriString.substring(slash + 1) : uriString;
+	}
+
+	/**
 	 * 将 SAF 返回的 content:// URI 解码并保存为 PNG。
 	 * @param uriString  返回的 URI
 	 * @param destPath   目标文件绝对路径
