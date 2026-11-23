@@ -234,7 +234,7 @@
 	<config:mac category_type="public.app-category.music-games" />
 
 	<!-- Android Theme Configuration -->
-	<config:android>
+	<config:android minimum-sdk-version="24">
 		<app android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
 		<!-- 补回 git 版默认有但 8.3.2 砍掉的存储权限 -->
 		<!-- MANAGE_EXTERNAL_STORAGE 是 Android 11+ 所有文件访问按钮不灰的关键 -->
