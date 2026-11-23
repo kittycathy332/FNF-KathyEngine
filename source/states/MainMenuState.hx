@@ -412,12 +412,24 @@ class MainMenuState extends MusicBeatState
 	function createMenuItem(name:String, x:Float, y:Float):FlxSprite
 	{
 		var menuItem:FlxSprite = new FlxSprite(x, y);
-		menuItem.frames = Paths.getSparrowAtlas('mainmenu/menu_$name');
-		// New-style first (idle/selected), fall back to old-style (basic/white)
-		// so mods with old Psych 0.7.3 textures also work in the modern layout.
-		addMenuAnim(menuItem, 'idle', name, 'idle', 'basic');
-		addMenuAnim(menuItem, 'selected', name, 'selected', 'white');
-		menuItem.animation.play('idle');
+		// 快速点击/重复进入时图集可能尚未就绪或被 GC 清理，getSparrowAtlas 返回 null；
+		// 此时 animation.addByPrefix 会空引用崩溃（堆栈表现为 createModernMenu）。
+		// 用纯色块兜底，保证菜单仍可点、不中断游戏。
+		var frames = Paths.getSparrowAtlas('mainmenu/menu_$name');
+		if (frames != null)
+		{
+			menuItem.frames = frames;
+			// New-style first (idle/selected), fall back to old-style (basic/white)
+			// so mods with old Psych 0.7.3 textures also work in the modern layout.
+			addMenuAnim(menuItem, 'idle', name, 'idle', 'basic');
+			addMenuAnim(menuItem, 'selected', name, 'selected', 'white');
+			menuItem.animation.play('idle');
+		}
+		else
+		{
+			menuItem.makeGraphic(260, 100, FlxColor.TRANSPARENT, true);
+			trace('MainMenuState: atlas missing for mainmenu/menu_$name, using placeholder');
+		}
 		menuItem.updateHitbox();
 		menuItem.antialiasing = ClientPrefs.data.antialiasing;
 		menuItem.scrollFactor.set();
@@ -500,6 +512,20 @@ class MainMenuState extends MusicBeatState
 				{
 					option = optionShit[curSelected];
 					item = menuItems.members[curSelected];
+				}
+
+				// 快速点击时偶发 leftItem/rightItem 尚未创建（或索引越界），
+				// 回退到中间项，避免 FlxFlicker.flicker(null) 崩溃。
+				if (item == null || option == null)
+				{
+					curSelected = Std.int(FlxMath.bound(curSelected, 0, optionShit.length - 1));
+					option = optionShit[curSelected];
+					item = menuItems.members[curSelected];
+				}
+				if (item == null)
+				{
+					selectedSomethin = false;
+					return;
 				}
 
 				FlxFlicker.flicker(item, 1, 0.06, false, false, function(flick:FlxFlicker)

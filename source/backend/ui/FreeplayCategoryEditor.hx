@@ -517,6 +517,15 @@ class FreeplayCategoryEditor
 		closeTargetPicker();
 		Screen.instance.unregisterEvent(MouseEvent.MOUSE_MOVE, onEditorMouseMove);
 		Screen.instance.unregisterEvent(MouseEvent.MOUSE_UP, onEditorMouseUp);
+
+		// 惯性滚动用 Toolkit.callLater 排队 resumeContainerEvents（全局 CallLaterImpl 队列），
+		// 若销毁时队列未清空，下一帧回调会访问已从 Screen 移除的组件而崩溃。
+		// 切回 NORMAL 停掉惯性，减少排队中的延迟回调。
+		if (catScroll != null)
+			catScroll.scrollMode = ScrollMode.NORMAL;
+		if (songScroll != null)
+			songScroll.scrollMode = ScrollMode.NORMAL;
+
 		if (root != null)
 		{
 			Screen.instance.removeComponent(root, true);
