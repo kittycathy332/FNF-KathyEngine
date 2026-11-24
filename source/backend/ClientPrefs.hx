@@ -254,6 +254,9 @@ import haxe.io.BytesInput;
 	public var rainbowfpscounter:Bool = false;
 	public var exgameversion:Bool = false;
 	public var exratingDisplay:Bool = true;
+	// EX 评级贴图缺失时的行为：'Hide'=隐藏 EX 评级（默认，避免 3DUI 等无 -extra 贴图时显示混乱）；
+	// 'Use Normal Rating'=回退使用普通评级贴图（3DUI/sick.png 等）。
+	public var exratingMissingFallback:String = 'Hide';
 	public var showHaxelibs:Bool = false;
 	public var rmPerfect:String = 'enable'; // 'enable'=正常(Perfect独立判定), 'remove'=完全移除Perfect, 'sickPlus'=Perfect变为Sick+状态(算Sick但可选显示Perfect贴图,给Perfect分数)
 	public var ratbounce:Bool = true;

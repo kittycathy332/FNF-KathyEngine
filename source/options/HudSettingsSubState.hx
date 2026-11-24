@@ -201,6 +201,12 @@ class HudSettingsSubState extends BaseOptionsMenu
 			'exratingDisplay',
 			BOOL);
 		addOption(option);
+		option = new Option(Language.get('exrating_missing_fallback'),
+			Language.get("exrating_missing_fallback_desc"),
+			'exratingMissingFallback',
+			STRING,
+			['Hide', 'Use Normal Rating']);
+		addOption(option);
 		option = new Option(Language.get('rating_bounce'),
 			Language.get("rating_bounce_desc"),
 			'ratbounce',

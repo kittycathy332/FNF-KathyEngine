@@ -6749,6 +6749,10 @@ tempScore += '${lblScore}: ${songScore}';
 	var _exRatingGfxCache:Map<String, FlxGraphic> = null;
 	var _numGfxCache:Array<FlxGraphic> = null;
 	var _comboGfx:FlxGraphic = null;
+	// 缓存建立时所属的 uiFolder（由 stageUI/uiPrefix 决定）。模组可在 onUpdatePost 里动态切
+	// stageUI（如 dnb_port 的 shape 音符切 '3D'），缓存若停留在 normal 会让 rating 贴图不生效。
+	// 命中时 uiFolder 与本值不一致就走原版现场加载路径（Paths.image 自带内存缓存，非磁盘 I/O）。
+	var _ratingCacheFolder:String = null;
 
 	private function checkModHasImage(imagePath:String):Bool
 	{
@@ -6826,6 +6830,7 @@ tempScore += '${lblScore}: ${songScore}';
 			_numGfxCache.push(Paths.image(uiFolder + 'num' + i + uiPostfix + numexspr));
 		// combo 贴图（popUpScore 中每次命中都会加载）
 		_comboGfx = Paths.image(uiFolder + 'combo' + uiPostfix);
+		_ratingCacheFolder = uiFolder;
 	}
 
 	private function popUpScore(note:Note = null, scoreGain:Bool = true, leniencyMs:Float = 0):Void
@@ -7131,6 +7136,9 @@ tempScore += '${lblScore}: ${songScore}';
 			uiFolder = uiPrefix + "UI/";
 			antialias = !isPixelStage;
 		}
+		// 缓存建立于 uiFolder=normal 的第1帧；若模组动态切了 stageUI（uiFolder 变化），
+		// 缓存贴图路径已不匹配，改用原版现场加载。绝大多数谱面 uiFolder 恒定，仍走缓存零开销。
+		var useRatingCache:Bool = _ratingGfxCache != null && uiFolder == _ratingCacheFolder;
 
 		// Sick+ 贴图显示：复用 fallbackPerfectToSick/fallbackEXPerfectToSick 设置
 		// fallbackPerfectToSick=false → 显示 Perfect 贴图; =true → 显示 Sick 贴图(回落到sick)
@@ -7154,9 +7162,8 @@ tempScore += '${lblScore}: ${songScore}';
 
 			var rating:FlxSprite = recycleComboSprite();
 			var theEXrating:FlxSprite = recycleComboSprite();
-			// 直接复用 cachePopUpScore() 预存的 FlxGraphic 引用（已按 fallback 规则确定最终贴图），
-			// 跳过每次命中的 Paths.image() 路径计算与 Map 查找；缓存不可用时回退到原逻辑
-			rating.loadGraphic(_ratingGfxCache != null ? _ratingGfxCache.get(displayRatingName) : Paths.image(uiFolder + displayRatingName + ratingexspr + uiPostfix));
+			// 缓存命中时直接复用预存的 FlxGraphic（省掉路径计算）；uiFolder 变化或缓存缺失时走原版现场加载
+			rating.loadGraphic(useRatingCache ? _ratingGfxCache.get(displayRatingName) : Paths.image(uiFolder + displayRatingName + ratingexspr + uiPostfix));
 			rating.screenCenter();
 			rating.x = placement - 40;
 			rating.y -= 60;
@@ -7165,14 +7172,25 @@ tempScore += '${lblScore}: ${songScore}';
 			rating.y -= ClientPrefs.data.comboOffset[1];
 			rating.antialiasing = antialias;
 
-			theEXrating.loadGraphic(_exRatingGfxCache != null ? _exRatingGfxCache.get(displayExRatingName) : Paths.image(uiFolder + displayExRatingName + exratingexspr + uiPostfix));
+			// EX 评级贴图可能缺失（如 3DUI 目录只有 sick.png 没有 sick-extra.png）。
+			// loadGraphic(null) 会让对象池复用出的精灵显示残留纹理（rating/数字），需按设置处理：
+			// Hide=隐藏 EX 评级（默认）；Use Normal Rating=回退到普通评级贴图。
+			var exGfx:FlxGraphic = useRatingCache ? _exRatingGfxCache.get(displayExRatingName) : Paths.image(uiFolder + displayExRatingName + exratingexspr + uiPostfix);
+			var exMissing:Bool = (exGfx == null);
+			if (exMissing && ClientPrefs.data.exratingMissingFallback == 'Use Normal Rating')
+			{
+				exGfx = useRatingCache ? _ratingGfxCache.get(displayRatingName) : Paths.image(uiFolder + displayRatingName + ratingexspr + uiPostfix);
+				exMissing = (exGfx == null);
+			}
+			theEXrating.loadGraphic(exGfx);
 			theEXrating.screenCenter();
 			theEXrating.x = placement - 40;
 			theEXrating.y -= 60;
 			// exRating 是 Kathy 扩展的配套评级贴图，原版脚本不认识 showEXRating 这个独立标志，
 			// 只知道 showRating。因此这里也 AND 上 showRating，确保脚本 setProperty('showRating', false)
 			// 时 rating 与 exRating 一起隐藏（否则会出现「数字/rating 藏了，exRating 还在飘」）。
-			theEXrating.visible = (!ClientPrefs.data.hideHud && showRating && showEXRating && !kadeBotHideRating);
+			// exMissing 且默认 Hide 时也隐藏，杜绝 null 贴图 + 对象池复用导致的显示混乱。
+			theEXrating.visible = (!ClientPrefs.data.hideHud && showRating && showEXRating && !kadeBotHideRating && !exMissing);
 			theEXrating.x += ClientPrefs.data.comboOffset[4] - 140;
 			theEXrating.y -= ClientPrefs.data.comboOffset[5]; // y 基础已在上方 -=60，与 rating 对齐
 			theEXrating.antialiasing = antialias;
@@ -7209,7 +7227,7 @@ tempScore += '${lblScore}: ${songScore}';
 		}
 
 		var comboSpr:FlxSprite = recycleComboSprite();
-			comboSpr.loadGraphic(_comboGfx != null ? _comboGfx : Paths.image(uiFolder + 'combo' + uiPostfix));
+			comboSpr.loadGraphic(useRatingCache ? _comboGfx : Paths.image(uiFolder + 'combo' + uiPostfix));
 			comboSpr.screenCenter();
 			comboSpr.x = placement;
 			//comboSpr.acceleration.y = FlxG.random.int(200, 300) * playbackRate * playbackRate;
@@ -7405,7 +7423,7 @@ tempScore += '${lblScore}: ${songScore}';
 			{
 				var numScore:FlxSprite = recycleComboSprite();
 				var numIdx:Int = Std.parseInt(separatedScore.charAt(i));
-				numScore.loadGraphic((_numGfxCache != null && numIdx < _numGfxCache.length) ? _numGfxCache[numIdx] : Paths.image(uiFolder + 'num' + numIdx + uiPostfix));
+				numScore.loadGraphic((useRatingCache && _numGfxCache != null && numIdx < _numGfxCache.length) ? _numGfxCache[numIdx] : Paths.image(uiFolder + 'num' + numIdx + uiPostfix));
 				numScore.screenCenter();
 				numScore.x = placement + (43 * daLoop) - 90 + ClientPrefs.data.comboOffset[2];
 				numScore.y += 80 - ClientPrefs.data.comboOffset[3];
@@ -8938,6 +8956,7 @@ tempScore += '${lblScore}: ${songScore}';
 		_exRatingGfxCache = null;
 		_numGfxCache = null;
 		_comboGfx = null;
+		_ratingCacheFolder = null;
 
 		if (psychlua.CustomSubstate.instance != null)
 		{
