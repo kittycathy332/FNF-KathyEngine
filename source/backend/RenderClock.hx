@@ -16,6 +16,7 @@ typedef SfxTrack = {
 	var volume:Float;
 	var looped:Bool;
 	var durMs:Float;
+	var pitch:Float; // 音调倍率：1.0=原始，>1 升调（FNF 的 note hitsound 变调）
 }
 
 /**
@@ -118,6 +119,8 @@ class RenderClock
 	public static var sfxTimeline:Array<SfxTrack> = [];
 	/** 正在播放中的音效（FlxSound 对象 → 轨道），停止后移入 sfxTimeline */
 	static var _activeSfx:Map<flixel.sound.FlxSound, SfxTrack> = new Map();
+	/** 每个音效对象上次扫描时的播放位置(ms)，用于 detecting 对象复用（time 回退=重新 play） */
+	static var _sfxLastTime:Map<flixel.sound.FlxSound, Float> = new Map();
 	/** Sound 资源对象 → 磁盘文件路径 的反查缓存（来源 Paths.currentTrackedSounds） */
 	static var _soundPathCache:Map<openfl.media.Sound, String> = new Map();
 	/** 本次渲染捕获到的音效总数（写日志 / manifest 用） */
@@ -231,6 +234,7 @@ class RenderClock
 		soundEvents = [];
 		sfxTimeline = [];
 		_activeSfx = new Map();
+		_sfxLastTime = new Map();
 		_soundPathCache = new Map();
 		_sfxSeen = 0;
 		_leadMs = 0;
@@ -729,6 +733,7 @@ class RenderClock
 		active = false;
 		_frameReady = false;
 		_activeSfx = new Map(); // 释放对 FlxSound / Sound 的强引用，避免跨曲目残留
+		_sfxLastTime = new Map();
 		requested = false; // 中断后不要在下一次进 PlayState 时又自动开渲
 		FlxG.signals.preUpdate.remove(onPreUpdate);
 		FlxG.signals.postDraw.remove(onPostDraw);
@@ -900,7 +905,8 @@ class RenderClock
 			atMs: Math.max(0, atMs),
 			volume: volume <= 0 ? 1 : volume,
 			looped: false,
-			durMs: durMs
+			durMs: durMs,
+			pitch: 1.0
 		});
 		logLine('[video] audio registered at ' + Math.round(atMs) + 'ms dur='
 			+ Math.round(durMs) + 'ms ' + path);
@@ -980,13 +986,31 @@ class RenderClock
 		}
 		catch (e:Dynamic) {}
 
-		// 2) 新开始播放的
+		// 2) 新开始播放的，或同一对象被复用重新 play 的
 		for (s in pool)
 		{
-			if (_activeSfx.exists(s)) continue;
 			var playing:Bool = false;
 			try { playing = s.playing; } catch (e:Dynamic) {}
-			if (!playing) continue;
+			if (!playing) { _sfxLastTime.remove(s); continue; }
+
+			// 读取当前播放位置，用于检测对象复用（time 大幅回退 = 同一个 FlxSound 被重新 play）
+			var curTime:Float = 0;
+			try { curTime = s.time; } catch (e:Dynamic) {}
+			if (_activeSfx.exists(s))
+			{
+				var prev:Float = _sfxLastTime.exists(s) ? _sfxLastTime.get(s) : curTime;
+				if (curTime < prev - 50)
+				{
+					// 复用：上一次被打断（对象池重新 play），按实际经过时间归档、不补尾巴，
+					// 再把这次当作新的开始——否则会与紧接着的新播放叠成重复音效。
+					archiveSfx(s, now, true);
+				}
+				else
+				{
+					_sfxLastTime.set(s, curTime);
+					continue; // 同一次播放，已登记
+				}
+			}
 
 			var snd:Dynamic = null;
 			try { @:privateAccess snd = s._sound; } catch (e:Dynamic) {}
@@ -1000,10 +1024,14 @@ class RenderClock
 			if (vol <= 0.001) continue;           // 静音音效没有任何贡献，白占一条输入
 			var looped:Bool = false;
 			try { looped = s.looped; } catch (e:Dynamic) {}
+			var pitch:Float = 1;
+			try { pitch = s.pitch; } catch (e:Dynamic) {}
+			if (pitch <= 0.01) pitch = 1;
 
-			_activeSfx.set(s, {path: path, atMs: now, volume: vol, looped: looped, durMs: -1});
+			_activeSfx.set(s, {path: path, atMs: now, volume: vol, looped: looped, durMs: -1, pitch: pitch});
+			_sfxLastTime.set(s, curTime);
 			logLine('[audio] sfx start: ' + path + ' at ' + Math.round(now) + 'ms vol=' + vol
-				+ (looped ? ' loop' : ''));
+				+ ' pitch=' + Math.round(pitch * 100) / 100 + (looped ? ' loop' : ''));
 		}
 
 		// 3) 已经停下的（自然播完 / 被 stop / autoDestroy）→ 定长度入列
@@ -1014,16 +1042,44 @@ class RenderClock
 			try { still = (s != null && s.playing); } catch (e:Dynamic) {}
 			if (!still) done.push(s);
 		}
-		for (s in done)
+		for (s in done) archiveSfx(s, now);
+	}
+
+	/**
+	 * 归档一条正在播放的音效到 sfxTimeline。
+	 * 时长用「实际经过时间」与「资源真实长度/变速」两者取大，
+	 * 避免 FlxSound.playing 提前变 false 导致把音效尾巴砍掉（打击音变闷/缺失）。
+	 */
+	static function archiveSfx(s:flixel.sound.FlxSound, now:Float, ?interrupted:Bool = false):Void
+	{
+		var t:SfxTrack = _activeSfx.get(s);
+		_activeSfx.remove(s);
+		_sfxLastTime.remove(s);
+		if (t == null) return;
+		var realDur:Float = 0;
+		try
 		{
-			var t:SfxTrack = _activeSfx.get(s);
-			_activeSfx.remove(s);
-			if (t == null) continue;
-			t.durMs = Math.max(0, now - t.atMs);
-			sfxTimeline.push(t);
-			_sfxSeen++;
-			logLine('[audio] sfx end: ' + t.path + ' dur=' + Math.round(t.durMs) + 'ms');
+			// s.length 是该 Sound 资源的原始毫秒长度；pitch 变调会同时改变时长
+			realDur = s.length / (t.pitch > 0.01 ? t.pitch : 1);
 		}
+		catch (e:Dynamic) {}
+		var elapsed:Float = Math.max(0, now - t.atMs);
+		// interrupted=被对象池复用/手动打断：声音已被截断，按实际经过时间归档，
+		// 绝不能用 realDur 补尾巴——否则和紧接着的新一次播放叠成"重复播放"。
+		// 自然播完才用 realDur 兜底（FlxSound.playing 提前变 false 导致 elapsed 偏短）。
+		// elapsed 远小于真实长度(<50%) 也说明是被对象池提前 stop/复用，而非自然播完，
+		// 同样不补尾巴。真正的自然播完 elapsed 接近 realDur（如日志里 258/265ms），
+		// 只有 FlxSound.playing 提前翻假导致的"轻微偏短"（如 167 vs 267）才需要补。
+		var cutShort:Bool = (realDur > 0 && elapsed < realDur * 0.5);
+		if (t.looped || interrupted || cutShort)
+			t.durMs = elapsed;
+		else
+			t.durMs = Math.max(elapsed, realDur);
+		sfxTimeline.push(t);
+		_sfxSeen++;
+		logLine('[audio] sfx end: ' + t.path + ' dur=' + Math.round(t.durMs)
+			+ 'ms (elapsed=' + Math.round(elapsed) + ' real=' + Math.round(realDur)
+			+ (interrupted ? ' interrupted' : '') + (cutShort ? ' cutShort' : '') + ')');
 	}
 
 	/** 收尾时把仍在播放的音效归档为"播到视频结束" */
@@ -1039,6 +1095,7 @@ class RenderClock
 			logLine('[audio] sfx still playing at end: ' + t.path + ' from ' + Math.round(t.atMs) + 'ms');
 		}
 		_activeSfx = new Map();
+		_sfxLastTime = new Map();
 	}
 
 	/**

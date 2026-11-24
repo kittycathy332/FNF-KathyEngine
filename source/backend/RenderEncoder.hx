@@ -19,7 +19,7 @@ typedef RenderAudioInfo = {
 	var songAudio:Array<String>;
 	var soundEvents:Array<{key:String, atMs:Float, volume:Float}>;
 	/** 渲染期自动捕获的中途音效（事件 / 脚本 / stage 播放的音频） */
-	var sfx:Array<{path:String, atMs:Float, volume:Float, looped:Bool, durMs:Float}>;
+	var sfx:Array<{path:String, atMs:Float, volume:Float, looped:Bool, durMs:Float, ?pitch:Float}>;
 	var leadMs:Float;
 	var durationSec:Float;
 }
@@ -389,7 +389,7 @@ class RenderEncoder
 	 * @return 音效床 WAV 路径；无有效音效返回 null（调用方跳过音效床）
 	 */
 	static function buildSfxBed(out:String, sfxFiles:Array<String>, delays:Array<Float>,
-		volumes:Array<Float>, durs:Array<Float>, loops:Array<Bool>,
+		volumes:Array<Float>, durs:Array<Float>, loops:Array<Bool>, pitches:Array<Float>,
 		durationSec:Float, log:String->Void):String
 	{
 		if (sfxFiles.length == 0) return null;
@@ -421,7 +421,7 @@ class RenderEncoder
 				var end:Int = Std.int(Math.min(batch + SFX_BATCH, idxs.length));
 				var partPath:String = tmpDir + 'g' + groupIdx + '_b' + batch + '.wav';
 				if (mixSfxBatch(path, idxs, batch, end, sfxFiles, delays, volumes, durs,
-					loops, durationSec, partPath, log))
+					loops, pitches, durationSec, partPath, log))
 					partFiles.push(partPath);
 				batch = end;
 			}
@@ -485,7 +485,7 @@ class RenderEncoder
 	/** 单文件单批次：一个 -i + asplit 多路 adelay + amix，filter 写脚本文件 */
 	static function mixSfxBatch(path:String, idxs:Array<Int>, from:Int, to:Int,
 		sfxFiles:Array<String>, delays:Array<Float>, volumes:Array<Float>, durs:Array<Float>,
-		loops:Array<Bool>, durationSec:Float, outPath:String, log:String->Void):Bool
+		loops:Array<Bool>, pitches:Array<Float>, durationSec:Float, outPath:String, log:String->Void):Bool
 	{
 		var n:Int = to - from;
 		if (n <= 0) return false;
@@ -497,9 +497,20 @@ class RenderEncoder
 		for (i in 0...n)
 		{
 			var src:Int = idxs[from + i];
+			var pitch:Float = (pitches != null && src < pitches.length && pitches[src] > 0.01) ? pitches[src] : 1;
 			var dur:Float = durs[src];
 			if (dur <= 0) dur = Math.max(0, durationSec - delays[src] / 1000);
-			sb.add('[s' + i + ']atrim=0:' + fmtTime(dur) + ',asetpts=PTS-STARTPTS');
+			// label 必须紧跟第一个 filter 名，不能单独输出 [s0] 后再接逗号——
+			// 那会生成 "[s0],atrim=..." 这种空 filter，ffmpeg 报 "No such filter: ''" 并使整条音效床失败。
+			sb.add('[s' + i + ']');
+			// 变调处理：asetrate 改采样率实现升/降调，aresample 恢复到 48k。
+			// 这与 FNF 的 FlxSound.pitch 语义一致（改播放速率 → 音高与时长同时变化），
+			// archiveSfx 已按 length/pitch 换算过输出时长。
+			if (Math.abs(pitch - 1) > 0.01)
+				sb.add('asetrate=48000*' + Std.string(pitch) + ',aresample=48000,');
+			// dur 已经是 pitch 变速后的输出时长（archiveSfx 里按 length/pitch 算的），
+			// atrim 作用在 asetrate 之后的输出时间轴上，直接用 dur 即可。
+			sb.add('atrim=0:' + fmtTime(dur / 1000) + ',asetpts=PTS-STARTPTS');
 			if (volumes[src] != 1) sb.add(',volume=' + volumes[src]);
 			if (delays[src] > 0) sb.add(',adelay=' + Std.int(delays[src]) + ':all=1');
 			sb.add('[b' + i + '];\n');
@@ -546,6 +557,7 @@ class RenderEncoder
 		var volumes:Array<Float> = [];
 		var durs:Array<Float> = [];
 		var loops:Array<Bool> = [];
+		var pitches:Array<Float> = [];
 		// 视频 t 时 songPosition = (-lead + offset) + t*rate，而 music.time = songPosition - offset，
 		// 所以音频起点正好是 t = lead/rate —— offset 在两端抵消，不需要额外叠加。
 		var songDelay:Float = info.leadMs;
@@ -561,6 +573,7 @@ class RenderEncoder
 				volumes.push(e.volume);
 				durs.push(-1);
 				loops.push(false);
+				pitches.push(1);
 			}
 		}
 		// 渲染期自动捕获的中途音效（事件 / 脚本 / stage 播放的音频），路径已在游戏内解析好
@@ -580,6 +593,7 @@ class RenderEncoder
 				volumes.push(e.volume);
 				durs.push(e.durMs);
 				loops.push(e.looped);
+				pitches.push(e.pitch != null && e.pitch > 0.01 ? e.pitch : 1);
 				autoCount++;
 			}
 		}
@@ -593,7 +607,7 @@ class RenderEncoder
 		if (sfxFiles.length > 0)
 		{
 			sfxBed = buildSfxBed(out + '.sfxbed.wav', sfxFiles, delays, volumes, durs,
-				loops, info.durationSec, log);
+				loops, pitches, info.durationSec, log);
 			if (sfxBed == null) log('[encoder] sfx bed failed, mixing song tracks only');
 		}
 
