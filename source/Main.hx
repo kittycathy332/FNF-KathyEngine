@@ -621,7 +621,7 @@ class Main extends Sprite
 
 		#if desktop
 		FlxG.stage.addEventListener(KeyboardEvent.KEY_UP, onKeyPress);
-		// F5 / Shift+F5 长按 1.5 秒确认的清理热键
+		// F5 / Shift+F5 长按 2 秒确认的清理热键
 		FlxG.stage.addEventListener(KeyboardEvent.KEY_DOWN, onKeyDown);
 		#end
 
@@ -1143,7 +1143,8 @@ class Main extends Sprite
 			// Shift+F5：强制 BA 转场显示 37 号贴图，图片飞入完成后再执行全清 + GC + 重载。
 			// 同步的全清/GC 会阻塞主线程，画面就定格在转场图片上，之后立刻重载（无额外转场）。
 			backend.CustomFadeTransition.forceStyle = 'Blue Archive';
-			backend.CustomFadeTransition.forceBAImage = 'menuExtend/CustomFadeTransition/Blue_Archive/CN/LoadingImage_37_kr';
+			// 跟随玩家的 Blue Archive 语言设置（含 CN 目录的 _kr 命名差异），不再写死 CN
+			backend.CustomFadeTransition.forceBAImage = backend.CustomFadeTransition.baImageKey(37);
 			backend.CustomFadeTransition.forceReloadText = 'Cleaning up...'; // 短文案，避免换行
 			backend.CustomFadeTransition.forceReloadColor = 0xFF6B6B; // 偏红色
 

@@ -58,6 +58,18 @@ class CustomFadeTransition extends FlxSubState {
 		kathyImages = [];
 	}
 
+	/**
+	 * 按当前 Blue Archive 语言拼一个编号贴图的 key（兜底图 / Shift+F5 固定图共用）。
+	 * 37 号图在四种语言里都使用小写后缀；但 CN 目录的素材沿用韩服命名，实际以 _kr 结尾。
+	 * 注意：其它编号的图片后缀大小写并不统一（如 44 号在 JP/KR/CN 为大写），不要随意改编号。
+	 */
+	public static function baImageKey(number:Int):String
+	{
+		var lang:String = ClientPrefs.data.blueArchiveLanguage;
+		var suffix:String = (lang == 'CN') ? 'kr' : lang.toLowerCase();
+		return 'menuExtend/CustomFadeTransition/Blue_Archive/' + lang + '/LoadingImage_' + number + '_' + suffix;
+	}
+
     var baLoadingPics:FlxSprite;
     var baGlowPics:FlxSprite;
     var baLoadingPicTween: FlxTween;
@@ -326,6 +338,9 @@ class CustomFadeTransition extends FlxSubState {
                 
                 }
             } else if (currentStyle == 'Blue Archive') {
+            // 每次转场重建保护列表：否则历史转场的贴图会被 static 数组永久保活，
+            // 还会让 Shift+F5 的全清误把这些旧图当成受保护对象跳过。
+            protectedGraphics = [];
             // 初始化图片列表（只在第一次加载时）
             //
             // 图片列表以前只从「本地文件系统」枚举，一旦 CopyState 复制失败，本地目录缺图，
@@ -357,9 +372,9 @@ class CustomFadeTransition extends FlxSubState {
                     }
                 }
 
-                // 3) 仍然没有就用一个确定存在的 key（大小写按实际文件名）
+                // 3) 仍然没有就用一个确定存在的 key（跟随当前语言，含 CN 的 _kr 命名差异）
                 if (kathyImages.length == 0)
-                    kathyImages.push(basePath + 'LoadingImage_44_Kr');
+                    kathyImages.push(baImageKey(37));
             }
 
             // 随机选择新图片（确保不重复）
@@ -372,7 +387,7 @@ class CustomFadeTransition extends FlxSubState {
             // kathyImages[...] 为 null → Paths.image(null) → StringMap.exists(null)
             // → hxSehException，表现为「进不去曲目」。这里统一钳制回合法范围。
             if (kathyImages.length == 0)
-                kathyImages.push('menuExtend/CustomFadeTransition/Blue_Archive/' + ClientPrefs.data.blueArchiveLanguage + '/LoadingImage_44_Kr');
+                kathyImages.push(baImageKey(37));
             var imgIndex:Int = ClientPrefs.data.randomIndex;
             if (imgIndex < 0 || imgIndex >= kathyImages.length)
             {
@@ -409,11 +424,7 @@ class CustomFadeTransition extends FlxSubState {
             // 会让 frameWidth=0 → setGraphicSize 算出 Infinity → updateHitbox 得 NaN，
             // 下一帧 tween 读起始值时就抛 "not numeric"。这里必须保证拿到有效 graphic。
             if (loadingGraphic == null)
-            {
-                var language:String = ClientPrefs.data.blueArchiveLanguage;
-                var fallbackKey:String = 'menuExtend/CustomFadeTransition/Blue_Archive/' + language + '/LoadingImage_44_Kr';
-                loadingGraphic = Paths.image(fallbackKey);
-            }
+                loadingGraphic = Paths.image(baImageKey(37));
             if (loadingGraphic == null)
             {
                 // 连兜底图都没有：造一张纯色图，保证尺寸有限、流程不中断

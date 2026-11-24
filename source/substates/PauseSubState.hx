@@ -406,13 +406,9 @@ class PauseSubState extends MusicBeatSubstate
 			return;
 		}
 
-		if(FlxG.keys.justPressed.F5)
-		{
-			FlxTransitionableState.skipNextTransIn = true;
-			FlxTransitionableState.skipNextTransOut = true;
-			PlayState.nextReloadAll = true;
-			MusicBeatState.resetState();
-		}
+		// F5 刷新统一由 Main 的长按确认热键处理（F5 清理闲置 / Shift+F5 全清），
+		// 这里不再单独拦截：否则暂停中轻按 F5 会绕过 2 秒确认直接重载，
+		// 按住不放还会与全局热键叠加触发第二次刷新。
 
 		updateSkipTextStuff();
 		if (controls.UI_UP_P)

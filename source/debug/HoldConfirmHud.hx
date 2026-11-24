@@ -29,6 +29,13 @@ class HoldConfirmHud extends Sprite
 	{
 		super();
 		fontName = backend.Paths.font('unifont-18.0.01.otf');
+		// TextFormat.font 需要字体族名而不是文件路径，否则会静默回退到系统默认字体（中文可能变方框）
+		try
+		{
+			var f = openfl.utils.Assets.getFont(fontName);
+			if (f != null) fontName = f.fontName;
+		}
+		catch (e:Dynamic) {}
 
 		bg = new Shape();
 		addChild(bg);
