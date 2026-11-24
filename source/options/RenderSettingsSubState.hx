@@ -48,6 +48,15 @@ class RenderSettingsSubState extends BaseOptionsMenu
 		option.displayFormat = '%v FPS';
 		addOption(option);
 
+		option = new Option(Language.get('render_logic_substeps'),
+			Language.get('render_logic_substeps_desc'),
+			'renderLogicSubsteps',
+			INT);
+		option.minValue = 1;
+		option.maxValue = 8;
+		option.displayFormat = '%vx';
+		addOption(option);
+
 		option = new Option(Language.get('render_width'),
 			Language.get('render_width_desc'),
 			'renderWidth',
@@ -93,6 +102,14 @@ class RenderSettingsSubState extends BaseOptionsMenu
 			'libx264' => Language.get('render_encoder_x264'),
 			'h264_nvenc' => Language.get('render_encoder_nvenc')
 		];
+		addOption(option);
+
+		// x264 编码预设：越靠后越慢但压缩率/画质越好。默认 faster 兼顾速度与画质。
+		option = new Option(Language.get('render_preset'),
+			Language.get('render_preset_desc'),
+			'renderPreset',
+			STRING,
+			['ultrafast', 'veryfast', 'faster', 'fast', 'medium', 'slow']);
 		addOption(option);
 
 		// renderSlowFactor 仅服务于尚未实现的 SlowMotion 后端，暂不展示。

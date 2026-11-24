@@ -56,7 +56,6 @@
     "notesplash_desc": "选择你喜欢的命中特效样式",
     "notesplashopacity_desc": "设置命中特效的透明度",
     "hidehud_desc": "勾选后将隐藏绝大部分HUD元素，仅保留箭头",
-
     "timebar_desc": "你希望时间条应改显示什么内容？",
     "flashinglights_desc": "光敏癫痫警告\n游戏包括闪光效果,如果你对闪烁敏感请第一时间关闭此项！",
     "camerazooms_desc": "关闭后，节拍时镜头不会缩放",
@@ -192,7 +191,6 @@
     "enable_game_log_desc": "启用游戏内日志显示（按F3切换）",
     "show_game_version_name": "显示游戏版本",
     "show_game_version_desc": "显示 Psych Engine 与 MintRhythm Extended 版本及 Commit 信息",
-
     "fps_text_color_name": "文字颜色",
     "fps_text_color_desc": "更改FPS计数器的文字颜色",
     "fps_bg_color_name": "背景颜色",
@@ -241,7 +239,6 @@
     "simpleinfo_show_mem_desc": "切换内存使用量和峰值显示",
     "simpleinfo_show_version_name": "显示版本",
     "simpleinfo_show_version_desc": "切换游戏版本号显示",
-
     "lane_cover_p1_desc": "玩家轨道阴影覆盖层透明度。0=关闭，1=最暗。",
     "lane_cover_p2_desc": "对手轨道阴影覆盖层透明度。0=关闭，1=最暗。",
     "lane_cover_strum_alpha_desc": "开启后，覆盖层透明度将与下方箭头自身透明度叠加（乘算）。",
@@ -443,8 +440,6 @@
     "health_overflow_drain_requirement": "启用 丝滑血条 且 超满血",
     "smooth_hp_speed_requirement": "启用 丝滑血条",
     "combo_num_display_desc": "游戏中连击数字（Combo）的显示方式。",
-
-
     "developer_mode": "开发者模式",
     "show_extra_rating": "显示额外评级",
     "exrating_missing_fallback": "额外评级贴图缺失时",
@@ -817,7 +812,7 @@
     "render_input_replay": "回放成绩",
     "render_replay_needed": "演奏来源是「回放成绩」，但这次没有从 Freeplay 选择回放。请先在 Freeplay 里选一个回放成绩再渲染。",
     "render_fps": "输出帧率",
-    "render_fps_desc": "导出视频的帧率，越高越流畅。判定以该帧率的 8 倍运行（如 90fps → 720Hz），因此帧率越高，判定毫秒精度也越高。",
+    "render_fps_desc": "导出视频的帧率，越高越流畅。判定精度由下方的“逻辑细分数”设置决定。",
     "render_width": "输出宽度",
     "render_width_desc": "导出画面的像素宽度。渲染窗口会真实放大到此分辨率（超采样），数值越高文字和边缘越清晰，但耗时和占用磁盘也越大。",
     "render_height": "输出高度",
@@ -856,5 +851,9 @@
     "render_encoder_desc": "选择 H.264 编码器。若所选硬件编码器在当前设备不可用，将自动回退到 CPU 编码。",
     "render_encoder_x264": "CPU · libx264（兼容）",
     "render_encoder_nvenc": "GPU · h264_nvenc",
-    "render_abort_popup": "渲染已中断。已渲染的部分已保存为可播放的片段："
+    "render_abort_popup": "渲染已中断。已渲染的部分已保存为可播放的片段：",
+    "render_logic_substeps": "逻辑细分数",
+    "render_logic_substeps_desc": "每个输出帧运行多少次逻辑/判定步（1~8，默认 1）。1=逻辑跟随输出帧率（原生观感、最快、兼容性最好），8=最精细判定（旧行为，CPU×8 且按帧动画会失真）。越高判定越精细，但 CPU 开销越大。",
+    "render_preset": "编码预设",
+    "render_preset_desc": "x264 速度/体积权衡。“faster”（默认）较均衡；“ultrafast”最快但文件更大；“slow”最慢但压缩率最高。在相同 CRF 下，慢预设主要减小体积，画质差别很小。"
 }

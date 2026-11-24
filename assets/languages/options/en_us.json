@@ -822,7 +822,7 @@
     "render_input_replay": "Saved replay",
     "render_replay_needed": "Performance source is Saved replay, but no replay was chosen in Freeplay. Pick a saved score in Freeplay before rendering.",
     "render_fps": "Output frame rate",
-    "render_fps_desc": "Frame rate of the exported video. Higher rates look smoother. Judgment runs at 8x this rate (e.g. 90fps -> 720Hz), so higher values also give finer ms accuracy.",
+    "render_fps_desc": "Frame rate of the exported video. Higher rates look smoother. Judgment precision depends on the 'Logic Substeps' setting below.",
     "render_width": "Output width",
     "render_width_desc": "Export width in pixels. The render window is resized to this resolution for true supersampling - higher values give sharper text and edges but take longer and use more disk space.",
     "render_height": "Output height",
@@ -861,5 +861,9 @@
     "render_encoder_desc": "Choose the H.264 encoder. If the selected hardware encoder is unavailable, it falls back to CPU encoding automatically.",
     "render_encoder_x264": "CPU - libx264 (compatible)",
     "render_encoder_nvenc": "GPU - h264_nvenc",
-    "render_abort_popup": "Render was interrupted. The completed portion was saved as a playable clip:"
+    "render_abort_popup": "Render was interrupted. The completed portion was saved as a playable clip:",
+    "render_logic_substeps": "Logic Substeps per Frame",
+    "render_logic_substeps_desc": "How many logic/judgment steps run per output frame (1-8, default 1). 1 = logic follows output FPS (native look, fastest, most compatible), 8 = finest judgment (old behavior, 8x CPU and distorts frame-based animations). Higher = finer timing but more CPU work.",
+    "render_preset": "Encoding Preset",
+    "render_preset_desc": "x264 speed/quality tradeoff. 'faster' (default) is a good balance; 'ultrafast' is quickest but produces larger files; 'slow' is slowest but compresses best. Longer presets mainly help reduce file size, not visual quality at the same CRF."
 }

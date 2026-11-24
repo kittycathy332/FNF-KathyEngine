@@ -308,10 +308,14 @@ import haxe.io.BytesInput;
 	public var renderBackend:String = 'Offline';
 	public var renderInputSource:String = 'BotPlay'; // 'BotPlay' | 'Replay'（回放本身在 Freeplay 选）
 	public var renderFPS:Int = 60;
+	// 每个输出帧的逻辑细分步数 1~8：默认 1（判定 1000/(fps×4) 精度，CPU 开销适中）。
+	// 1 = 逻辑频率跟随输出帧率（最省 CPU、按帧动画不失真）；8 = 原版最精细判定。
+	public var renderLogicSubsteps:Int = 1;
 	public var renderWidth:Int = 1280;
 	public var renderHeight:Int = 720;
 	public var renderOutput:String = 'MP4'; // 'MP4' rawvideo 直连 ffmpeg | 'PNG' 只落帧序列 | 'PNG+MP4' 两者
 	public var renderEncoder:String = 'libx264'; // 'libx264' | 'h264_nvenc'（不可用时自动回退）
+	public var renderPreset:String = 'faster'; // x264 编码预设：ultrafast/veryfast/faster/fast/medium/slow（越快压缩率越低）
 	public var renderSlowFactor:Float = 0.25; // 仅 SlowMotion 后端：playbackRate 倍率
 	public var renderRange:String = 'Countdown'; // 'Countdown' | 'SongOnly'
 	public var renderCutscene:String = 'FFmpeg'; // 'FFmpeg' | 'Freeze' | 'Skip'
@@ -785,10 +789,12 @@ class ClientPrefs {
 		defaultData.renderBackend = 'Offline';
 		defaultData.renderInputSource = 'BotPlay';
 		defaultData.renderFPS = 60;
+		defaultData.renderLogicSubsteps = 1;
 		defaultData.renderWidth = 1280;
 		defaultData.renderHeight = 720;
 		defaultData.renderOutput = 'MP4';
 		defaultData.renderEncoder = 'libx264';
+		defaultData.renderPreset = 'faster';
 		defaultData.renderSlowFactor = 0.25;
 		defaultData.renderRange = 'Countdown';
 		defaultData.renderCutscene = 'FFmpeg';
@@ -865,10 +871,12 @@ class ClientPrefs {
 			'renderBackend' => 'Offline',
 			'renderInputSource' => 'BotPlay',
 			'renderFPS' => 60,
+			'renderLogicSubsteps' => 1,
 			'renderWidth' => 1280,
 			'renderHeight' => 720,
 			'renderOutput' => 'MP4',
 			'renderEncoder' => 'libx264',
+			'renderPreset' => 'faster',
 			'renderSlowFactor' => 0.25,
 			'renderRange' => 'Countdown',
 			'renderCutscene' => 'FFmpeg',

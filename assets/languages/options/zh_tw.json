@@ -812,7 +812,7 @@
     "render_input_replay": "回放成績",
     "render_replay_needed": "演奏來源是「回放成績」，但這次沒有從 Freeplay 選擇回放。請先在 Freeplay 裡選一個回放成績再渲染。",
     "render_fps": "輸出幀率",
-    "render_fps_desc": "匯出影片的幀率，越高越流暢。判定以該幀率的 8 倍運行（如 90fps → 720Hz），因此幀率越高，判定毫秒精度也越高。",
+    "render_fps_desc": "匯出影片的幀率，越高越流暢。判定精度由下方的「邏輯細分數」設定決定。",
     "render_width": "輸出寬度",
     "render_width_desc": "匯出畫面的像素寬度。渲染視窗會真實放大到此解析度（超採樣），數值越高文字與邊緣越清晰，但耗時與佔用磁碟也越大。",
     "render_height": "輸出高度",
@@ -851,5 +851,9 @@
     "render_encoder_desc": "選擇 H.264 編碼器。若所選硬體編碼器在目前裝置不可用，將自動回退到 CPU 編碼。",
     "render_encoder_x264": "CPU · libx264（相容）",
     "render_encoder_nvenc": "GPU · h264_nvenc",
-    "render_abort_popup": "渲染已中斷。已渲染的部分已儲存為可播放的片段："
+    "render_abort_popup": "渲染已中斷。已渲染的部分已儲存為可播放的片段：",
+    "render_logic_substeps": "邏輯細分數",
+    "render_logic_substeps_desc": "每個輸出幀執行多少次邏輯/判定步（1~8，預設 1）。1=邏輯跟隨輸出幀率（原生觀感、最快、相容性最好），8=最精細判定（舊行為，CPU×8 且按幀動畫會失真）。越高判定越精細，但 CPU 開銷越大。",
+    "render_preset": "編碼預設",
+    "render_preset_desc": "x264 速度/體積權衡。「faster」（預設）較均衡；「ultrafast」最快但檔案更大；「slow」最慢但壓縮率最高。在相同 CRF 下，慢預設主要減小體積，畫質差別很小。"
 }

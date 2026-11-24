@@ -59,8 +59,14 @@ class RenderClock
 	 * 精度 = 1000/(fps×SUB) 毫秒（90fps×8 = 1.39ms），远高于画面帧的 11.11ms。
 	 */
 	public static var subFrame:Int = 0;
-	/** 每个输出帧细分的逻辑步数（真亚帧判定） */
-	public static inline var SUBSTEPS:Int = 8;
+	/**
+	 * 每个输出帧细分的逻辑步数（真亚帧判定）。
+	 * 可在设置里配置（renderLogicSubsteps，1~8）：越高判定越精细但逻辑步 CPU 开销越大，
+	 * 且按帧动画（模组脚本固定 lerp）失真越明显。begin() 时从 ClientPrefs 载入并 clamp。
+	 */
+	public static var SUBSTEPS:Int = 1;
+	static inline var SUBSTEPS_DEFAULT:Int = 1;
+
 	/** 起点待定：begin 早于 BPM 设置，首帧用正确 crochet 重算 _startSongPos */
 	static var _originPending:Bool = false;
 	public static var totalFrames:Int = 0;
@@ -164,6 +170,11 @@ class RenderClock
 		trace('[RenderClock] cutscene mode: ' + d.renderCutscene);
 
 		_fps = Std.int(Math.max(24, d.renderFPS));
+		// 逻辑细分步数可配置：clamp 到 [1,8]，默认 1（逻辑跟随输出帧率，原生观感）。
+		// 1 = 逻辑频率跟随输出帧率（最省 CPU、按帧动画不失真，判定精度=帧级）；
+		// 8 = 原版细分（判定最精细但 CPU×8）。整条时钟链（songPosition/截帧/欠帧）都读这个值。
+		SUBSTEPS = Std.int(Math.max(1, Math.min(8, d.renderLogicSubsteps)));
+		if (SUBSTEPS < 1) SUBSTEPS = SUBSTEPS_DEFAULT;
 		_width = Std.int(Math.max(320, d.renderWidth));
 		_height = Std.int(Math.max(240, d.renderHeight));
 		_songName = (PlayState.SONG != null) ? PlayState.SONG.song : 'song';
@@ -228,7 +239,7 @@ class RenderClock
 		if (_usePipe && !_encoderPending)
 		{
 			if (!RenderEncoder.begin(outputDir, _width, _height, _fps, d.renderCRF,
-				d.renderEncoder, false, logLine))
+				d.renderEncoder, false, logLine, d.renderPreset))
 			{
 				logLine('[fallback] pipe unavailable -> PNG sequence mode');
 				_usePipe = false;
@@ -452,7 +463,7 @@ class RenderClock
 				if (_usePipe)
 				{
 					if (!RenderEncoder.begin(outputDir, _width, _height, _fps, d.renderCRF,
-						d.renderEncoder, _lossless, logLine))
+						d.renderEncoder, _lossless, logLine, d.renderPreset))
 					{
 						logLine('[fallback] pipe unavailable -> PNG sequence mode');
 						_usePipe = false;

@@ -39,6 +39,7 @@ class RenderEncoder
 	static var _proc:Process = null;
 	static var _ffmpeg:String = '';
 	static var _encoder:String = 'libx264';
+	static var _preset:String = 'faster'; // x264 速度/压缩率权衡（ultrafast~slow）
 	static var _videoOnly:String = '';
 	static var _outputDir:String = '';
 	static var _width:Int = 1280;
@@ -100,7 +101,7 @@ class RenderEncoder
 
 	/** 起 pipe 进程；失败返回 false，由 RenderClock 回退到 PNG 模式 */
 	public static function begin(outputDir:String, width:Int, height:Int, fps:Int, crf:Int,
-		requestedEncoder:String, lossless:Bool, log:String->Void):Bool
+		requestedEncoder:String, lossless:Bool, log:String->Void, preset:String = 'faster'):Bool
 	{
 		_outputDir = outputDir;
 		_width = width;
@@ -116,6 +117,9 @@ class RenderEncoder
 		if (_ffmpeg == '') return false;
 
 		_encoder = requestedEncoder;
+		// 校验 preset 合法性（防存档里是旧值/非法值），非法则回退默认
+		var validPresets:Array<String> = ['ultrafast', 'veryfast', 'faster', 'fast', 'medium', 'slow'];
+		_preset = validPresets.contains(preset) ? preset : 'faster';
 		if (_encoder == 'h264_nvenc' && !hasEncoder(_ffmpeg, 'h264_nvenc'))
 		{
 			_encoder = 'libx264';
@@ -156,10 +160,10 @@ class RenderEncoder
 		else if (_encoder == 'h264_nvenc')
 			args = args.concat(['-c:v', 'h264_nvenc', '-preset', 'p5', '-rc', 'vbr', '-cq', Std.string(crf), '-pix_fmt', 'yuv420p']);
 		else
-			// 离线渲染不赶时间：medium + tune animation 在同 crf 下明显优于 veryfast，
-			// 尤其保住 UI 文字 / 高对比边缘。tune animation 针对卡通风格优化。
+			// preset 可配置（默认 faster）：ultrafast 最快但文件大，slow 最省体积但慢。
+			// tune animation 保留：针对卡通/像素风格与 UI 文字边缘优化。
 			args = args.concat([
-				'-c:v', 'libx264', '-preset', 'medium', '-tune', 'animation',
+				'-c:v', 'libx264', '-preset', _preset, '-tune', 'animation',
 				'-crf', Std.string(crf), '-pix_fmt', 'yuv420p'
 			]);
 		args.push(_videoOnly);
