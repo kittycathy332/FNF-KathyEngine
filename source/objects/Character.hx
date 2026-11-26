@@ -676,6 +676,12 @@ class Character extends FlxSprite
 	public var isAnimateAtlas(default, null):Bool = false;
 	#if flxanimate
 	public var atlas:FlxAnimate;
+
+	/** 兼容 Psych 0.7.3 的 Character.destroyAtlas()（1.0.4 已移除，旧模组仍可能调用）。 */
+	public function destroyAtlas():Void
+	{
+		if (atlas != null) atlas = FlxDestroyUtil.destroy(atlas);
+	}
 	public override function draw()
 	{
 		var lastAlpha:Float = alpha;

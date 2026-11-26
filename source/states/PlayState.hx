@@ -302,6 +302,8 @@ class PlayState extends MusicBeatState
 	private function get_eventsPushed():Array<String> { return eventHandler != null ? eventHandler.eventsPushed : []; }
 
 	public var boyfriendGroup:FlxSpriteGroup;
+	/** Leather / 部分 Psych 分支使用的旧字段名，兼容 runHaxeCode 脚本里的 game.bfGroup。 */
+	public var bfGroup:FlxSpriteGroup;
 	public var dadGroup:FlxSpriteGroup;
 	public var gfGroup:FlxSpriteGroup;
 	public static var curStage:String = '';
@@ -1023,6 +1025,7 @@ isReplaying = false;
 			girlfriendCameraOffset = [0, 0];
 
 		boyfriendGroup = new FlxSpriteGroup(BF_X, BF_Y);
+		bfGroup = boyfriendGroup;
 		dadGroup = new FlxSpriteGroup(DAD_X, DAD_Y);
 		gfGroup = new FlxSpriteGroup(GF_X, GF_Y);
 
@@ -2006,6 +2009,67 @@ isReplaying = false;
 
 	public function getLuaObject(tag:String):Dynamic
 		return variables.get(tag);
+
+	/**
+	 * 兼容 Leather / 部分 Psych 分支的 `runHaxeCode` 脚本 API（例如 game.getObjectOrder(game.bfGroup)）。
+	 * 返回对象在 state.members 中的层级（越小越先绘制、越靠后）。找不到返回 -1。
+	 * obj 既可以是对象实例，也可以是 PlayState 上的字段名（如 'boyfriendGroup' / 'bfGroup' / 'gfGroup'）。
+	 */
+	public function getObjectOrder(obj:Dynamic):Int
+	{
+		var target:FlxBasic = resolveObjectOrderTarget(obj);
+		if (target == null) return -1;
+		return members.indexOf(target);
+	}
+
+	/**
+	 * 兼容 API：把对象移动到 state.members 的第 position 层。
+	 * 传 group 名称时在该分组的 members 内排序（对应 Psych Lua 的 setObjectOrder(obj, pos, group)）。
+	 */
+	public function setObjectOrder(obj:Dynamic, position:Int, ?group:String = null):Void
+	{
+		var target:FlxBasic = resolveObjectOrderTarget(obj);
+		if (target == null) return;
+
+		if (group != null && group.length > 0)
+		{
+			var groupObj:Dynamic = Reflect.getProperty(this, group);
+			if (groupObj == null) return;
+
+			var targetList:Array<Dynamic> = Std.isOfType(groupObj, Array) ? cast groupObj : cast Reflect.getProperty(groupObj, 'members');
+			if (targetList == null) return;
+
+			targetList.remove(target);
+			targetList.insert(clampObjectOrder(position, targetList.length), target);
+			return;
+		}
+
+		members.remove(target);
+		members.insert(clampObjectOrder(position, members.length), target);
+	}
+
+	function resolveObjectOrderTarget(obj:Dynamic):FlxBasic
+	{
+		if (obj == null) return null;
+		if (Std.isOfType(obj, String))
+		{
+			var name:String = cast obj;
+			obj = Reflect.getProperty(this, name);
+		}
+		return Std.isOfType(obj, FlxBasic) ? cast obj : null;
+	}
+
+	static inline function clampObjectOrder(position:Int, length:Int):Int
+		return position < 0 ? 0 : (position > length ? length : position);
+
+	/**
+	 * 兼容 Psych 的 game.checkEventNote()（1.0.4 / 0.7.3 都有这个 public 方法）。
+	 * 本引擎的事件推进逻辑在 EventHandler 里，这里做转发。
+	 */
+	public function checkEventNote():Void
+	{
+		if (eventHandler != null) eventHandler.checkEventNote();
+	}
 
 	function startCharacterPos(char:Character, ?gfCheck:Bool = false) {
 		if(gfCheck && char.curCharacter.startsWith('gf')) { //IF DAD IS GIRLFRIEND, HE GOES TO HER POSITION

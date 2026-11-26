@@ -23,6 +23,7 @@ haxelib install polymod 1.8.0 --quiet
 haxelib install tjson 1.4.0 --quiet
 haxelib install away3d 5.0.9 --quiet
 haxelib install haxe-concurrent 5.1.5 --quiet
+haxelib install hxdiscord_rpc 1.3.0 --quiet --skip-dependencies
 haxelib install flixel-waveform 2.1.2 --quiet --skip-dependencies
 haxelib git flxanimate https://github.com/Dot-Stuff/flxanimate 768740a56b26aa0c072720e0d1236b94afe68e3e --quiet
 haxelib git linc_luajit https://github.com/kittycathy233/linc_luajit --quiet
