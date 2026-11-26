@@ -3,7 +3,6 @@ package backend.midi;
 import haxe.io.Bytes;
 
 #if lime_openal
-import lime.media.AudioManager;
 import lime.media.openal.AL;
 import lime.media.openal.ALBuffer;
 import lime.media.openal.ALC;
@@ -81,11 +80,6 @@ class MidiStreamPlayer
 		this.sampleRate = sampleRate < 8000 ? 8000 : sampleRate;
 		stream = new MidiStream(song, this.sampleRate);
 
-		#if lime_openal
-		// 在主线程构造时记下 AL context；seek 重开时线程可能已把它清掉
-		if (AudioManager.context != null && AudioManager.context.openal != null)
-			alContext = AudioManager.context.openal.getCurrentContext();
-		#end
 	}
 
 	public static function fromBytes(bytes:Bytes, ?sampleRate:Int = 22050, ?name:String):MidiStreamPlayer
@@ -212,6 +206,11 @@ class MidiStreamPlayer
 			Sys.sleep(0.03);
 			audioThread = null;
 		}
+		// 只操作 source/buffer，绝不销毁 context 或 device
+		var mainContext:ALContext = ALC.getCurrentContext();
+		if (alContext != null)
+			ALC.makeContextCurrent(alContext);
+
 		if (source != null)
 		{
 			AL.sourceStop(source);
@@ -223,6 +222,11 @@ class MidiStreamPlayer
 			AL.deleteBuffers(buffers);
 			buffers = null;
 		}
+
+		// 恢复主线程原本的 context（不置 null，避免全局音频失去上下文）
+		if (mainContext != null)
+			ALC.makeContextCurrent(mainContext);
+		alContext = null;
 		#elseif (js && html5)
 		for (item in scheduled)
 		{
@@ -242,23 +246,11 @@ class MidiStreamPlayer
 	#if lime_openal
 	function playOpenAL():Void
 	{
-		// 停旧音频后主线程上的 AL context 可能失效；init() 在 context 对象存在但
-		// openal 子对象为空时不会重建，所以这里先 shutdown 再 init。
-		if (AudioManager.context == null)
-			AudioManager.init();
-		if (AudioManager.context == null || AudioManager.context.openal == null)
-		{
-			AudioManager.shutdown();
-			AudioManager.init();
-		}
-		var openal = AudioManager.context != null ? AudioManager.context.openal : null;
-		if (openal == null)
-			throw "MIDI: OpenAL 上下文不可用";
+		// 复用 Lime/FlxG.sound 的全局 context，绝不创建或销毁 device
+		alContext = ALC.getCurrentContext();
 		if (alContext == null)
-			alContext = openal.getCurrentContext();
-		if (alContext == null)
-			throw "MIDI: 当前线程没有 OpenAL context";
-		openal.makeContextCurrent(alContext);
+			throw "MIDI: OpenAL context 不可用";
+		ALC.makeContextCurrent(alContext);
 
 		var sources = AL.genSources(1);
 		if (sources == null || sources.length == 0 || sources[0] == null)
@@ -285,7 +277,7 @@ class MidiStreamPlayer
 		AL.sourcePlay(source);
 		playing = true;
 
-		// 音频上下文是线程局部的，把主线程当前 context 交给音频线程重新绑定
+		// 音频上下文是线程局部的，把全局 context 交给音频线程绑定
 		controlLock.acquire();
 		stopRequested = false;
 		controlLock.release();

@@ -57,13 +57,10 @@ class MidiPlayerState extends MusicBeatState
 	{
 		super.create();
 
-		// 主菜单音乐会跨 State 持续播放，进播放器后必须显式停掉
+		// 主菜单音乐会跨 State 持续播放，进播放器后只停止，不销毁
+		// destroy 会让 FlxG.sound 全局系统失效，返回主菜单后其它音效也播不出来
 		if (FlxG.sound.music != null)
-		{
 			FlxG.sound.music.stop();
-			FlxG.sound.music.destroy();
-			FlxG.sound.music = null;
-		}
 
 		var bg = new FlxSprite().makeGraphic(FlxG.width, FlxG.height, 0xFF101018);
 		bg.scrollFactor.set();
@@ -355,6 +352,9 @@ class MidiPlayerState extends MusicBeatState
 			player.stop();
 			player = null;
 		}
+		// 恢复进播放器前停掉的主菜单音乐
+		if (FlxG.sound.music != null && !FlxG.sound.music.playing)
+			FlxG.sound.music.play();
 		FlxG.switchState(new MainMenuState());
 	}
 
