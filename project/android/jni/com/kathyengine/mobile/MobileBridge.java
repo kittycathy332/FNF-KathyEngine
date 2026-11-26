@@ -328,6 +328,39 @@ public class MobileBridge {
 	}
 
 	/**
+	 * 读取 SAF content:// URI 指向的二进制内容，返回 Base64（NO_WRAP）。
+	 * 用于 MIDI 等二进制资源；上限 16MB，避免超大文件把 JNI 字符串撑爆。
+	 * @return Base64 字符串；失败或超限返回 null
+	 */
+	public static String readUriBytesBase64(String uriString) {
+		if (uriString == null) return null;
+		Context c = ctx();
+		if (c == null) return null;
+		InputStream in = null;
+		try {
+			ContentResolver cr = c.getContentResolver();
+			Uri uri = Uri.parse(uriString);
+			in = cr.openInputStream(uri);
+			if (in == null) return null;
+			java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+			byte[] buf = new byte[8192];
+			int len;
+			while ((len = in.read(buf)) > 0) {
+				if (out.size() + len > 16 * 1024 * 1024) return null;
+				out.write(buf, 0, len);
+			}
+			return android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP);
+		} catch (Exception e) {
+			e.printStackTrace();
+			return null;
+		} finally {
+			if (in != null) {
+				try { in.close(); } catch (Exception ignored) {}
+			}
+		}
+	}
+
+	/**
 	 * 获取 SAF URI 的显示文件名（从 DisplayName column）。
 	 */
 	public static String getUriDisplayName(String uriString) {

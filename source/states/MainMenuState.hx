@@ -76,6 +76,10 @@ class MainMenuState extends MusicBeatState
 	var selectedSomethin:Bool = false;
 	var timeNotMoving:Float = 0;
 
+	// MIDI 播放器入口（主菜单右上角按钮）
+	var midiButtonBg:FlxSprite;
+	var midiButtonText:FlxText;
+
 	// 从标题界面带入的初始缩放（切换那一刻由 TitleState 置为 1.3）；主界面创建后从该值缓回 1，实现放大转场
 	public static var inputZoom:Float = 1;
 	private var menuBeatTransitioning:Bool = false; // 是否在执行确认转场中（用于屏蔽每拍缩放）
@@ -176,6 +180,9 @@ class MainMenuState extends MusicBeatState
 		fnfVer.scrollFactor.set();
 		fnfVer.setFormat(Paths.font(mrVerFont), 16, FlxColor.WHITE, LEFT, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
 		add(fnfVer);
+
+		createMidiPlayerButton();
+
 		languageChangeCallback = function () {
 			if (ClientPrefs.data.windowTitlePreset != 'Psych Engine: MintRhythm Extended') return;
 			var isZh:Bool = ClientPrefs.data.language == 'zh_cn' || ClientPrefs.data.language == 'zh_tw';
@@ -437,6 +444,42 @@ class MainMenuState extends MusicBeatState
 		return menuItem;
 	}
 
+	function createMidiPlayerButton():Void
+	{
+		midiButtonBg = new FlxSprite(FlxG.width - 146, 12).makeGraphic(134, 30, 0x99000000);
+		midiButtonBg.scrollFactor.set();
+		add(midiButtonBg);
+
+		midiButtonText = new FlxText(midiButtonBg.x, midiButtonBg.y + 6, 134, 'MIDI Player', 16);
+		midiButtonText.setFormat(Paths.font('vcr.ttf'), 16, FlxColor.WHITE, CENTER, FlxTextBorderStyle.OUTLINE, FlxColor.BLACK);
+		midiButtonText.scrollFactor.set();
+		add(midiButtonText);
+	}
+
+	function handleMidiButtonClick():Bool
+	{
+		if (midiButtonBg == null)
+			return false;
+
+		var hit:Bool = false;
+		#if desktop
+		hit = FlxG.mouse.justPressed && FlxG.mouse.overlaps(midiButtonBg, FlxG.camera);
+		#else
+		hit = TouchUtil.justPressed && TouchUtil.overlaps(midiButtonBg, FlxG.camera);
+		#end
+		if (!hit)
+			return false;
+
+		// 必须立刻锁住输入：state switch 可能延迟一帧，否则会重复触发并访问已销毁对象
+		selectedSomethin = true;
+		midiButtonBg = null;
+		midiButtonText = null;
+
+		FlxG.sound.play(Paths.sound('confirmMenu'));
+		transitionWithZoom(new MidiPlayerState());
+		return true;
+	}
+
 	override function update(elapsed:Float)
 	{
 		if (FlxG.sound.music != null)
@@ -447,6 +490,10 @@ class MainMenuState extends MusicBeatState
 
 		if (!selectedSomethin)
 		{
+			// 右上角 MIDI 按钮优先于菜单项点击（legacy 模式下任意点击都会触发 menu accept）
+			if (handleMidiButtonClick())
+				return;
+
 			#if desktop
 			if (ClientPrefs.data.legacyMainMenu)
 				updateLegacyInput(elapsed);

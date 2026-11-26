@@ -202,6 +202,19 @@ class MobileUtil
 		#end
 	}
 
+	/** 读取 SAF content:// URI 指向的二进制内容（Base64 回传），失败返回 null。仅 Android。 */
+	public static function readUriBytes(uri:String):haxe.io.Bytes
+	{
+		#if android
+		if (uri == null) return null;
+		var encoded:String = JNICache.createStaticMethod('com/kathyengine/mobile/MobileBridge', 'readUriBytesBase64', '(Ljava/lang/String;)Ljava/lang/String;')(uri);
+		if (encoded == null || encoded.length == 0) return null;
+		return haxe.crypto.Base64.decode(encoded);
+		#else
+		return null;
+		#end
+	}
+
 	/** 打开系统「另存为」对话框（ACTION_CREATE_DOCUMENT），仅 Android。 */
 	public static function createDocument(requestCode:Int, fileName:String, mimeType:String):Bool
 	{

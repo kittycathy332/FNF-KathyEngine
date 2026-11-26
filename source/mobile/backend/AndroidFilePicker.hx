@@ -21,6 +21,8 @@ class AndroidFilePicker
 
 	/** 读文件回调：(text, name)，text==null 表示取消/失败。 */
 	public static var onDone:String->String->Void = null;
+	/** 读二进制文件回调：(bytes, name)，bytes==null 表示取消/失败。 */
+	public static var onDoneBytes:haxe.io.Bytes->String->Void = null;
 	/** 保存文件回调：(success, uri)，success==false 表示取消/失败。 */
 	public static var onSaved:Bool->String->Void = null;
 
@@ -77,6 +79,36 @@ class AndroidFilePicker
 			_pending.remove(req);
 			var cb = AndroidFilePicker.onDone;
 			AndroidFilePicker.onDone = null;
+			if (cb != null) cb(null, null);
+			return false;
+		}
+		return true;
+	}
+
+	/** 选择二进制文件读取。mimeType 如 audio/midi；null=全部。 */
+	public static function pickBytes(?mimeType:String, ?onDone:haxe.io.Bytes->String->Void):Bool
+	{
+		ensureInit();
+		if (onDone != null) AndroidFilePicker.onDoneBytes = onDone;
+		var req:Int = nextCode();
+		_pending.set(req, function(uri:String)
+		{
+			var bytes:haxe.io.Bytes = null;
+			var name:String = null;
+			if (uri != null)
+			{
+				bytes = MobileUtil.readUriBytes(uri);
+				name = MobileUtil.getUriDisplayName(uri);
+			}
+			var cb = AndroidFilePicker.onDoneBytes;
+			AndroidFilePicker.onDoneBytes = null;
+			if (cb != null) cb(bytes, name);
+		});
+		if (!MobileUtil.openFilePicker(req, mimeType))
+		{
+			_pending.remove(req);
+			var cb = AndroidFilePicker.onDoneBytes;
+			AndroidFilePicker.onDoneBytes = null;
 			if (cb != null) cb(null, null);
 			return false;
 		}
